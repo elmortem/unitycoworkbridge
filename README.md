@@ -56,7 +56,7 @@ unity-bridge-plugin/
 ├── .claude-plugin/
 │   └── plugin.json          ← манифест плагина
 ├── commands/
-│   └── unity-run.md         ← команда /unity:run
+│   └── unity.md             ← команда /unity
 ├── skills/
 │   └── unity-bridge/
 │       └── SKILL.md         ← инструкции для Claude
