@@ -1,0 +1,6 @@
+{
+    "name": "CoworkBridge",
+    "references": [],
+    "includePlatforms": ["Editor"],
+    "excludePlatforms": []
+}

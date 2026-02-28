@@ -1,0 +1,5 @@
+{
+    "name": "unity-bridge",
+    "version": "1.0.0",
+    "description": "Execute scripts in open Unity Editor instance"
+}
