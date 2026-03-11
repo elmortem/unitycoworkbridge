@@ -1,98 +1,107 @@
 # Unity Cowork Bridge
 
-Система для выполнения AI-генерируемых C# скриптов в открытом Unity Editor через Claude Cowork. Cowork пишет скрипты, Bridge компилирует и запускает их внутри Unity, возвращает результаты и ошибки. При ошибках компиляции Cowork автоматически исправляет код и пробует снова.
+A system for executing AI-generated C# scripts in an open Unity Editor via Claude Cowork. Cowork writes the scripts, Bridge compiles and runs them inside Unity, then returns results and errors. On compilation errors, Cowork automatically fixes the code and retries.
 
-## Как это работает
+## How It Works
 
-Система состоит из двух частей:
+The system consists of two parts:
 
-**Cowork Bridge** — C# пакет внутри Unity Editor. Следит за папкой `Assets/Editor/CoworkBridge/`, подхватывает файлы задач, компилирует скрипты, выполняет их через reflection и записывает результаты.
+**Cowork Bridge** — a C# package inside Unity Editor. It watches the `Assets/Editor/CoworkBridge/` folder, picks up task files, compiles scripts, executes them via reflection, and writes results.
 
-**Unity Bridge Plugin** — плагин для Claude Cowork. Содержит инструкции для Claude по генерации скриптов, протокол взаимодействия с Bridge и логику обработки ошибок.
+**Unity Bridge Plugin** — a plugin for Claude Cowork. It contains instructions for Claude on script generation, the Bridge communication protocol, and error handling logic.
 
-Задачей является сам `.cs` скрипт — достаточно положить его в `Assets/Editor/CoworkBridge/`, и Bridge подхватит. Никаких дополнительных JSON-файлов задач не нужно. Несколько агентов или пользователей могут создавать скрипты независимо — Bridge обрабатывает их последовательно в порядке создания.
+A task is the `.cs` script itself — just place it in `Assets/Editor/CoworkBridge/`, and Bridge will pick it up. No additional JSON task files are needed. Multiple agents or users can create scripts independently — Bridge processes them sequentially in creation order.
 
-## Установка Unity Bridge
+## Installing Unity Bridge
 
-1. Скопируйте папку `CoworkBridge/` в папку `Packages/` вашего Unity проекта
-2. Добавьте `Assets/Editor/CoworkBridge/` в `.gitignore` проекта
+### Option 1: Via Package Manager (Git URL)
 
-Готово. Пакет не имеет зависимостей от других сборок проекта и будет работать даже если в проекте есть ошибки компиляции.
+1. Open **Window → Package Manager** in Unity Editor
+2. Click **+** → **Add package from git URL...**
+3. Enter: `https://github.com/elmortem/unitycoworkbridge.git?path=CoworkBridge`
+4. Add `Assets/Editor/CoworkBridge/` to your project's `.gitignore`
 
-## Установка Cowork Plugin
+### Option 2: Manual Copy
 
-### Требования
+1. Copy the `CoworkBridge/` folder into the `Packages/` folder of your Unity project
+2. Add `Assets/Editor/CoworkBridge/` to your project's `.gitignore`
 
-Cowork доступен только в десктопном приложении Claude (macOS и Windows). Веб-версия и мобильные приложения не поддерживают Cowork и плагины.
+The package has no dependencies on other project assemblies and will work even if the project has compilation errors.
 
-### Вариант 1: Через Claude Code CLI
+## Installing Cowork Plugin
 
-Если у вас установлен Claude Code, можно загрузить плагин напрямую из локальной папки:
+### Requirements
+
+Cowork is only available in the Claude desktop application (macOS and Windows). The web version and mobile apps do not support Cowork and plugins.
+
+### Option 1: Via Claude Code CLI
+
+If you have Claude Code installed, you can load the plugin directly from a local folder:
 
 ```bash
-claude --plugin-dir /путь/к/unity-bridge-plugin
+claude --plugin-dir /path/to/unity-bridge-plugin
 ```
 
-Для постоянной установки создайте свой marketplace или используйте флаг `--plugin-dir` при каждом запуске.
+For permanent installation, create your own marketplace or use the `--plugin-dir` flag on each launch.
 
-### Вариант 2: Через интерфейс Cowork
+### Option 2: Via Cowork UI
 
-1. Откройте Claude Desktop и перейдите на вкладку **Cowork**
-2. В боковой панели нажмите **Customize**
-3. Нажмите **Browse plugins** → загрузите папку `unity-bridge-plugin/` или `.zip` архив данной папки
+1. Open Claude Desktop and go to the **Cowork** tab
+2. In the sidebar, click **Customize**
+3. Click **Browse plugins** → upload the `unity-bridge-plugin/` folder or a `.zip` archive of it
 
-### Вариант 3: Через локальный marketplace
+### Option 3: Via Local Marketplace
 
-Если вы хотите распространить плагин внутри команды:
+If you want to distribute the plugin within a team:
 
-1. Создайте marketplace — папку с файлом `.claude-plugin/marketplace.json`, содержащим список плагинов
-2. Добавьте marketplace в Claude Code: `/plugin marketplace add /путь/к/marketplace`
-3. Установите плагин: `/plugin install unity-bridge@имя-marketplace`
+1. Create a marketplace — a folder with a `.claude-plugin/marketplace.json` file containing a list of plugins
+2. Add the marketplace to Claude Code: `/plugin marketplace add /path/to/marketplace`
+3. Install the plugin: `/plugin install unity-bridge@marketplace-name`
 
-### Структура плагина
+### Plugin Structure
 
 ```
 unity-bridge-plugin/
 ├── .claude-plugin/
-│   └── plugin.json          ← манифест плагина
+│   └── plugin.json          ← plugin manifest
 ├── commands/
-│   └── unity.md             ← команда /unity
+│   └── unity.md             ← /unity command
 ├── skills/
 │   └── unity-bridge/
-│       └── SKILL.md         ← инструкции для Claude
+│       └── SKILL.md         ← instructions for Claude
 └── scripts/
-    └── wait_result.sh       ← скрипт ожидания результата
+    └── wait_result.sh       ← result waiting script
 ```
 
-### Проверка установки
+### Verifying Installation
 
-После установки в Cowork должна быть доступна команда `/unity`. Введите её в чат — если плагин установлен корректно, Claude начнёт генерацию скрипта.
+After installation, the `/unity` command should be available in Cowork. Type it in the chat — if the plugin is installed correctly, Claude will start generating a script.
 
-## Использование
+## Usage
 
-### Запуск Bridge
+### Starting Bridge
 
-В Unity Editor откройте меню **Tools → Cowork Bridge → Start**. Bridge начнёт следить за папкой `Assets/Editor/CoworkBridge/`.
+In Unity Editor, open **Tools → Cowork Bridge → Start**. Bridge will start watching the `Assets/Editor/CoworkBridge/` folder.
 
-### Остановка Bridge
+### Stopping Bridge
 
 **Tools → Cowork Bridge → Stop**
 
-### Выполнение задач через Cowork
+### Running Tasks via Cowork
 
-Используйте команду `/unity` с описанием задачи на естественном языке:
+Use the `/unity` command with a natural language task description:
 
 ```
-/unity добавь компонент Rigidbody на все объекты с тегом Enemy
+/unity add a Rigidbody component to all objects with the Enemy tag
 ```
 
-Claude сгенерирует скрипт, отправит его в Bridge, дождётся результата и покажет что получилось. Если будут ошибки компиляции — автоматически исправит и попробует снова (до 3 раз).
+Claude will generate a script, send it to Bridge, wait for the result, and show the outcome. If there are compilation errors, it will automatically fix the code and retry (up to 3 times).
 
-### Ручной запуск задач
+### Running Tasks Manually
 
-Можно создать скрипт вручную и запустить через **Tools → Cowork Bridge → Run Task...** (файловый диалог для выбора .cs файла).
+You can create a script manually and run it via **Tools → Cowork Bridge → Run Task...** (a file dialog for selecting a .cs file).
 
-Скрипт должен следовать шаблону:
+The script must follow this template:
 
 ```csharp
 using UnityEngine;
@@ -102,63 +111,63 @@ public static class Task_20260226_143052
 {
     public static string Run()
     {
-        // ваш код
-        return "описание результата";
+        // your code
+        return "result description";
     }
 }
 ```
 
-### Очистка задач
+### Cleaning Up Tasks
 
-- **Tools → Cowork Bridge → Clean Completed** — удаляет завершённые задачи (скрипт + результат + маркер)
-- **Tools → Cowork Bridge → Clean All** — удаляет все задачи
+- **Tools → Cowork Bridge → Clean Completed** — removes completed tasks (script + result + marker)
+- **Tools → Cowork Bridge → Clean All** — removes all tasks
 
-## Кастомные API проекта
+## Custom Project APIs
 
-Если в проекте есть кастомные API (свои библиотеки, тулзы, билдеры), их можно описать для Bridge, чтобы Claude использовал их при генерации скриптов. Для этого создайте файл `UNITYCOWORK.md` рядом с кодом библиотеки.
+If the project has custom APIs (libraries, tools, builders), you can describe them for Bridge so that Claude uses them when generating scripts. Create a `UNITYCOWORK.md` file next to the library code.
 
-При выполнении задачи скилл ищет все файлы `UNITYCOWORK.md` в проекте рекурсивно и читает их. Если описанный API подходит для задачи — Claude использует его вместо стандартного Unity Editor API.
+When executing a task, the skill recursively searches for all `UNITYCOWORK.md` files in the project and reads them. If the described API is suitable for the task, Claude will use it instead of the standard Unity Editor API.
 
-Формат файла:
+File format:
 
 ```markdown
-# Название API
+# API Name
 
-Краткое описание: что делает и когда использовать.
+Brief description: what it does and when to use it.
 
-## Когда использовать
+## When to Use
 
-Описание задач, для которых применяется этот API.
+Description of tasks this API applies to.
 
 ## Namespace / Using
 
-Какие using нужно добавить.
+Which using directives to add.
 
-## Основные классы и методы
+## Main Classes and Methods
 
-Публичный API с примерами.
+Public API with examples.
 
-## Примеры
+## Examples
 
-Готовые примеры для типичных сценариев.
+Ready-made examples for typical scenarios.
 ```
 
-Подробный шаблон с рекомендациями: `Docs/UNITYCOWORK-template.md`
+Detailed template with recommendations: `Docs/UNITYCOWORK-template.md`
 
-Для стандартного Unity Editor API отдельная документация не нужна — Claude знает его из коробки.
+No separate documentation is needed for the standard Unity Editor API — Claude knows it out of the box.
 
-## Рабочая директория
+## Working Directory
 
 ```
 Assets/Editor/CoworkBridge/
-├── Task_XXX.cs                 ← сгенерированные скрипты = задачи
-├── result_<id>.json            ← результаты выполнения
-└── result_<id>.done            ← маркеры готовности результатов
+├── Task_XXX.cs                 ← generated scripts = tasks
+├── result_<id>.json            ← execution results
+└── result_<id>.done            ← result readiness markers
 ```
 
-## Ограничения
+## Limitations
 
-- Работает только в Unity Editor, не в Play Mode
-- Задачи обрабатываются последовательно
-- Метод `Run()` выполняется на main thread Unity — длительные операции могут подвесить Editor
-- Генерируемые скрипты не должны зависеть от сборок с ошибками компиляции
+- Works only in Unity Editor, not in Play Mode
+- Tasks are processed sequentially
+- The `Run()` method executes on Unity's main thread — long operations may freeze the Editor
+- Generated scripts must not depend on assemblies with compilation errors
