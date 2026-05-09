@@ -8,7 +8,7 @@ The system consists of two parts:
 
 **Cowork Bridge** — a C# package inside Unity Editor. It watches the `Assets/Editor/CoworkBridge/` folder, picks up task files, compiles scripts, executes them via reflection, and writes results.
 
-**Unity Bridge Plugin** — a plugin for Claude Cowork. It contains instructions for Claude on script generation, the Bridge communication protocol, and error handling logic.
+**Unity Bridge Plugin** — a plugin for Claude Cowork. It ships the `unity-bridge` skill, which contains instructions for Claude on script generation, the Bridge communication protocol, and error handling logic. The skill is what actually commands the Unity-side Bridge — it can auto-trigger on any Unity Editor task ("list all prefabs using shader X", "rename these assets"), or you can invoke it explicitly via `/unity-bridge`.
 
 A task is the `.cs` script itself — just place it in `Assets/Editor/CoworkBridge/`, and Bridge will pick it up. No additional JSON task files are needed. Multiple agents or users can create scripts independently — Bridge processes them sequentially in creation order.
 
@@ -64,18 +64,14 @@ If you want to distribute the plugin within a team:
 unity-bridge-plugin/
 ├── .claude-plugin/
 │   └── plugin.json          ← plugin manifest
-├── commands/
-│   └── unity.md             ← /unity command
-├── skills/
-│   └── unity-bridge/
-│       └── SKILL.md         ← instructions for Claude
-└── scripts/
-    └── wait_result.sh       ← result waiting script
+└── skills/
+    └── unity-bridge/
+        └── SKILL.md         ← instructions for Claude
 ```
 
 ### Verifying Installation
 
-After installation, the `/unity` command should be available in Cowork. Type it in the chat — if the plugin is installed correctly, Claude will start generating a script.
+After installation, just ask Claude to do something inside the Unity Editor (e.g. "list all prefabs using shader X" or "add a Rigidbody to all enemies") — the `unity-bridge` skill auto-triggers on such requests. You can also invoke it explicitly via `/unity-bridge`. If the plugin is installed correctly, Claude will start generating a script.
 
 ## Usage
 
@@ -89,10 +85,16 @@ In Unity Editor, open **Tools → Cowork Bridge → Start**. Bridge will start w
 
 ### Running Tasks via Cowork
 
-Use the `/unity` command with a natural language task description:
+Just describe the task in natural language — the `unity-bridge` skill auto-triggers on Unity Editor requests:
 
 ```
-/unity add a Rigidbody component to all objects with the Enemy tag
+add a Rigidbody component to all objects with the Enemy tag
+```
+
+If you want to force the skill to handle a request, invoke it explicitly:
+
+```
+/unity-bridge add a Rigidbody component to all objects with the Enemy tag
 ```
 
 Claude will generate a script, send it to Bridge, wait for the result, and show the outcome. If there are compilation errors, it will automatically fix the code and retry (up to 3 times).
