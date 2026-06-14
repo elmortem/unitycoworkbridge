@@ -11,7 +11,6 @@ namespace CoworkBridge
 	public static class CoworkBridge
 	{
 		private const string PendingTaskKey = "CoworkBridge_PendingTask";
-		private const string EnabledKey = "CoworkBridge_Enabled";
 		private const float ScanInterval = 1f;
 		private const float PendingTimeout = 5f;
 
@@ -51,7 +50,7 @@ namespace CoworkBridge
 		public static void Stop()
 		{
 			SetEnabled(false);
-			EditorPrefs.DeleteKey(PendingTaskKey);
+			SessionState.EraseString(PendingTaskKey);
 			EditorApplication.update -= OnEditorUpdate;
 			CompilationPipeline.assemblyCompilationFinished -= OnAssemblyCompilationFinished;
 			CompilationPipeline.compilationFinished -= OnCompilationFinished;
@@ -145,7 +144,7 @@ namespace CoworkBridge
 			CompilationPipeline.compilationFinished -= OnCompilationFinished;
 			CompilationPipeline.compilationFinished += OnCompilationFinished;
 
-			string pendingTaskId = EditorPrefs.GetString(PendingTaskKey, "");
+			string pendingTaskId = SessionState.GetString(PendingTaskKey, "");
 			if (!string.IsNullOrEmpty(pendingTaskId))
 			{
 				EditorApplication.delayCall += () => ProcessAfterReload(pendingTaskId);
@@ -154,7 +153,7 @@ namespace CoworkBridge
 
 		private static void ProcessAfterReload(string taskId)
 		{
-			EditorPrefs.DeleteKey(PendingTaskKey);
+			SessionState.EraseString(PendingTaskKey);
 
 			if (!IsEnabled())
 			{
@@ -175,7 +174,7 @@ namespace CoworkBridge
 
 		private static void OnAssemblyCompilationFinished(string assemblyPath, CompilerMessage[] messages)
 		{
-			string pendingTaskId = EditorPrefs.GetString(PendingTaskKey, "");
+			string pendingTaskId = SessionState.GetString(PendingTaskKey, "");
 			if (string.IsNullOrEmpty(pendingTaskId))
 			{
 				return;
@@ -203,7 +202,7 @@ namespace CoworkBridge
 
 		private static void OnCompilationFinished(object obj)
 		{
-			string pendingTaskId = EditorPrefs.GetString(PendingTaskKey, "");
+			string pendingTaskId = SessionState.GetString(PendingTaskKey, "");
 			if (string.IsNullOrEmpty(pendingTaskId))
 			{
 				_collectedErrors.Clear();
@@ -212,7 +211,7 @@ namespace CoworkBridge
 
 			if (_collectedErrors.Count > 0)
 			{
-				EditorPrefs.DeleteKey(PendingTaskKey);
+				SessionState.EraseString(PendingTaskKey);
 				TaskRunner.HandleCompilerErrors(pendingTaskId, _collectedErrors, _coworkPath);
 				_collectedErrors.Clear();
 				return;
@@ -235,7 +234,7 @@ namespace CoworkBridge
 				return;
 			}
 
-			string pendingTaskId = EditorPrefs.GetString(PendingTaskKey, "");
+			string pendingTaskId = SessionState.GetString(PendingTaskKey, "");
 			if (!string.IsNullOrEmpty(pendingTaskId))
 			{
 				if (EditorApplication.timeSinceStartup - _pendingSetTime > PendingTimeout)
@@ -267,7 +266,7 @@ namespace CoworkBridge
 			}
 
 			Debug.Log("[CoworkBridge] New task detected, triggering compilation: " + taskId);
-			EditorPrefs.SetString(PendingTaskKey, taskId);
+			SessionState.SetString(PendingTaskKey, taskId);
 			_pendingSetTime = EditorApplication.timeSinceStartup;
 
 			CleanResultFiles(taskId);
@@ -351,12 +350,12 @@ namespace CoworkBridge
 
 		private static bool IsEnabled()
 		{
-			return EditorPrefs.GetBool(EnabledKey, false);
+			return CoworkBridgeSettingsStore.IsEnabled();
 		}
 
 		private static void SetEnabled(bool value)
 		{
-			EditorPrefs.SetBool(EnabledKey, value);
+			CoworkBridgeSettingsStore.SetEnabled(value);
 		}
 	}
 }
