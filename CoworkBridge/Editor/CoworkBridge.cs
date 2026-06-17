@@ -87,21 +87,7 @@ namespace CoworkBridge
 				return;
 			}
 
-			int count = 0;
-			foreach (string csFile in Directory.GetFiles(coworkPath, "*.cs"))
-			{
-				string taskId = Path.GetFileNameWithoutExtension(csFile);
-				string donePath = Path.Combine(coworkPath, "result_" + taskId + ".done");
-
-				if (File.Exists(donePath))
-				{
-					DeleteTaskFiles(coworkPath, taskId);
-					count++;
-				}
-			}
-
-			AssetDatabase.Refresh();
-			Debug.Log("[CoworkBridge] Cleaned " + count + " completed tasks.");
+			TaskCleaner.CleanCompleted(coworkPath);
 		}
 
 		[MenuItem("Tools/Cowork Bridge/Clean All")]
@@ -114,16 +100,7 @@ namespace CoworkBridge
 				return;
 			}
 
-			int count = 0;
-			foreach (string csFile in Directory.GetFiles(coworkPath, "*.cs"))
-			{
-				string taskId = Path.GetFileNameWithoutExtension(csFile);
-				DeleteTaskFiles(coworkPath, taskId);
-				count++;
-			}
-
-			AssetDatabase.Refresh();
-			Debug.Log("[CoworkBridge] Cleaned " + count + " tasks.");
+			TaskCleaner.CleanAll(coworkPath);
 		}
 
 		private static void Initialize()
@@ -249,9 +226,15 @@ namespace CoworkBridge
 				return;
 			}
 
+			if (TryProcessCleanCommand())
+			{
+				return;
+			}
+
 			string nextScript = FindNextTask();
 			if (nextScript == null)
 			{
+				TaskCleaner.TrimCompleted(_coworkPath, CoworkBridgeSettingsStore.GetKeepCompletedCount());
 				return;
 			}
 
@@ -320,32 +303,17 @@ namespace CoworkBridge
 			}
 		}
 
-		private static void DeleteTaskFiles(string coworkPath, string taskId)
+		private static bool TryProcessCleanCommand()
 		{
-			string csPath = Path.Combine(coworkPath, taskId + ".cs");
-			string resultPath = Path.Combine(coworkPath, "result_" + taskId + ".json");
-			string donePath = Path.Combine(coworkPath, "result_" + taskId + ".done");
-			string errorsPath = Path.Combine(coworkPath, "pending_errors_" + taskId + ".json");
-
-			if (File.Exists(csPath))
+			string commandPath = Path.Combine(_coworkPath, "clean.command");
+			if (!File.Exists(commandPath))
 			{
-				File.Delete(csPath);
+				return false;
 			}
 
-			if (File.Exists(resultPath))
-			{
-				File.Delete(resultPath);
-			}
-
-			if (File.Exists(donePath))
-			{
-				File.Delete(donePath);
-			}
-
-			if (File.Exists(errorsPath))
-			{
-				File.Delete(errorsPath);
-			}
+			File.Delete(commandPath);
+			TaskCleaner.CleanAllSuccessful(_coworkPath);
+			return true;
 		}
 
 		private static bool IsEnabled()

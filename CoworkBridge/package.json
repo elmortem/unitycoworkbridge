@@ -1,7 +1,7 @@
 {
   "name": "com.elmortem.coworkbridge",
   "displayName": "Cowork Bridge",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "unity": "2022.3",
   "description": "Мост между Unity и Claude Cowork. Используется плагином Unity Bridge для Claude Cowork чтобы планировать и выполненять задания на основе Unity API или ваших библиотек кода, описаных через UNITYCOWORK.md",
   "keywords": [
@@ -16,6 +16,9 @@
 	"ai"
   ],
   "category": "Workflow",
+  "dependencies": {
+    "com.unity.test-framework": "1.1.33"
+  },
   "author": {
     "name": "Makar Osokin",
     "url": "https://makar.rs"

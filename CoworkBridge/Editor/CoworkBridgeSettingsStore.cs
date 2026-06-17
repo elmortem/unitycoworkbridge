@@ -20,6 +20,17 @@ namespace CoworkBridge
 			Save(settings);
 		}
 
+		public static int GetKeepCompletedCount()
+		{
+			CoworkBridgeSettings settings = Load();
+			if (settings.KeepCompletedCount <= 0)
+			{
+				return 10;
+			}
+
+			return settings.KeepCompletedCount;
+		}
+
 		private static CoworkBridgeSettings Load()
 		{
 			string path = GetSettingsPath();

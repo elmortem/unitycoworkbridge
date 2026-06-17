@@ -13,112 +13,35 @@
 
 ## Как это работает
 
-Обычная задача Bridge: ты генерируешь `.cs`-скрипт с `Run()`, кладёшь в `Assets/Editor/CoworkBridge/`. Внутри `Run()` запускается прогон тестов через `TestRunnerApi`.
-
-Важно: `TestRunnerApi.Execute()` **возвращает управление сразу** — тесты идут асинхронно. Поэтому метод `Run()` лишь стартует прогон, а итог теста пишется в `RunFinished`-колбэке в ОТДЕЛЬНЫЙ файл:
+Таск не запускает тесты напрямую и не регистрирует колбэки. Он вызывает API моста `CoworkBridge.CoworkTestRunner.RequestRun(...)`, который владеет персистентным колбэком (переживает domain reload при входе/выходе из Play Mode) и сам пишет результат в:
 
 ```
-Assets/Editor/CoworkBridge/testresult_<TaskName>.json   ← результат прогона
-Assets/Editor/CoworkBridge/testresult_<TaskName>.done   ← маркер готовности
+Assets/Editor/CoworkBridge/testresult_<TaskName>.json
+Assets/Editor/CoworkBridge/testresult_<TaskName>.done
 ```
 
-Значит ожиданий **два**:
-1. Сначала дождись обычного `result_<TaskName>.done` — это значит, что скрипт скомпилировался и прогон стартовал (`status == "success"`). Ошибки компиляции чини как обычно.
-2. Потом дождись `testresult_<TaskName>.done` и прочитай `testresult_<TaskName>.json` — это и есть результат тестов.
+Ожиданий два:
+1. Дождись обычного `result_<TaskName>.done` (`status == "success"`) — скрипт скомпилировался и прогон стартовал.
+2. Дождись `testresult_<TaskName>.done` и прочитай `testresult_<TaskName>.json` — это результат тестов.
 
 ## Шаблон задачи
 
-Подставь имя задачи в трёх местах (`Task_XXX`). Для PlayMode поменяй `TestMode.EditMode` → `TestMode.PlayMode`.
+Подставь имя задачи в двух местах. Для PlayMode поменяй `"EditMode"` → `"PlayMode"`. Фильтры передаются массивами строк (или `null`, если не нужны).
 
 ```csharp
-using System.Collections.Generic;
-using System.IO;
 using UnityEngine;
 using UnityEditor;
-using UnityEditor.TestTools.TestRunner.Api;
 
 public static class Task_XXX
 {
     public static string Run()
     {
-        var api = ScriptableObject.CreateInstance<TestRunnerApi>();
-        api.RegisterCallbacks(new TestResultWriter("Task_XXX"));
-
-        var filter = new Filter { testMode = TestMode.EditMode };
-        // Необязательные фильтры (иначе прогоняются все тесты режима):
-        // filter.assemblyNames = new[] { "MyGame.Tests" };
-        // filter.testNames     = new[] { "MyGame.Tests.MathTests.Adds_Two" };
-        // filter.categoryNames = new[] { "Smoke" };
-
-        api.Execute(new ExecutionSettings(filter));
-        return "Test run started";
-    }
-
-    private class TestResultWriter : ICallbacks
-    {
-        private readonly string _name;
-        public TestResultWriter(string name) { _name = name; }
-
-        public void RunStarted(ITestAdaptor testsToRun) { }
-        public void TestStarted(ITestAdaptor test) { }
-        public void TestFinished(ITestResultAdaptor result) { }
-
-        public void RunFinished(ITestResultAdaptor result)
-        {
-            var run = new TestRunResult
-            {
-                passed = result.PassCount,
-                failed = result.FailCount,
-                skipped = result.SkipCount,
-                inconclusive = result.InconclusiveCount,
-                total = result.PassCount + result.FailCount + result.SkipCount + result.InconclusiveCount,
-                duration = result.Duration
-            };
-            CollectFailures(result, run.failures);
-
-            string dir = Path.Combine(Application.dataPath, "Editor", "CoworkBridge");
-            File.WriteAllText(Path.Combine(dir, "testresult_" + _name + ".json"), JsonUtility.ToJson(run, true));
-            File.WriteAllText(Path.Combine(dir, "testresult_" + _name + ".done"), "");
-            Debug.Log("[Tests] " + _name + ": passed " + run.passed + ", failed " + run.failed);
-        }
-
-        private static void CollectFailures(ITestResultAdaptor node, List<TestFailure> failures)
-        {
-            if (node.HasChildren)
-            {
-                foreach (var child in node.Children) CollectFailures(child, failures);
-                return;
-            }
-            if (node.TestStatus == TestStatus.Failed || node.TestStatus == TestStatus.Inconclusive)
-            {
-                failures.Add(new TestFailure
-                {
-                    name = node.FullName,
-                    message = node.Message,
-                    stacktrace = node.StackTrace
-                });
-            }
-        }
-    }
-
-    [System.Serializable]
-    private class TestRunResult
-    {
-        public int passed;
-        public int failed;
-        public int skipped;
-        public int inconclusive;
-        public int total;
-        public double duration;
-        public List<TestFailure> failures = new List<TestFailure>();
-    }
-
-    [System.Serializable]
-    private class TestFailure
-    {
-        public string name;
-        public string message;
-        public string stacktrace;
+        return CoworkBridge.CoworkTestRunner.RequestRun(
+            "Task_XXX",
+            "EditMode",
+            null,   // assemblyNames, например new[] { "MyGame.Tests" }
+            null,   // testNames,     например new[] { "MyGame.Tests.MathTests.Adds_Two" }
+            null);  // categoryNames, например new[] { "Smoke" }
     }
 }
 ```
@@ -142,18 +65,17 @@ done
 cat "Assets/Editor/CoworkBridge/testresult_${TASK}.json"
 ```
 
-Логика проверки: `failed == 0 && inconclusive == 0` → тесты зелёные. Иначе покажи пользователю содержимое `failures` (имя теста, message, stacktrace).
+Логика проверки `testresult_<TaskName>.json`:
+- `aborted == true` → прогон не стартовал; покажи `message` пользователю (как правило — «выйди из Play Mode и перезапусти»).
+- иначе `failed == 0 && inconclusive == 0` → тесты зелёные; иначе покажи `failures`.
 
-## PlayMode: важный нюанс
+## PlayMode
 
-PlayMode-тесты входят в Play Mode. Если в проекте включён **Reload Domain** (Project Settings → Editor → Enter Play Mode Settings), при входе/выходе из Play Mode домен перезагружается, и колбэк из одноразовой задачи теряется — файл `testresult_*` может не записаться.
-
-- Если **Reload Domain выключен** — шаблон выше работает для PlayMode без изменений.
-- Если **Reload Domain включён** (по умолчанию) — для EditMode всё ок, а для PlayMode надёжнее, чтобы пользователь либо выключил Reload Domain на время прогона, либо запустил PlayMode-тесты вручную через **Window → General → Test Runner**. Сообщи об этом пользователю, если `testresult_*` не появился за таймаут.
+PlayMode-прогон надёжен при любой настройке Enter Play Mode (Reload Domain включён или выключен) — колбэк моста персистентный. Перед PlayMode-прогоном Bridge сохраняет открытые сцены (`SaveOpenScenes`), чтобы тест-фреймворк не падал на сохранении. Если на момент запроса редактор уже в Play Mode, прогон не стартует — в `testresult` будет `aborted: true`.
 
 ## Примечания
 
-- Один прогон на задачу. Не запускай несколько `Execute()` в одном `Run()`.
+- Один прогон на задачу. Не вызывай несколько `RequestRun()` в одном `Run()`.
 - Имя в `testresult_<TaskName>` всегда совпадает с именем задачи — так результат однозначно сопоставляется с задачей.
 - Для запуска тестов нужен пакет **Unity Test Framework** (`com.unity.test-framework`) — он есть в проекте по умолчанию.
-- Файлы `testresult_*` удалять не нужно — их, как и обычные файлы задач, чистит пользователь через **Tools → Cowork Bridge → Clean Completed / Clean All**.
+- Файлы `testresult_*` чистит Bridge автоматически вместе с таском (авто-очистка последних N успешных и команда `clean.command`). Отдельно их не трогай.
