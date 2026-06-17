@@ -121,6 +121,13 @@ public static class Task_20260226_143052
 
 ### Cleaning Up Tasks
 
+Bridge cleans up **successful** tasks on its own:
+
+- **Auto-trim** — while idle, Bridge keeps only the last N successful tasks (default 10), removing older ones together with their `result_*` and `testresult_*` files. N is configurable via `KeepCompletedCount` in `ProjectSettings/CoworkBridge.json`.
+- **`clean.command`** — to remove **all** successful tasks at once, drop an empty file at `Assets/Editor/CoworkBridge/clean.command`. Bridge deletes every successful task and the command file itself. Don't create it while a test run is in progress.
+
+Failed tasks (`compiler_error` / `runtime_error`) are left untouched by auto-cleanup. Manual cleanup is still available:
+
 - **Tools → Cowork Bridge → Clean Completed** — removes completed tasks (script + result + marker)
 - **Tools → Cowork Bridge → Clean All** — removes all tasks
 
