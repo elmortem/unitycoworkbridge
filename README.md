@@ -6,7 +6,7 @@ A system for executing AI-generated C# scripts in an open Unity Editor via Claud
 
 The system consists of two parts:
 
-**Cowork Bridge** — a C# package inside Unity Editor. It watches the `Assets/Editor/CoworkBridge/` folder, picks up task files, compiles scripts, executes them via reflection, and writes results.
+**Cowork Bridge** — a C# package inside Unity Editor. It watches the `Assets/Editor/CoworkBridge/` folder, picks up task files, compiles scripts, executes them via reflection, and writes results. On load it also installs a small `wait-for-result.sh` helper into that folder (if missing), which Cowork uses to wait for results.
 
 **Unity Bridge Plugin** — a plugin for Claude Cowork. It ships the `unity-bridge` skill, which contains instructions for Claude on script generation, the Bridge communication protocol, and error handling logic. The skill is what actually commands the Unity-side Bridge — it can auto-trigger on any Unity Editor task ("list all prefabs using shader X", "rename these assets"), or you can invoke it explicitly via `/unity-bridge`.
 
@@ -99,6 +99,30 @@ If you want to force the skill to handle a request, invoke it explicitly:
 
 Claude will generate a script, send it to Bridge, wait for the result, and show the outcome. If there are compilation errors, it will automatically fix the code and retry (up to 3 times).
 
+### How Cowork Waits for Results
+
+Bridge writes `result_<id>.json` and then an empty `result_<id>.done` marker. To wait for a task, the skill runs the helper that Bridge installs into the watched folder:
+
+```bash
+bash Assets/Editor/CoworkBridge/wait-for-result.sh <TaskName> <timeout-seconds>
+```
+
+The helper polls for the `.done` marker, then prints the result JSON to stdout (or a `{"status":"timeout"}` JSON and exit code 1 if it times out). Bridge auto-creates this script in the watched folder on every Editor load when it is missing, so you never place it by hand.
+
+To stop Claude Code from asking for confirmation on every wait, allow this exact command in your settings — `~/.claude/settings.json` (all projects) or `.claude/settings.local.json` (per project):
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash Assets/Editor/CoworkBridge/wait-for-result.sh:*)"
+    ]
+  }
+}
+```
+
+`wait-for-result.sh` is a bash script and must keep **LF** line endings — on Windows, CRLF breaks it. The package enforces this via `.gitattributes` (`*.sh text eol=lf`), so the file stays LF when Unity fetches the package. If you commit the watched folder in your own project instead of gitignoring it, add the same `.gitattributes` rule there too.
+
 ### Running Tasks Manually
 
 You can create a script manually and run it via **Tools → Cowork Bridge → Run Task...** (a file dialog for selecting a .cs file).
@@ -169,6 +193,7 @@ No separate documentation is needed for the standard Unity Editor API — Claude
 
 ```
 Assets/Editor/CoworkBridge/
+├── wait-for-result.sh          ← result-wait helper (auto-installed by Bridge)
 ├── Task_XXX.cs                 ← generated scripts = tasks
 ├── result_<id>.json            ← execution results
 └── result_<id>.done            ← result readiness markers

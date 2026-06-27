@@ -112,6 +112,8 @@ namespace CoworkBridge
 				Directory.CreateDirectory(_coworkPath);
 			}
 
+			WaitScriptInstaller.EnsureInstalled(_coworkPath);
+
 			EditorApplication.update -= OnEditorUpdate;
 			EditorApplication.update += OnEditorUpdate;
 

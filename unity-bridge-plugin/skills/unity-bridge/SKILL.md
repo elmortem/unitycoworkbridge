@@ -16,7 +16,7 @@ description: "Use this skill whenever the user wants Claude to execute anything 
 | 1 | Найти все `UNITYCOWORK.md` в проекте — это описания кастомных API |
 | 2 | Сгенерировать имя задачи: `Task_YYYYMMDD_HHMMSS` |
 | 3 | Создать `Assets/Editor/CoworkBridge/<TaskName>.cs` по шаблону ниже |
-| 4 | Запустить inline-команду ожидания результата |
+| 4 | Запустить скрипт ожидания результата `wait-for-result.sh` |
 | 5 | Прочитать `Assets/Editor/CoworkBridge/result_<TaskName>.json` и действовать по статусу |
 
 ## Шаблон C# скрипта
@@ -70,24 +70,16 @@ public static class Task_XXX
 
 Bridge сначала пишет `result_<TaskName>.json` целиком, затем создаёт пустой маркер `result_<TaskName>.done`. Ждать нужно появления `.done`-маркера, а читать — `.json`. Это гарантирует, что JSON не будет прочитан частично записанным.
 
-Запустить через bash:
+Скрипт ожидания `wait-for-result.sh` Bridge сам кладёт в наблюдаемую папку `Assets/Editor/CoworkBridge/` при загрузке Editor (если файла там ещё нет), рядом с файлами результатов. Запускать нужно **строго этой командой**, без `cd` и без изменений — иначе не сработает правило разрешений:
 
 ```bash
-TASK=Task_20260226_143052   # подставить имя текущей задачи
-TIMEOUT=300                 # секунд
-elapsed=0
-while [ ! -f "Assets/Editor/CoworkBridge/result_${TASK}.done" ]; do
-  sleep 1
-  elapsed=$((elapsed + 1))
-  if [ $elapsed -ge $TIMEOUT ]; then
-    echo '{"status":"timeout","error":"Bridge did not respond within timeout"}'
-    exit 1
-  fi
-done
-cat "Assets/Editor/CoworkBridge/result_${TASK}.json"
+bash Assets/Editor/CoworkBridge/wait-for-result.sh Task_20260226_143052 300
 ```
 
-Команда выводит JSON с результатом в stdout.
+Первый аргумент — имя задачи, второй (необязательный) — таймаут в секундах (по умолчанию 300). Скрипт сам дожидается `.done`-маркера и выводит содержимое `result_<TaskName>.json` в stdout; при таймауте печатает JSON со `status: "timeout"` и завершается с кодом 1.
+
+> Чтобы команда не требовала подтверждения при каждом запуске, в настройках Claude Code (`~/.claude/settings.json` или `.claude/settings.local.json` проекта) должно быть разрешение:
+> `"Bash(bash Assets/Editor/CoworkBridge/wait-for-result.sh:*)"`
 
 ### Шаг 5. Обработка результата
 
@@ -103,7 +95,7 @@ cat "Assets/Editor/CoworkBridge/result_${TASK}.json"
 
 1. Изучить ошибки компилятора из `compiler_errors`.
 2. Исправить сгенерированный скрипт `Assets/Editor/CoworkBridge/<TaskName>.cs`. Bridge подхватит изменённый файл автоматически.
-3. Снова запустить inline-команду ожидания (см. Шаг 4) и проверить результат.
+3. Снова запустить скрипт ожидания (см. Шаг 4) и проверить результат.
 4. Максимум 3 итерации исправлений.
 5. Если после 3 итераций ошибки остались — показать их пользователю и остановиться.
 
@@ -124,7 +116,7 @@ cat "Assets/Editor/CoworkBridge/result_${TASK}.json"
 Bridge не ответил за отведённое время. Сообщить пользователю и предложить:
 
 1. Проверить, запущен ли Unity Editor с активным Bridge.
-2. Увеличить `TIMEOUT` если задача потенциально долгая.
+2. Увеличить таймаут (второй аргумент `wait-for-result.sh`), если задача потенциально долгая.
 
 ## Очистка задач
 
