@@ -240,7 +240,15 @@ namespace CoworkBridge
 				return;
 			}
 
-			string taskId = Path.GetFileNameWithoutExtension(nextScript);
+			string taskId = TaskIdOf(nextScript);
+
+			if (nextScript.EndsWith(".ui.json"))
+			{
+				Debug.Log("[CoworkBridge] Processing UI task: " + taskId);
+				CleanResultFiles(taskId);
+				Ui.UiTaskRunner.Execute(taskId, _coworkPath);
+				return;
+			}
 
 			Type existingType = TaskRunner.FindType(taskId);
 			if (existingType != null)
@@ -262,8 +270,16 @@ namespace CoworkBridge
 
 		private static string FindNextTask()
 		{
-			var files = Directory.GetFiles(_coworkPath, "*.cs");
-			if (files.Length == 0)
+			var files = new List<string>();
+			foreach (string path in Directory.GetFiles(_coworkPath))
+			{
+				if (path.EndsWith(".cs") || path.EndsWith(".ui.json"))
+				{
+					files.Add(path);
+				}
+			}
+
+			if (files.Count == 0)
 			{
 				return null;
 			}
@@ -271,7 +287,7 @@ namespace CoworkBridge
 			var pending = new List<string>();
 			foreach (string file in files)
 			{
-				string taskId = Path.GetFileNameWithoutExtension(file);
+				string taskId = TaskIdOf(file);
 				string donePath = Path.Combine(_coworkPath, "result_" + taskId + ".done");
 
 				if (!File.Exists(donePath))
@@ -287,6 +303,17 @@ namespace CoworkBridge
 
 			pending.Sort((a, b) => File.GetCreationTimeUtc(a).CompareTo(File.GetCreationTimeUtc(b)));
 			return pending[0];
+		}
+
+		private static string TaskIdOf(string filePath)
+		{
+			string name = Path.GetFileName(filePath);
+			if (name.EndsWith(".ui.json"))
+			{
+				return name.Substring(0, name.Length - ".ui.json".Length);
+			}
+
+			return Path.GetFileNameWithoutExtension(name);
 		}
 
 		private static void CleanResultFiles(string taskId)

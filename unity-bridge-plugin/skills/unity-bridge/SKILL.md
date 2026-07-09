@@ -1,6 +1,6 @@
 ---
 name: unity-bridge
-description: "Use this skill whenever the user wants Claude to execute anything inside the Unity Editor — listing or modifying assets, scenes, prefabs, components, materials, project settings; running editor-side analysis, refactors, or batch operations; querying the scene hierarchy; or any task that requires running C# code in the Unity Editor context. The skill works via Cowork Bridge: Claude writes a C# Editor script, drops it into a watched folder, Bridge compiles and runs it, and returns logs plus a result string. Trigger this even for casual phrasings like 'check what's in the scene', 'find all prefabs using shader X', 'rename these assets', 'what does this component reference' — anything that needs Unity Editor introspection or modification. Do NOT use for runtime gameplay code, build pipeline tasks unrelated to Editor scripting, or pure C# questions outside of Unity."
+description: "Use this skill whenever the user wants Claude to execute anything inside the Unity Editor — listing or modifying assets, scenes, prefabs, components, materials, project settings; running editor-side analysis, refactors, or batch operations; querying the scene hierarchy; or any task that requires running C# code in the Unity Editor context. The skill works via Cowork Bridge: Claude writes a C# Editor script, drops it into a watched folder, Bridge compiles and runs it, and returns logs plus a result string. Trigger this even for casual phrasings like 'check what's in the scene', 'find all prefabs using shader X', 'rename these assets', 'what does this component reference' — anything that needs Unity Editor introspection or modification. Do NOT use for runtime gameplay code, build pipeline tasks unrelated to Editor scripting, or pure C# questions outside of Unity. For uGUI prefab layout and UI screenshots prefer the unity-ui skill."
 ---
 
 # Unity Bridge
@@ -8,6 +8,8 @@ description: "Use this skill whenever the user wants Claude to execute anything 
 Скилл для выполнения произвольных задач в Unity Editor через Cowork Bridge.
 
 Принцип работы: ты генерируешь C# Editor-скрипт, кладёшь его в `Assets/Editor/CoworkBridge/`, Bridge автоматически подхватывает файл, компилирует и выполняет. Результат (логи + возвращённая строка + статус) появляется в JSON-файле рядом со скриптом.
+
+Для вёрстки uGUI-префабов (создание/правка UI, скриншоты экранов) используй скилл `unity-ui` — декларативные задачи без компиляции. Этот скилл — для логики и всего остального.
 
 ## Quick reference
 

@@ -8,9 +8,15 @@ The system consists of two parts:
 
 **Cowork Bridge** — a C# package inside Unity Editor. It watches the `Assets/Editor/CoworkBridge/` folder, picks up task files, compiles scripts, executes them via reflection, and writes results. On load it also installs a small `wait-for-result.sh` helper into that folder (if missing), which Cowork uses to wait for results.
 
-**Unity Bridge Plugin** — a plugin for Claude Cowork. It ships the `unity-bridge` skill, which contains instructions for Claude on script generation, the Bridge communication protocol, and error handling logic. The skill is what actually commands the Unity-side Bridge — it can auto-trigger on any Unity Editor task ("list all prefabs using shader X", "rename these assets"), or you can invoke it explicitly via `/unity-bridge`.
+**Unity Bridge Plugin** — a plugin for Claude Cowork. It ships two skills:
 
-A task is the `.cs` script itself — just place it in `Assets/Editor/CoworkBridge/`, and Bridge will pick it up. No additional JSON task files are needed. Multiple agents or users can create scripts independently — Bridge processes them sequentially in creation order.
+- `unity-bridge` — instructions for Claude on script generation, the Bridge communication protocol, and error handling. It commands the Unity-side Bridge and auto-triggers on any Unity Editor task ("list all prefabs using shader X", "rename these assets"), or invoke it explicitly via `/unity-bridge`.
+- `unity-ui` — declarative uGUI layout: creating/editing UI prefabs, dumping layout geometry, and screenshotting screens through `Task_*.ui.json` tasks (no C# compilation, no domain reload — iterations take seconds). Auto-triggers on layout phrasing ("build this popup", "move/recolor this element", "screenshot the screen"), or `/unity-ui`. uGUI + TMP only; UI Toolkit is not supported. See [Declarative UI Tasks](#declarative-ui-tasks).
+
+There are two task types, both dropped into `Assets/Editor/CoworkBridge/` and processed sequentially in creation order:
+
+- A **C# task** is the `.cs` script itself — Bridge compiles and runs its `Run()` method.
+- A **UI task** is a `Task_*.ui.json` file — Bridge applies it to a prefab directly, without compilation. Multiple agents or users can create tasks independently.
 
 ## Installing Unity Bridge
 
@@ -65,8 +71,10 @@ unity-bridge-plugin/
 ├── .claude-plugin/
 │   └── plugin.json          ← plugin manifest
 └── skills/
-    └── unity-bridge/
-        └── SKILL.md         ← instructions for Claude
+    ├── unity-bridge/
+    │   └── SKILL.md         ← C# task instructions for Claude
+    └── unity-ui/
+        └── SKILL.md         ← declarative uGUI layout instructions
 ```
 
 ### Verifying Installation
@@ -147,7 +155,8 @@ public static class Task_20260226_143052
 
 Bridge cleans up **successful** tasks on its own:
 
-- **Auto-trim** — while idle, Bridge keeps only the last N successful tasks (default 10), removing older ones together with their `result_*` and `testresult_*` files. N is configurable via `KeepCompletedCount` in `ProjectSettings/CoworkBridge.json`.
+- **Auto-trim** — while idle, Bridge keeps only the last N successful tasks (default 10), removing older ones together with all their outputs (`result_*`, `testresult_*`, and UI outputs `uidump_*` / `shot_*`). N is configurable via `KeepCompletedCount` in `ProjectSettings/CoworkBridge.json`.
+- **Orphan sweep** — while idle and during any manual clean, Bridge also removes result files whose owning task file (`.cs` / `.ui.json`) is already gone. This catches results written after their task was trimmed — notably `testresult_*`, produced asynchronously after a test run — which would otherwise pile up forever. Custom `output` paths of `shot` are never touched.
 - **`clean.command`** — to remove **all** successful tasks at once, drop an empty file at `Assets/Editor/CoworkBridge/clean.command`. Bridge deletes every successful task and the command file itself. Don't create it while a test run is in progress.
 
 Failed tasks (`compiler_error` / `runtime_error`) are left untouched by auto-cleanup. Manual cleanup is still available:
@@ -189,14 +198,52 @@ Detailed template with recommendations: `Docs/UNITYCOWORK-template.md`
 
 No separate documentation is needed for the standard Unity Editor API — Claude knows it out of the box.
 
+## Declarative UI Tasks
+
+Besides C# scripts, Bridge accepts a second task type for uGUI layout: a `Task_YYYYMMDD_HHMMSS.ui.json` file placed in `Assets/Editor/CoworkBridge/`. Bridge applies it to a prefab **directly**, without compiling C# or reloading the domain, so layout iterations take seconds. The task id is the file name without the `.ui.json` suffix; results are the usual `result_<id>.json` + `.done`. Scope is uGUI + TMP only — UI Toolkit is not supported.
+
+One task targets one prefab and runs a list of actions:
+
+```json
+{
+    "prefab": "Assets/Resources/Prefabs/UI/MyScreen.prefab",
+    "actions": [
+        { "action": "apply", "target": "Popup", "node": {
+            "rect": { "anchorMin": [0.5, 0.5], "anchorMax": [0.5, 0.5], "pos": [0, 0], "size": [600, 400] },
+            "components": [ { "type": "Image", "sprite": "Assets/Sprites/UI/PopUp.png", "imageType": "Sliced", "color": "#FF005A" } ],
+            "children": [
+                { "name": "Title", "rect": { "anchorMin": [0, 1], "anchorMax": [1, 1], "pos": [0, -40], "size": [0, 60] },
+                    "components": [ { "type": "Text", "text": "TITLE", "size": 42, "align": "Center" } ] }
+            ]
+        } },
+        { "action": "shot", "outline": ["Popup"] }
+    ]
+}
+```
+
+- `apply` — create/update a node by path; specified properties are set, unspecified are left alone, `null` clears; `children` are synced by name (extra children are never removed).
+- `delete` — remove a node by path.
+- `dump` — write `uidump_<id>.json`: the whole tree with anchors, sizes, `screenRect` in reference pixels, and object references of custom components.
+- `shot` — render the prefab offscreen to a PNG (default `shot_<id>.png`, 1920×1080) plus a `.rects.json` with every node's screen rect; `outline` draws colored frames for the listed paths.
+
+Order within a task: all `apply`/`delete` run first over the loaded prefab contents, then a single save, then `dump`/`shot` over the saved asset. If the prefab does not exist and there is an `apply`, it is created (root `RectTransform` stretched 0..1). Any error (bad JSON, missing prefab/sprite/type/path) yields `runtime_error` and leaves the prefab unchanged.
+
+### Layout conventions (`UNITYCOWORK-UI.md`)
+
+Before laying out UI, the `unity-ui` skill recursively searches the project for a `UNITYCOWORK-UI.md` file describing your layout conventions — reference resolution, palette, fonts, art paths, prefab paths, and custom view components. Create one so Claude uses your real colors, fonts and assets instead of guessing. Template with recommendations: `Docs/UNITYCOWORK-UI-template.md`.
+
 ## Working Directory
 
 ```
 Assets/Editor/CoworkBridge/
 ├── wait-for-result.sh          ← result-wait helper (auto-installed by Bridge)
-├── Task_XXX.cs                 ← generated scripts = tasks
+├── Task_XXX.cs                 ← generated C# scripts = tasks
+├── Task_XXX.ui.json            ← declarative UI tasks
 ├── result_<id>.json            ← execution results
-└── result_<id>.done            ← result readiness markers
+├── result_<id>.done            ← result readiness markers
+├── uidump_<id>.json            ← UI dump output
+├── shot_<id>.png               ← UI screenshot output
+└── shot_<id>.png.rects.json    ← screen rects for the screenshot
 ```
 
 ## Limitations
