@@ -5,7 +5,7 @@ Status: Выполнено
 ## Отклонения от ТДД при реализации
 
 - **Dump-стейдж — камера вместо overlay.** ТДД предполагал для `dump` `ScreenSpaceOverlay`-canvas без камеры и вычисление `screenRect` «с учётом scaleFactor». Это дало бы координаты, зависящие от размера Game View редактора, что ломает контракт «референсные пиксели». Реализация использует единый `UiPrefabStage` с камерой + `RenderTexture` заданного разрешения в обоих режимах (dump и shot): пиксельные размеры канваса фиксированы референсным разрешением независимо от Game View, а `ScreenRect` считается через `RectTransformUtility.WorldToScreenPoint(camera, corner)` детерминированно. SRP отключается и слой 31 изолируется только в режиме рендера (`shot`).
-- **Очистка результатов — свип «сирот».** По просьбе заказчика заодно закрыта давняя проблема: `testresult_*` (а теперь и `uidump_*`/`shot_*`) могли оставаться в папке, если файл результата записывался уже после того, как исходный таск был вычищен (тримом/`clean.command`) — «осиротевший» результат больше никогда не попадал под удаление, т.к. очистка перебирает файлы задач. Добавлен `TaskCleaner.SweepOrphans`: на простое и во всех ручных очистках удаляются любые `result_*`/`testresult_*`/`pending_errors_*`/`uidump_*`/`shot_*(.rects.json)`, у которых нет живого файла-задачи (`.cs`/`.ui.json`). Кастомные пути `output` не трогаются.
+- **Очистка результатов — свип «сирот».** По просьбе заказчика заодно закрыта давняя проблема: `testresult_*` (а теперь и UI-артефакты) могли оставаться в папке, если файл результата записывался уже после того, как исходный таск был вычищен (тримом/`clean.command`) — «осиротевший» результат больше никогда не попадал под удаление, т.к. очистка перебирает файлы задач. Добавлен `TaskCleaner.SweepOrphans`: на простое и во всех ручных очистках удаляются любые `result_*`/`testresult_*`/`pending_errors_*`, старые плоские `uidump_*`/`shot_*(.rects.json)` и каталоги `Artifacts/<TaskId>`, у которых нет живого файла-задачи (`.cs`/`.ui.json`). После исправления 2026-07-14 произвольные пути `shot.output` больше не поддерживаются: все UI-артефакты принудительно принадлежат задаче.
 
 ## Цель
 
@@ -102,7 +102,7 @@ Status: Выполнено
 
 ## Действие dump
 
-`{ "action": "dump" }` → файл `uidump_<TaskId>.json` в папке задач. Инстанцирование префаба во временной сцене под canvas 1920×1080 (см. UiPrefabStage) без рендера, обход дерева:
+`{ "action": "dump" }` → файл `Artifacts/<TaskId>/uidump.json` в папке задач. Инстанцирование префаба во временной сцене под canvas 1920×1080 (см. UiPrefabStage) без рендера, обход дерева:
 
 ```json
 {
@@ -130,9 +130,9 @@ Status: Выполнено
 
 ## Действие shot
 
-`{ "action": "shot", "output": "shot_<TaskId>.png", "width": 1920, "height": 1080, "outline": ["Popup"] }`
+`{ "action": "shot", "output": "layout.png", "width": 1920, "height": 1080, "outline": ["Popup"] }`
 
-- Все поля опциональны: `output` по умолчанию `shot_<TaskId>.png` (пишется в папку задач; относительный путь — от корня Unity-проекта), размеры по умолчанию 1920×1080, `outline` по умолчанию пуст.
+- Все поля опциональны: `output` по умолчанию `shot.png`; допускается только имя PNG-файла без пути. Результат всегда пишется в `Artifacts/<TaskId>/`, размеры по умолчанию 1920×1080, `outline` по умолчанию пуст.
 - Рендер — порт `UiBuild.Screenshot` из Deadlift (код ниже в UiScreenshot): временная сцена, ScreenSpaceCamera-canvas, отключение пользовательских MonoBehaviour, изоляция слоем 31, временное отключение SRP-пайплайна, RenderTexture → PNG.
 - Рядом всегда пишется `<output>.rects.json`: плоский список всех узлов с `path` и `screenRect` (формула как в dump) плюс легенда обводок.
 - `outline` — список путей: в PNG поверх рисуется рамка толщиной 2px цветом из фиксированной палитры по порядку (`#FF3B30`, `#34C759`, `#0A84FF`, `#FFD60A`, `#BF5AF2`, `#FF9F0A`, `#64D2FF`, `#FF375F`; при исчерпании — по кругу). При записи пикселей в Texture2D учесть инверсию Y.
@@ -502,7 +502,7 @@ namespace CoworkBridge.Ui
 
 - прочитать `<coworkPath>/<taskId>.ui.json`, `UiJson.Parse`; логи собирать в `List<string>` (плюс перехват `Application.logMessageReceived` как в TaskRunner)
 - разобрать `prefab` и `actions`; мутации (`apply`/`delete`) выполнить над `PrefabUtility.LoadPrefabContents` (или новым корнем при отсутствии файла), `SaveAsPrefabAsset` + `UnloadPrefabContents` один раз; затем `dump`/`shot`
-- пути вывода: относительные — от корня Unity-проекта; `dump` всегда в `<coworkPath>/uidump_<taskId>.json`; `shot` по умолчанию `<coworkPath>/shot_<taskId>.png`
+- пути вывода: `dump` всегда в `<coworkPath>/Artifacts/<taskId>/uidump.json`; `shot` по умолчанию `<coworkPath>/Artifacts/<taskId>/shot.png`; `shot.output` принимает только имя PNG-файла без пути и пишет его в тот же каталог задачи
 - `AssetDatabase.Refresh()` после записи PNG
 - успех → `TaskResult { id, status = "success", logs, return_value }`, `return_value` — перечисление сделанного и путей выходных файлов; исключение → `status = "runtime_error"`, message + stack в logs, `UnloadPrefabContents` в finally, префаб не сохранять
 - запись через `ResultWriter.Write`
@@ -516,7 +516,7 @@ namespace CoworkBridge.Ui
 ## Правки TaskCleaner.cs
 
 - Ввести `private static List<string> GetTaskFiles(string coworkPath)` — объединение `*.cs` и `*.ui.json` с корректным вычислением taskId; использовать во всех методах вместо прямых `GetFiles(coworkPath, "*.cs")` (`TrimCompleted` — сравнение с keepCount по числу задач, `CleanCompleted`, `CleanAll`, `GetSuccessfulTaskIds`).
-- `DeleteTaskFiles` — дополнительно удалять: `<taskId>.ui.json`, `uidump_<taskId>.json`, `shot_<taskId>.png` (+ `.meta`), `shot_<taskId>.png.rects.json`. Кастомные пути `output` клинер не трогает.
+- `DeleteTaskFiles` — дополнительно удалять `<taskId>.ui.json`, весь каталог `Artifacts/<taskId>` (+ `.meta`) и старые плоские `uidump_<taskId>.json`/`shot_<taskId>.png(.rects.json)` для обратной совместимости.
 
 ## Скилл unity-ui
 
@@ -584,11 +584,11 @@ description: "Use this skill for any uGUI layout work in a Unity project via Cow
 
 ## dump — чтение экрана
 
-`{ "action": "dump" }` → `uidump_<TaskId>.json` в папке задач: всё дерево с анкорами, размерами и `screenRect` `[x, y, w, h]` в референсных пикселях (начало — левый верхний угол). Читай его вместо YAML префаба — там же object-ссылки кастомных компонентов.
+`{ "action": "dump" }` → `Artifacts/<TaskId>/uidump.json` в папке задач: всё дерево с анкорами, размерами и `screenRect` `[x, y, w, h]` в референсных пикселях (начало — левый верхний угол). Читай его вместо YAML префаба — там же object-ссылки кастомных компонентов.
 
 ## shot — скриншот
 
-`{ "action": "shot", "output": "имя.png", "width": 1920, "height": 1080, "outline": ["Popup"] }` — всё опционально. Рядом всегда `<output>.rects.json` с экранными ректами всех узлов; `outline` рисует цветные рамки по путям (легенда в rects.json). Смотри PNG глазами, координаты сверяй по rects.json.
+`{ "action": "shot", "output": "имя.png", "width": 1920, "height": 1080, "outline": ["Popup"] }` — всё опционально. Результат всегда пишется в `Artifacts/<TaskId>/`; `output` принимает только имя PNG-файла без пути. Рядом всегда `<output>.rects.json` с экранными ректами всех узлов; `outline` рисует цветные рамки по путям (легенда в rects.json). Смотри PNG глазами, координаты сверяй по rects.json.
 
 ## Правила
 

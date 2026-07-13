@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
 using UnityEditor;
+using CoworkBridge.Ui;
 
 namespace CoworkBridge
 {
@@ -115,6 +116,24 @@ namespace CoworkBridge
 				deleted++;
 			}
 
+			string artifactRoot = UiTaskArtifacts.GetRootDirectory(coworkPath);
+			if (Directory.Exists(artifactRoot))
+			{
+				foreach (string directory in Directory.GetDirectories(artifactRoot))
+				{
+					string taskId = Path.GetFileName(directory);
+					if (taskIds.Contains(taskId))
+					{
+						continue;
+					}
+
+					DeleteDirectory(directory);
+					deleted++;
+				}
+
+				DeleteDirectoryIfEmpty(artifactRoot);
+			}
+
 			if (deleted > 0)
 			{
 				AssetDatabase.Refresh();
@@ -133,8 +152,9 @@ namespace CoworkBridge
 			DeleteFile(Path.Combine(coworkPath, "testresult_" + taskId + ".done"));
 			DeleteFile(Path.Combine(coworkPath, "uidump_" + taskId + ".json"));
 			DeleteFile(Path.Combine(coworkPath, "shot_" + taskId + ".png"));
-			DeleteFile(Path.Combine(coworkPath, "shot_" + taskId + ".png.meta"));
 			DeleteFile(Path.Combine(coworkPath, "shot_" + taskId + ".png.rects.json"));
+			DeleteDirectory(UiTaskArtifacts.GetTaskDirectory(coworkPath, taskId));
+			DeleteDirectoryIfEmpty(UiTaskArtifacts.GetRootDirectory(coworkPath));
 		}
 
 		public static List<string> GetTaskFiles(string coworkPath)
@@ -248,6 +268,36 @@ namespace CoworkBridge
 			{
 				File.Delete(path);
 			}
+
+			string metaPath = path + ".meta";
+			if (File.Exists(metaPath))
+			{
+				File.Delete(metaPath);
+			}
+		}
+
+		private static void DeleteDirectory(string path)
+		{
+			if (Directory.Exists(path))
+			{
+				Directory.Delete(path, true);
+			}
+
+			string metaPath = path + ".meta";
+			if (File.Exists(metaPath))
+			{
+				File.Delete(metaPath);
+			}
+		}
+
+		private static void DeleteDirectoryIfEmpty(string path)
+		{
+			if (!Directory.Exists(path) || Directory.GetFileSystemEntries(path).Length > 0)
+			{
+				return;
+			}
+
+			DeleteDirectory(path);
 		}
 	}
 }

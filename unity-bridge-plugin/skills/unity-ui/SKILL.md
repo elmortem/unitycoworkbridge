@@ -12,12 +12,12 @@ description: "Use this skill for any uGUI layout work in a Unity project via Cow
 | Шаг | Действие |
 |-----|----------|
 | 1 | Найти `UNITYCOWORK-UI.md` в проекте — соглашения вёрстки (палитра, шрифты, арт, пути префабов) |
-| 2 | Незнакомый префаб — сначала задача с `dump`, изучить `uidump_*.json` |
+| 2 | Незнакомый префаб — сначала задача с `dump`, изучить `Artifacts/<TaskId>/uidump.json` |
 | 3 | Итерация: задача `[apply..., shot]` — правка и скриншот за один заход |
 | 4 | Ждать результат: `bash Assets/Editor/CoworkBridge/wait-for-result.sh <TaskId> 300` |
-| 5 | Посмотреть скриншот и `rects.json`, продолжить итерации |
+| 5 | Посмотреть PNG и `rects.json` в `Artifacts/<TaskId>/`, продолжить итерации |
 
-Имя задачи: `Task_YYYYMMDD_HHMMSS`, файл `<TaskId>.ui.json`. Результат — `result_<TaskId>.json` + `.done`, статусы `success`/`runtime_error`/`timeout`. Очистка — как в unity-bridge (`clean.command`, авто-трим).
+Имя задачи: `Task_YYYYMMDD_HHMMSS`, файл `<TaskId>.ui.json`. Результат — `result_<TaskId>.json` + `.done`, статусы `success`/`runtime_error`/`timeout`. Все временные UI-артефакты принадлежат задаче и лежат только в `Assets/Editor/CoworkBridge/Artifacts/<TaskId>/`; авто-трим, `clean.command` и ручная очистка удаляют этот каталог вместе с задачей.
 
 ## Формат задачи
 
@@ -59,16 +59,17 @@ description: "Use this skill for any uGUI layout work in a Unity project via Cow
 
 ## dump — чтение экрана
 
-`{ "action": "dump" }` → `uidump_<TaskId>.json` в папке задач: всё дерево с анкорами, размерами и `screenRect` `[x, y, w, h]` в референсных пикселях (начало — левый верхний угол). Читай его вместо YAML префаба — там же object-ссылки кастомных компонентов.
+`{ "action": "dump" }` → `Assets/Editor/CoworkBridge/Artifacts/<TaskId>/uidump.json`: всё дерево с анкорами, размерами и `screenRect` `[x, y, w, h]` в референсных пикселях (начало — левый верхний угол). Читай его вместо YAML префаба — там же object-ссылки кастомных компонентов.
 
 ## shot — скриншот
 
-`{ "action": "shot", "output": "имя.png", "width": 1920, "height": 1080, "outline": ["Popup"] }` — всё опционально. Рядом всегда `<output>.rects.json` с экранными ректами всех узлов; `outline` рисует цветные рамки по путям (легенда в rects.json). Смотри PNG глазами, координаты сверяй по rects.json.
+`{ "action": "shot", "output": "имя.png", "width": 1920, "height": 1080, "outline": ["Popup"] }` — всё опционально. Результат всегда пишется в `Assets/Editor/CoworkBridge/Artifacts/<TaskId>/`; без `output` имя равно `shot.png`. `output` — только имя PNG-файла, не путь: абсолютные пути и сегменты каталогов запрещены. Рядом всегда `<output>.rects.json` с экранными ректами всех узлов; `outline` рисует цветные рамки по путям (легенда в rects.json). Смотри PNG глазами, координаты сверяй по rects.json.
 
 ## Правила
 
 - Перед вёрсткой в новом проекте прочитай `UNITYCOWORK-UI.md` (рекурсивный поиск от корня проекта) — референсное разрешение, палитра, шрифты, пути к арту и префабам. Нет файла — спроси пользователя про соглашения.
 - Один префаб — одна задача. Несколько префабов — несколько задач подряд.
 - Всегда завершай итерацию правки скриншотом (`apply` + `shot` в одной задаче).
+- Не пиши `shot` в корень проекта, `Assets`, `Docs` или абсолютный путь: Bridge принимает только имя файла и сам помещает его в каталог артефактов задачи.
 - Кастомные view-компоненты и их ссылки заполняй через `set`/`ref` — не оставляй пустых object-полей у собранных экранов.
 - Логика (обработчики, анимации, код) — не сюда: код пишется обычным путём, вёрстка только собирает префаб и ссылки.

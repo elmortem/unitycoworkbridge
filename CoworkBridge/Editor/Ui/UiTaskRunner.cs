@@ -109,7 +109,7 @@ namespace CoworkBridge.Ui
 					string kind = (string)action["action"];
 					if (kind == "dump")
 					{
-						string output = Path.Combine(coworkPath, "uidump_" + taskId + ".json");
+						string output = UiTaskArtifacts.GetDumpPath(coworkPath, taskId);
 						UiDumper.Dump(prefabPath, output);
 						summary.Add("dump -> " + output);
 					}
@@ -119,7 +119,10 @@ namespace CoworkBridge.Ui
 						int height = action.TryGetValue("height", out object h) ? UiValue.I(h) : 1080;
 						List<string> outline = ReadStringList(action, "outline");
 
-						string output = ResolveShotOutput(action, taskId, coworkPath, projectRoot);
+						string outputName = action.TryGetValue("output", out object outputObj) && outputObj is string requestedOutput
+							? requestedOutput
+							: null;
+						string output = UiTaskArtifacts.GetScreenshotPath(coworkPath, taskId, outputName);
 						UiScreenshot.Shot(prefabPath, output, width, height, outline);
 						wrotePng = true;
 						summary.Add("shot -> " + output + " (" + width + "x" + height + ")");
@@ -181,17 +184,6 @@ namespace CoworkBridge.Ui
 			rt.offsetMin = Vector2.zero;
 			rt.offsetMax = Vector2.zero;
 			return go;
-		}
-
-		private static string ResolveShotOutput(Dictionary<string, object> action, string taskId, string coworkPath, string projectRoot)
-		{
-			if (!action.TryGetValue("output", out object outputObj) || !(outputObj is string output) || output.Length == 0)
-				return Path.Combine(coworkPath, "shot_" + taskId + ".png");
-
-			if (Path.IsPathRooted(output))
-				return output;
-
-			return Path.Combine(projectRoot, output);
 		}
 
 		private static List<string> ReadStringList(Dictionary<string, object> action, string key)

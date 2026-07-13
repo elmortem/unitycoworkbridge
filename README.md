@@ -155,8 +155,8 @@ public static class Task_20260226_143052
 
 Bridge cleans up **successful** tasks on its own:
 
-- **Auto-trim** — while idle, Bridge keeps only the last N successful tasks (default 10), removing older ones together with all their outputs (`result_*`, `testresult_*`, and UI outputs `uidump_*` / `shot_*`). N is configurable via `KeepCompletedCount` in `ProjectSettings/CoworkBridge.json`.
-- **Orphan sweep** — while idle and during any manual clean, Bridge also removes result files whose owning task file (`.cs` / `.ui.json`) is already gone. This catches results written after their task was trimmed — notably `testresult_*`, produced asynchronously after a test run — which would otherwise pile up forever. Custom `output` paths of `shot` are never touched.
+- **Auto-trim** — while idle, Bridge keeps only the last N successful tasks (default 10), removing older ones together with all their outputs (`result_*`, `testresult_*`, and the task-owned `Artifacts/<id>/` directory). N is configurable via `KeepCompletedCount` in `ProjectSettings/CoworkBridge.json`.
+- **Orphan sweep** — while idle and during any manual clean, Bridge also removes result files and `Artifacts/<id>/` directories whose owning task file (`.cs` / `.ui.json`) is already gone. This catches outputs written after their task was trimmed — notably `testresult_*`, produced asynchronously after a test run — which would otherwise pile up forever.
 - **`clean.command`** — to remove **all** successful tasks at once, drop an empty file at `Assets/Editor/CoworkBridge/clean.command`. Bridge deletes every successful task and the command file itself. Don't create it while a test run is in progress.
 
 Failed tasks (`compiler_error` / `runtime_error`) are left untouched by auto-cleanup. Manual cleanup is still available:
@@ -223,8 +223,8 @@ One task targets one prefab and runs a list of actions:
 
 - `apply` — create/update a node by path; specified properties are set, unspecified are left alone, `null` clears; `children` are synced by name (extra children are never removed).
 - `delete` — remove a node by path.
-- `dump` — write `uidump_<id>.json`: the whole tree with anchors, sizes, `screenRect` in reference pixels, and object references of custom components.
-- `shot` — render the prefab offscreen to a PNG (default `shot_<id>.png`, 1920×1080) plus a `.rects.json` with every node's screen rect; `outline` draws colored frames for the listed paths.
+- `dump` — write `Artifacts/<id>/uidump.json`: the whole tree with anchors, sizes, `screenRect` in reference pixels, and object references of custom components.
+- `shot` — render the prefab offscreen to `Artifacts/<id>/shot.png` (1920×1080 by default) plus a `.rects.json` with every node's screen rect; `outline` draws colored frames for the listed paths. Optional `output` is a PNG file name only, never a path. Absolute paths and directory segments are rejected, so every transient UI artifact remains owned by its task.
 
 Order within a task: all `apply`/`delete` run first over the loaded prefab contents, then a single save, then `dump`/`shot` over the saved asset. If the prefab does not exist and there is an `apply`, it is created (root `RectTransform` stretched 0..1). Any error (bad JSON, missing prefab/sprite/type/path) yields `runtime_error` and leaves the prefab unchanged.
 
@@ -241,9 +241,11 @@ Assets/Editor/CoworkBridge/
 ├── Task_XXX.ui.json            ← declarative UI tasks
 ├── result_<id>.json            ← execution results
 ├── result_<id>.done            ← result readiness markers
-├── uidump_<id>.json            ← UI dump output
-├── shot_<id>.png               ← UI screenshot output
-└── shot_<id>.png.rects.json    ← screen rects for the screenshot
+└── Artifacts/
+    └── <id>/                   ← removed together with the owning task
+        ├── uidump.json         ← UI dump output
+        ├── shot.png            ← default UI screenshot output
+        └── shot.png.rects.json ← screen rects for the screenshot
 ```
 
 ## Limitations
