@@ -54,6 +54,9 @@ namespace CoworkBridge
 			EditorApplication.update -= OnEditorUpdate;
 			CompilationPipeline.assemblyCompilationFinished -= OnAssemblyCompilationFinished;
 			CompilationPipeline.compilationFinished -= OnCompilationFinished;
+			AssemblyReloadEvents.beforeAssemblyReload -= CoworkBackgroundPump.Stop;
+			EditorApplication.quitting -= CoworkBackgroundPump.Stop;
+			CoworkBackgroundPump.Stop();
 			Debug.Log("[CoworkBridge] Stopped.");
 		}
 
@@ -122,6 +125,14 @@ namespace CoworkBridge
 
 			CompilationPipeline.compilationFinished -= OnCompilationFinished;
 			CompilationPipeline.compilationFinished += OnCompilationFinished;
+
+			AssemblyReloadEvents.beforeAssemblyReload -= CoworkBackgroundPump.Stop;
+			AssemblyReloadEvents.beforeAssemblyReload += CoworkBackgroundPump.Stop;
+
+			EditorApplication.quitting -= CoworkBackgroundPump.Stop;
+			EditorApplication.quitting += CoworkBackgroundPump.Stop;
+
+			CoworkBackgroundPump.Start(_coworkPath);
 
 			string pendingTaskId = SessionState.GetString(PendingTaskKey, "");
 			if (!string.IsNullOrEmpty(pendingTaskId))
