@@ -54,9 +54,9 @@ namespace CoworkBridge
 			EditorApplication.update -= OnEditorUpdate;
 			CompilationPipeline.assemblyCompilationFinished -= OnAssemblyCompilationFinished;
 			CompilationPipeline.compilationFinished -= OnCompilationFinished;
-			AssemblyReloadEvents.beforeAssemblyReload -= CoworkBackgroundPump.Stop;
-			EditorApplication.quitting -= CoworkBackgroundPump.Stop;
-			CoworkBackgroundPump.Stop();
+			AssemblyReloadEvents.beforeAssemblyReload -= CoworkEditorWakeTimer.Stop;
+			EditorApplication.quitting -= CoworkEditorWakeTimer.Stop;
+			CoworkEditorWakeTimer.Stop();
 			Debug.Log("[CoworkBridge] Stopped.");
 		}
 
@@ -126,13 +126,13 @@ namespace CoworkBridge
 			CompilationPipeline.compilationFinished -= OnCompilationFinished;
 			CompilationPipeline.compilationFinished += OnCompilationFinished;
 
-			AssemblyReloadEvents.beforeAssemblyReload -= CoworkBackgroundPump.Stop;
-			AssemblyReloadEvents.beforeAssemblyReload += CoworkBackgroundPump.Stop;
+			AssemblyReloadEvents.beforeAssemblyReload -= CoworkEditorWakeTimer.Stop;
+			AssemblyReloadEvents.beforeAssemblyReload += CoworkEditorWakeTimer.Stop;
 
-			EditorApplication.quitting -= CoworkBackgroundPump.Stop;
-			EditorApplication.quitting += CoworkBackgroundPump.Stop;
+			EditorApplication.quitting -= CoworkEditorWakeTimer.Stop;
+			EditorApplication.quitting += CoworkEditorWakeTimer.Stop;
 
-			CoworkBackgroundPump.Start(_coworkPath);
+			CoworkEditorWakeTimer.Start();
 
 			string pendingTaskId = SessionState.GetString(PendingTaskKey, "");
 			if (!string.IsNullOrEmpty(pendingTaskId))
@@ -218,6 +218,8 @@ namespace CoworkBridge
 			}
 
 			_lastScanTime = EditorApplication.timeSinceStartup;
+
+			CoworkEditorWakeTimer.Start();
 
 			if (EditorApplication.isCompiling)
 			{
