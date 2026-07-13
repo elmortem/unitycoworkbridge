@@ -11,13 +11,14 @@ namespace CoworkBridge
 	{
 		private const int PendingIntervalMs = 200;
 		private const int IdleIntervalMs = 500;
+		private const int JoinTimeoutMs = 2000;
 		private const uint WmNull = 0x0000;
 
 		private static Thread _thread;
 		private static volatile bool _running;
 		private static string _coworkPath;
-		private static bool _isWindows;
 		private static IntPtr _windowHandle;
+		private static ManualResetEventSlim _stopSignal;
 
 		[DllImport("user32.dll", CharSet = CharSet.Auto)]
 		private static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
@@ -26,18 +27,18 @@ namespace CoworkBridge
 		{
 			_coworkPath = coworkPath;
 
+			if (Application.platform != RuntimePlatform.WindowsEditor)
+			{
+				return;
+			}
+
 			if (_running)
 			{
 				return;
 			}
 
-			_isWindows = Application.platform == RuntimePlatform.WindowsEditor;
-			if (!_isWindows)
-			{
-				return;
-			}
-
 			_windowHandle = IntPtr.Zero;
+			_stopSignal = new ManualResetEventSlim(false);
 			_running = true;
 			_thread = new Thread(Loop)
 			{
@@ -49,7 +50,34 @@ namespace CoworkBridge
 
 		public static void Stop()
 		{
+			if (!_running)
+			{
+				return;
+			}
+
 			_running = false;
+
+			if (_stopSignal != null)
+			{
+				_stopSignal.Set();
+			}
+
+			Thread thread = _thread;
+			if (thread != null)
+			{
+				bool finished = thread.Join(JoinTimeoutMs);
+				if (!finished)
+				{
+					Debug.LogWarning("[CoworkBridge] Background pump did not stop within timeout.");
+				}
+			}
+
+			if (_stopSignal != null)
+			{
+				_stopSignal.Dispose();
+				_stopSignal = null;
+			}
+
 			_thread = null;
 		}
 
@@ -57,15 +85,15 @@ namespace CoworkBridge
 		{
 			while (_running)
 			{
+				int waitMs = IdleIntervalMs;
+
 				if (HasPendingWork())
 				{
 					WakeEditor();
-					Thread.Sleep(PendingIntervalMs);
+					waitMs = PendingIntervalMs;
 				}
-				else
-				{
-					Thread.Sleep(IdleIntervalMs);
-				}
+
+				_stopSignal.Wait(waitMs);
 			}
 		}
 
