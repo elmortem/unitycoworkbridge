@@ -51,6 +51,7 @@ namespace CoworkBridge
 		{
 			SetEnabled(false);
 			SessionState.EraseString(PendingTaskKey);
+			SessionState.EraseString(AsyncTaskWatcher.AsyncTaskKey);
 			EditorApplication.update -= OnEditorUpdate;
 			CompilationPipeline.assemblyCompilationFinished -= OnAssemblyCompilationFinished;
 			CompilationPipeline.compilationFinished -= OnCompilationFinished;
@@ -78,6 +79,18 @@ namespace CoworkBridge
 
 			string taskId = Path.GetFileNameWithoutExtension(taskPath);
 			TaskRunner.ExecuteTask(taskId, _coworkPath);
+		}
+
+		[MenuItem("Tools/Cowork Bridge/Cancel Running Task")]
+		public static void CancelRunningTask()
+		{
+			AsyncTaskWatcher.Cancel();
+		}
+
+		[MenuItem("Tools/Cowork Bridge/Cancel Running Task", true)]
+		private static bool CancelRunningTaskValidate()
+		{
+			return AsyncTaskWatcher.IsRunning;
 		}
 
 		[MenuItem("Tools/Cowork Bridge/Clean Completed")]
@@ -138,6 +151,17 @@ namespace CoworkBridge
 			if (!string.IsNullOrEmpty(pendingTaskId))
 			{
 				EditorApplication.delayCall += () => ProcessAfterReload(pendingTaskId);
+			}
+
+			string asyncTaskId = SessionState.GetString(AsyncTaskWatcher.AsyncTaskKey, "");
+			if (!string.IsNullOrEmpty(asyncTaskId))
+			{
+				SessionState.EraseString(AsyncTaskWatcher.AsyncTaskKey);
+				string asyncScriptPath = Path.Combine(_coworkPath, asyncTaskId + ".cs");
+				if (File.Exists(asyncScriptPath))
+				{
+					EditorApplication.delayCall += () => TaskRunner.ExecuteTask(asyncTaskId, _coworkPath);
+				}
 			}
 		}
 
@@ -220,6 +244,11 @@ namespace CoworkBridge
 			_lastScanTime = EditorApplication.timeSinceStartup;
 
 			CoworkEditorWakeTimer.Start();
+
+			if (AsyncTaskWatcher.IsRunning)
+			{
+				return;
+			}
 
 			if (EditorApplication.isCompiling)
 			{

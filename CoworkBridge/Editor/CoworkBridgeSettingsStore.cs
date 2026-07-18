@@ -31,6 +31,17 @@ namespace CoworkBridge
 			return settings.KeepCompletedCount;
 		}
 
+		public static int GetAsyncTimeoutSeconds()
+		{
+			CoworkBridgeSettings settings = Load();
+			if (settings.AsyncTimeoutSeconds <= 0)
+			{
+				return 300;
+			}
+
+			return settings.AsyncTimeoutSeconds;
+		}
+
 		private static CoworkBridgeSettings Load()
 		{
 			string path = GetSettingsPath();

@@ -7,5 +7,6 @@ namespace CoworkBridge
 	{
 		public bool Enabled;
 		public int KeepCompletedCount = 10;
+		public int AsyncTimeoutSeconds = 300;
 	}
 }

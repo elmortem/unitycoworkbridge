@@ -29,12 +29,13 @@ Assets/Editor/CoworkBridge/testresult_<TaskName>.done
 Подставь имя задачи в двух местах. Для PlayMode поменяй `"EditMode"` → `"PlayMode"`. Фильтры передаются массивами строк (или `null`, если не нужны).
 
 ```csharp
+using System.Threading.Tasks;
 using UnityEngine;
 using UnityEditor;
 
 public static class Task_XXX
 {
-    public static string Run()
+    public static async Task<string> Run()
     {
         return CoworkBridge.CoworkTestRunner.RequestRun(
             "Task_XXX",

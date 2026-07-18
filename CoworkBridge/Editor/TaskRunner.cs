@@ -16,32 +16,24 @@ namespace CoworkBridge
 			Type taskType = FindType(taskId);
 			if (taskType == null)
 			{
-				var result = new TaskResult
-				{
-					id = taskId,
-					status = "runtime_error",
-					logs = new List<string> { "Class not found: " + taskId }
-				};
-				ResultWriter.Write(result, coworkPath);
+				WriteRuntimeError(taskId, coworkPath, new List<string> { "Class not found: " + taskId });
 				return;
 			}
 
 			MethodInfo method = taskType.GetMethod("Run", BindingFlags.Public | BindingFlags.Static);
 			if (method == null)
 			{
-				var result = new TaskResult
-				{
-					id = taskId,
-					status = "runtime_error",
-					logs = new List<string> { "Method Run not found in class " + taskId }
-				};
-				ResultWriter.Write(result, coworkPath);
+				WriteRuntimeError(taskId, coworkPath, new List<string> { "Method Run not found in class " + taskId });
+				return;
+			}
+
+			if (method.ReturnType != typeof(System.Threading.Tasks.Task<string>))
+			{
+				WriteRuntimeError(taskId, coworkPath, new List<string> { "Run must have signature: public static Task<string> Run()" });
 				return;
 			}
 
 			var logs = new List<string>();
-			string returnValue = null;
-			string status = "success";
 
 			Application.LogCallback logHandler = (message, stackTrace, type) =>
 			{
@@ -49,39 +41,48 @@ namespace CoworkBridge
 			};
 
 			Application.logMessageReceived += logHandler;
+
+			System.Threading.Tasks.Task<string> task;
 			try
 			{
-				object resultObj = method.Invoke(null, null);
-				if (resultObj != null)
-				{
-					returnValue = resultObj.ToString();
-				}
+				task = (System.Threading.Tasks.Task<string>)method.Invoke(null, null);
 			}
 			catch (TargetInvocationException ex)
 			{
-				status = "runtime_error";
+				Application.logMessageReceived -= logHandler;
 				logs.Add("Runtime error: " + ex.InnerException?.Message);
 				logs.Add(ex.InnerException?.StackTrace);
+				WriteRuntimeError(taskId, coworkPath, logs);
+				return;
 			}
 			catch (Exception ex)
 			{
-				status = "runtime_error";
+				Application.logMessageReceived -= logHandler;
 				logs.Add("Unexpected error: " + ex.Message);
+				WriteRuntimeError(taskId, coworkPath, logs);
+				return;
 			}
-			finally
+
+			if (task == null)
 			{
 				Application.logMessageReceived -= logHandler;
+				logs.Add("Run returned null Task");
+				WriteRuntimeError(taskId, coworkPath, logs);
+				return;
 			}
 
-			var taskResult = new TaskResult
+			AsyncTaskWatcher.Begin(taskId, coworkPath, task, logs, logHandler);
+		}
+
+		private static void WriteRuntimeError(string taskId, string coworkPath, List<string> logs)
+		{
+			var result = new TaskResult
 			{
 				id = taskId,
-				status = status,
-				logs = logs,
-				return_value = returnValue
+				status = "runtime_error",
+				logs = logs
 			};
-
-			ResultWriter.Write(taskResult, coworkPath);
+			ResultWriter.Write(result, coworkPath);
 		}
 
 		public static void HandleCompilerErrors(string taskId, List<CompilerError> errors, string coworkPath)

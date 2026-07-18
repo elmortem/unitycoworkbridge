@@ -138,18 +138,21 @@ You can create a script manually and run it via **Tools → Cowork Bridge → Ru
 The script must follow this template:
 
 ```csharp
+using System.Threading.Tasks;
 using UnityEngine;
 using UnityEditor;
 
 public static class Task_20260226_143052
 {
-    public static string Run()
+    public static async Task<string> Run()
     {
         // your code
         return "result description";
     }
 }
 ```
+
+`Run()` must return `Task<string>` — the old `string Run()` signature is rejected with `runtime_error`. Bridge invokes `Run()` without blocking the editor thread and writes the result only after the returned `Task` completes, so you can freely `await` async APIs (thread pool, `Task.Delay`, Unity async operations). Declare the method `async Task<string>` even when you don't `await` anything (the CS1998 warning does not break compilation).
 
 ### Cleaning Up Tasks
 
@@ -251,6 +254,7 @@ Assets/Editor/CoworkBridge/
 ## Limitations
 
 - Works only in Unity Editor, not in Play Mode
-- Tasks are processed sequentially
-- The `Run()` method executes on Unity's main thread — long operations may freeze the Editor
+- Tasks are processed sequentially — while an async task is in flight Bridge picks up neither it again nor the next task
+- `Run()` is invoked on Unity's main thread; awaited continuations resume there too, so heavy synchronous work still blocks the Editor — offload it via `await Task.Run(...)`. Bridge caps a task at `AsyncTimeoutSeconds` (default 300, configurable in `ProjectSettings/CoworkBridge.json`); on timeout it writes `status: "timeout"` and unblocks the queue
+- A running async task can be aborted via **Tools → Cowork Bridge → Cancel Running Task** (writes `status: "canceled"` and triggers a script reload). If the domain reloads mid-flight, the task auto-restarts when its `.cs` is still in the folder
 - Generated scripts must not depend on assemblies with compilation errors
