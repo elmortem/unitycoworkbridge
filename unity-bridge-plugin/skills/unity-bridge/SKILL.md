@@ -1,36 +1,34 @@
 ---
 name: unity-bridge
-description: "Use this skill whenever the user wants Claude to execute anything inside the Unity Editor — listing or modifying assets, scenes, prefabs, components, materials, project settings; running editor-side analysis, refactors, or batch operations; querying the scene hierarchy; or any task that requires running C# code in the Unity Editor context. The skill works via Cowork Bridge: Claude writes a C# Editor script, drops it into a watched folder, Bridge compiles and runs it, and returns logs plus a result string. Trigger this even for casual phrasings like 'check what's in the scene', 'find all prefabs using shader X', 'rename these assets', 'what does this component reference' — anything that needs Unity Editor introspection or modification. Do NOT use for runtime gameplay code, build pipeline tasks unrelated to Editor scripting, or pure C# questions outside of Unity. For uGUI prefab layout and UI screenshots prefer the unity-ui skill."
+description: "Use this skill whenever the user wants Claude to execute anything inside the Unity Editor — listing or modifying assets, scenes, prefabs, components, materials, project settings; running editor-side analysis, refactors, or batch operations; querying the scene hierarchy; forcing a project compile; running tests; or any task that requires running C# code in the Unity Editor context. The skill works via Agent Bridge: Claude writes a C# script and hands it to the cross-platform `agentbridge` CLI, which compiles it in memory with Roslyn and runs it on the main thread, returning logs plus a result string. Trigger this even for casual phrasings like 'check what's in the scene', 'find all prefabs using shader X', 'rename these assets', 'what does this component reference', 'compile the project', 'run the tests' — anything that needs Unity Editor introspection or modification. Do NOT use for runtime gameplay code, build pipeline tasks unrelated to Editor scripting, or pure C# questions outside of Unity. For uGUI prefab layout and UI screenshots prefer the unity-ui skill."
 ---
 
 # Unity Bridge
 
-Скилл для выполнения произвольных задач в Unity Editor через Cowork Bridge.
+Скилл для выполнения произвольных задач в Unity Editor через Agent Bridge.
 
-Принцип работы: ты генерируешь C# Editor-скрипт, кладёшь его в `Assets/Editor/CoworkBridge/`, Bridge автоматически подхватывает файл, компилирует и выполняет. Результат (логи + возвращённая строка + статус) появляется в JSON-файле рядом со скриптом.
+Принцип работы: ты пишешь C#-скрипт во временный файл и вызываешь установленную в `PATH` команду `agentbridge`. CLI находит Unity-проект из текущей директории, кладёт задачу в очередь моста и ждёт результата. Мост компилирует скрипт в памяти через Roslyn (без domain reload, без файлов в `Assets`) и выполняет на главном потоке редактора. Результат — один JSON в stdout.
 
-Для вёрстки uGUI-префабов (создание/правка UI, скриншоты экранов) используй скилл `unity-ui` — декларативные задачи без компиляции. Этот скилл — для логики и всего остального.
+Для вёрстки uGUI-префабов (создание/правка UI, скриншоты экранов) используй скилл `unity-ui` — декларативные задачи без компиляции. Этот скилл — для логики, компиляции проекта и тестов.
 
 ## Принципы
 
-- Мост — дорогой канал: каждый таск — это компиляция и domain reload. Используй его для того, что умеет только живой Editor: AssetDatabase, выполнение кода в редакторе, тесты, состояние сцены. Код и текстовые ассеты читай и правь обычными файловыми инструментами — без моста.
-- Один таск — один осмысленный шаг работы, а не проверка каждой мелочи. Любой таск попутно компилирует проект — отдельные «проверочные» таски не нужны.
-- Тесты — финальная верификация этапа, а не ритуал после каждой правки.
-- Файлы тасков не удаляй: успешные чистит Bridge сам, упавшие — чини или оставляй человеку.
+- Мост — дорогой канал: каждый C#-таск — это компиляция. Используй его для того, что умеет только живой Editor: AssetDatabase, выполнение кода в редакторе, тесты, состояние сцены. Код и текстовые ассеты читай и правь обычными файловыми инструментами — без моста.
+- Один таск — один осмысленный шаг работы, а не проверка каждой мелочи.
+- `compile` и `tests` — самостоятельные команды, а не побочный эффект `csharp`-таска.
+- Файлы тасков не удаляй: очистка старых записей — работа моста (авто-трим по `KeepCompletedCount`).
 
 ## Quick reference
 
 | Шаг | Действие |
 |-----|----------|
-| 1 | Найти все `UNITYCOWORK.md` в проекте — это описания кастомных API |
-| 2 | Сгенерировать имя задачи: `Task_YYYYMMDD_HHMMSS` |
-| 3 | Создать `Assets/Editor/CoworkBridge/<TaskName>.cs` по шаблону ниже |
-| 4 | Запустить скрипт ожидания результата `wait-for-result.sh` |
-| 5 | Прочитать `Assets/Editor/CoworkBridge/result_<TaskName>.json` и действовать по статусу |
+| 1 | Выполнить `agentbridge status`; если cwd вне проекта — повторить с `--project <path>` |
+| 2 | Найти все `UNITYAGENT.md` (или устаревшие `UNITYCOWORK.md`) в проекте — описания кастомных API |
+| 3 | Сгенерировать уникальное имя задачи: `Task_YYYYMMDD_HHMMSS_fff_<random>` |
+| 4 | Написать `.cs` во временный файл `<TaskName>.cs` по шаблону ниже |
+| 5 | Выполнить `agentbridge csharp <файл>` и обработать JSON из stdout |
 
 ## Шаблон C# скрипта
-
-Все генерируемые скрипты обязаны следовать этому шаблону:
 
 ```csharp
 using System.Threading.Tasks;
@@ -39,102 +37,118 @@ using UnityEditor;
 
 public static class Task_XXX
 {
-    public static async Task<string> Run()
-    {
-        // сгенерированный код
-        return "описание результата";
-    }
+	public static async Task<string> Run()
+	{
+		// сгенерированный код
+		return "описание результата";
+	}
 }
 ```
 
 Правила:
 
-1. `public static class` с `public static async Task<string> Run()`. Метод обязан возвращать `Task<string>` — другие сигнатуры мост отклоняет с `runtime_error`.
-2. Имя класса совпадает с именем файла (без расширения).
+1. `public static class` с `public static Task<string> Run()` или `public static Task<string> Run(CancellationToken cancellationToken)`. Если есть обе сигнатуры — вызывается вторая. Другой тип возврата — мост отклоняет со статусом `rejected`.
+2. Имя класса **обязано** совпадать с именем файла (без расширения) — это же имя станет `TaskName`, клиент берёт его из имени файла.
 3. Метод возвращает строку с описанием того, что было сделано.
-4. Для вывода информации использовать `Debug.Log()` — логи перехватываются Bridge и включаются в результат.
-5. Не добавлять зависимости от пользовательских сборок проекта — только Unity API и кастомные API из `UNITYCOWORK.md`.
-6. **Упавший таск чини, а не удаляй.** `compiler_error` (свой) — исправляй скрипт, до 3 итераций; если не починил — перепиши файл в валидный no-op по шаблону (`Run()` сразу возвращает пометку об отмене), чтобы битый `.cs` не блокировал сборку редактора, и сообщи пользователю. Таски с `runtime_error`/`timeout`/`canceled` скомпилированы и сборку не блокируют — действуй по логике обработки ошибок ниже.
-7. Внутри `Run()` разрешён `await` любых async API (пул потоков, `Task.Delay`, Unity async-операции) — мост пишет результат только после завершения задачи, не блокируя editor-поток. Если `await` не нужен, метод всё равно объявляется `async Task<string>` (предупреждение CS1998 компиляцию не ломает).
+4. Для вывода информации использовать `Debug.Log()` — логи перехватываются мостом и включаются в результат.
+5. Не добавлять зависимости от пользовательских сборок проекта — только Unity API и кастомные API из `UNITYAGENT.md`. Скрипт компилируется изолированно от `Assets`, поэтому доступны только уже загруженные в домен сборки.
+6. Запрещены блокирующие конструкции: `.Wait()`, `.GetAwaiter().GetResult()`, `.Result` на task-подобных выражениях, `Thread.Sleep`, `while (true)`/`for (;;)` без `await` внутри. Мост отклоняет такой код до исполнения (`rejected`, причина в `Diagnostics`/`Logs`) — переписывай через `await`.
+7. **Упавший таск чини, а не удаляй.** Битый `.cs` ничего не блокирует (задачи не участвуют в компиляции проекта) — просто исправь файл и запусти `csharp` заново с тем же или новым именем.
 
 ## Кастомные API проекта
 
-Перед генерацией скрипта найди все файлы `UNITYCOWORK.md` в Unity-проекте (рекурсивный поиск от корня проекта). Каждый такой файл описывает кастомный API, доступный в проекте. Прочитай все найденные файлы и используй описанные в них классы и методы при генерации скрипта, если они подходят для задачи.
+Перед генерацией скрипта найди файлы `UNITYAGENT.md` в Unity-проекте (рекурсивный поиск от корня проекта); если их нет — поищи устаревшее имя `UNITYCOWORK.md`. Каждый такой файл описывает кастомный API, доступный в проекте. Прочитай все найденные файлы и используй описанные в них классы и методы при генерации скрипта, если они подходят для задачи.
 
-Если файлов `UNITYCOWORK.md` не найдено или ни один из описанных API не подходит для задачи — используй стандартное Unity Editor API.
+Если файлов не найдено или ни один из описанных API не подходит для задачи — используй стандартное Unity Editor API.
 
-## Протокол выполнения
+## Команды CLI
 
-### Шаг 1. Имя задачи
-
-Формат: `Task_YYYYMMDD_HHMMSS` (например, `Task_20260226_143052`).
-
-### Шаг 2. Поиск кастомных API
-
-Рекурсивный поиск `UNITYCOWORK.md` от корня проекта. Прочитать все найденные. Определить, какие из описанных API применимы к текущей задаче.
-
-### Шаг 3. Генерация скрипта
-
-Создать файл `Assets/Editor/CoworkBridge/<TaskName>.cs` по шаблону. Bridge сам подхватывает новые `.cs` файлы в этой папке и обрабатывает их последовательно — никаких дополнительных файлов задач создавать не нужно, сам скрипт и есть задача.
-
-### Шаг 4. Ожидание результата
-
-Bridge сначала пишет `result_<TaskName>.json` целиком, затем создаёт пустой маркер `result_<TaskName>.done`. Ждать нужно появления `.done`-маркера, а читать — `.json`. Это гарантирует, что JSON не будет прочитан частично записанным.
-
-Скрипт ожидания `wait-for-result.sh` Bridge сам кладёт в наблюдаемую папку `Assets/Editor/CoworkBridge/` при загрузке Editor (если файла там ещё нет), рядом с файлами результатов. Запускать нужно **строго этой командой**, без `cd` и без изменений — иначе не сработает правило разрешений:
+`agentbridge` должен быть установлен в `PATH`. Если GUI-агент ещё не подхватил обновлённый `PATH`, используй стабильный путь установщика: `%LOCALAPPDATA%\AgentBridge\bin\agentbridge.exe` в Windows или `$HOME/.local/bin/agentbridge` в macOS/Linux. Не ищи CLI внутри `Library/PackageCache` или каталога UPM-пакета. CLI ищет Unity-проект от `cwd` вверх. Если агент запущен вне проекта, передай `--project <path>`; CLI намеренно не ищет проекты рекурсивно вниз.
 
 ```bash
-bash Assets/Editor/CoworkBridge/wait-for-result.sh Task_20260226_143052 300
+agentbridge <команда> [аргументы] [--project <путь>] [--wait <секунды>]
 ```
 
-Первый аргумент — имя задачи, второй (необязательный) — таймаут в секундах (по умолчанию 300). Скрипт сам дожидается `.done`-маркера и выводит содержимое `result_<TaskName>.json` в stdout; при таймауте печатает JSON со `status: "timeout"` и завершается с кодом 1.
+> Чтобы команда не требовала подтверждения при каждом запуске: `"Bash(agentbridge:*)"` в `.claude/settings.local.json`.
 
-> Чтобы команда не требовала подтверждения при каждом запуске, в настройках Claude Code (`~/.claude/settings.json` или `.claude/settings.local.json` проекта) должно быть разрешение:
-> `"Bash(bash Assets/Editor/CoworkBridge/wait-for-result.sh:*)"`
+### `csharp <path-to-cs>`
 
-### Шаг 5. Обработка результата
+Выполнить C#-таск. `TaskName` — имя файла без расширения, класс внутри обязан называться так же. Ждёт результат, печатает JSON в stdout.
 
-Прочитать `Assets/Editor/CoworkBridge/result_<TaskName>.json` и действовать по логике ниже.
+```bash
+agentbridge csharp /tmp/Task_20260226_143052.cs
+```
+
+### `compile`
+
+Заставить Unity скомпилировать проект (переживает вызванный этим domain reload) и вернуть список ошибок.
+
+```bash
+agentbridge compile
+```
+
+Используй для проверки состояния проекта после серии файловых правок (не C#-тасков), либо когда нужно убедиться, что редактор компилируется чисто.
+
+### `tests [--mode EditMode|PlayMode] [--assembly A] [--test T] [--category C]`
+
+Прогнать тесты. Каждый флаг можно повторять несколько раз. Без `--mode` — `EditMode`.
+
+```bash
+agentbridge tests --mode EditMode --assembly MyProject.Tests
+```
+
+### `status`
+
+Проверить найденный проект, наличие пакета, PID редактора, свежесть heartbeat, версию протокола и готовность моста — без создания задачи. Для подробной диагностики используй `agentbridge doctor`.
+
+### `wait <TaskId>`
+
+До-дождаться уже созданной задачи (например, после того как предыдущий вызов вернул код `2`).
+
+## Формат ответа
+
+Один JSON-объект в stdout (`TaskRecord`): `Id`, `Kind`, `Status`, `ReturnValue`, `Logs`, `Diagnostics`, `ForeignErrors`, `Artifacts`, `Tests`, `Timing`, `SessionId`, `StartedAtUtc`, `FinishedAtUtc`.
+
+Коды выхода: `0` — `Status: "success"`; `1` — любой другой терминальный статус, включая `test_failure`; `2` — таймаут ожидания, задача ещё идёт (`{"Id":"...","Status":"running"}` в stdout, повтори через `wait <TaskId>`); `3` — проект/мост недоступен, несовместим протокол или команда использована неверно.
 
 ## Логика обработки ошибок
 
-### `status == "success"`
+### `Status == "success"`
 
-Показать пользователю `logs` и `return_value`.
+Показать пользователю `Logs` и `ReturnValue`.
 
-### `status == "compiler_error"` И `foreign_errors == false`
+### `Status == "rejected"`
 
-1. Изучить ошибки компилятора из `compiler_errors`.
-2. Исправить сгенерированный скрипт `Assets/Editor/CoworkBridge/<TaskName>.cs`. Bridge подхватит изменённый файл автоматически.
-3. Снова запустить скрипт ожидания (см. Шаг 4) и проверить результат.
-4. Максимум 3 итерации исправлений.
-5. Если после 3 итераций ошибки остались — перепиши таск в валидный no-op (правило 6), покажи ошибки пользователю и остановись.
+Причина — в `Diagnostics` (гвардрейл, компиляция) или `Logs`. Для `csharp`: исправь скрипт, запусти `csharp` заново. Максимум 3 итерации, затем показать ошибки пользователю и остановиться.
 
-### `status == "compiler_error"` И `foreign_errors == true`
+### `Status == "compiler_error"` И `ForeignErrors == false`
 
-Остановиться немедленно. Сообщить пользователю:
+Для `csharp` исправь сгенерированный скрипт и повтори задачу. Для `compile` ошибки принадлежат файлам текущего шага — исправь их и запусти `compile` снова.
 
-1. В проекте есть ошибки компиляции в других файлах, не связанных с текущей задачей.
-2. Показать какие именно файлы и ошибки.
-3. НЕ пытаться исправлять чужие файлы.
+### `Status == "compiler_error"` И `ForeignErrors == true`
 
-### `status == "runtime_error"`
+Остановиться немедленно. Сообщить пользователю: в проекте есть ошибки компиляции в файлах, не связанных с текущей задачей — показать какие именно, не пытаться чинить чужой код.
 
-Показать пользователю логи ошибки. При необходимости предложить исправление и перезапустить (Шаги 3–5).
+### `Status == "runtime_error"`
 
-### `status == "timeout"`
+Показать пользователю логи ошибки. При необходимости предложить исправление и перезапустить.
 
-Таймаут может прийти двумя путями:
+### `Status == "test_failure"`
 
-1. **JSON от `wait-for-result.sh`** (мост не ответил вовсе): нет `result_<TaskName>.json` от моста, `status: "timeout"` печатает сам клиентский скрипт. Bridge не ответил за отведённое время. Сообщить пользователю и предложить: проверить, запущен ли Unity Editor с активным Bridge; увеличить таймаут (второй аргумент `wait-for-result.sh`), если задача потенциально долгая.
-2. **`result_<TaskName>.json` от моста** (задача выполнялась, но превысила `AsyncTimeoutSeconds`): мост запустил задачу, но она летела дольше лимита `AsyncTimeoutSeconds` (по умолчанию 300 секунд, настройка в `ProjectSettings/CoworkBridge.json`). Очередь моста уже разблокирована. Для заведомо долгих задач заранее увеличь `AsyncTimeoutSeconds` и клиентский таймаут `wait-for-result.sh`. Файл задачи можно поправить и перезапустить — сборку он не блокирует.
+Тестовый прогон завершён, но есть упавшие или inconclusive тесты. Показать `Tests.failures`; код выхода уже равен `1`, такой прогон нельзя считать успешной проверкой.
 
-### `status == "canceled"`
+### `Status == "timeout"`
 
-Задачу отменил человек через меню редактора (**Tools → Cowork Bridge → Cancel Running Task**). Сообщить пользователю и не перезапускать без его явного решения. Файл задачи не трогать.
+Задача выполнялась дольше `TaskTimeoutSeconds` (по умолчанию 300 секунд, настройка в `ProjectSettings/AgentBridge.json`). Очередь моста уже разблокирована. Для заведомо долгих задач заранее увеличь `TaskTimeoutSeconds` и клиентский `--wait`.
 
-## Очистка задач
+### `Status == "canceled"`
 
-Очистка — не твоя работа. Bridge на простое сам держит последние N успешных тасков (по умолчанию 10, `KeepCompletedCount` в `ProjectSettings/CoworkBridge.json`), удаляя более старые вместе с их `result_*`, `testresult_*` и `Artifacts/<TaskId>/`. Всё остальное, включая упавшие таски, человек чистит через **Tools → Cowork Bridge → Clean Completed / Clean All**.
+Задачу отменил человек через меню редактора (**Tools → Agent Bridge → Cancel Running Task**). Сообщить пользователю и не перезапускать без его явного решения.
 
-Пустой файл `Assets/Editor/CoworkBridge/clean.command` удаляет все успешные таски сразу — создавай его только по явной просьбе пользователя и никогда во время прогона тестов.
+### Код выхода `2` (ожидание исчерпано, задача ещё идёт)
+
+Мост жив, но не уложился в `--wait`. Повторно подождать: `agentbridge wait <TaskId> --wait <секунды>`.
+
+### Код выхода `3` (мост недоступен)
+
+Смотри поле `code` в JSON. Для `project_not_found` найди корень Unity-проекта и повтори с `--project`; для `heartbeat_stale`/`editor_process_not_running` сообщи: «Открой проект в Unity»; для `bridge_disabled` — «Включи мост через Tools → Agent Bridge → Start»; для `protocol_mismatch` обнови CLI или пакет. Не пытайся запускать Unity самостоятельно.

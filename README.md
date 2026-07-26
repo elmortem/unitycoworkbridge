@@ -1,22 +1,60 @@
-# Unity Cowork Bridge
+# Unity Agent Bridge
 
-A system for executing AI-generated C# scripts in an open Unity Editor via Claude Cowork. Cowork writes the scripts, Bridge compiles and runs them inside Unity, then returns results and errors. On compilation errors, Cowork automatically fixes the code and retries.
+A system for executing AI-generated C# scripts in an open Unity Editor. An agent writes the scripts, Bridge compiles and runs them inside Unity, then returns results and errors.
+
+> **Breaking migration on the `roslyn-cli` branch:** the package ID changed from `com.elmortem.coworkbridge` to `com.elmortem.agentbridge`, and the project-local `bridge.sh` / `bridge.ps1` clients were replaced by the standalone `agentbridge` CLI. Remove the old package entry before installing the new package. This branch is under active development; use the branch-pinned UPM URL below until it is merged and tagged.
 
 ## How It Works
 
-The system consists of two parts:
+The system consists of three parts:
 
-**Cowork Bridge** — a C# package inside Unity Editor. It watches the `Assets/Editor/CoworkBridge/` folder, picks up task files, compiles scripts, executes them via reflection, and writes results. On load it also installs a small `wait-for-result.sh` helper into that folder (if missing), which Cowork uses to wait for results.
+**Agent Bridge** — a C# package inside Unity Editor. A background coordinator picks up tasks dropped into `Library/AgentBridge/Inbox/`, one at a time. C# tasks are compiled in memory with Roslyn (no domain reload, no files written under `Assets`); `compile` and `tests` tasks use Unity's own compiler/test runner. Every task gets a single result record in `Library/AgentBridge/Journal/<TaskId>.json`.
 
-**Unity Bridge Plugin** — a plugin for Claude Cowork. It ships two skills:
+**AgentBridge CLI** — a self-contained executable for Windows, macOS, and Linux. The stable command name is `agentbridge`. It discovers a Unity project from the current directory, writes protocol tasks atomically, waits for results, validates bridge health and protocol compatibility, and exposes `status` / `doctor` diagnostics. Use `--project <path>` when the current directory is outside the Unity project.
 
-- `unity-bridge` — instructions for Claude on script generation, the Bridge communication protocol, and error handling. It commands the Unity-side Bridge and auto-triggers on any Unity Editor task ("list all prefabs using shader X", "rename these assets"), or invoke it explicitly via `/unity-bridge`.
-- `unity-ui` — declarative uGUI layout: creating/editing UI prefabs, dumping layout geometry, and screenshotting screens through `Task_*.ui.json` tasks (no C# compilation, no domain reload — iterations take seconds). Auto-triggers on layout phrasing ("build this popup", "move/recolor this element", "screenshot the screen"), or `/unity-ui`. uGUI + TMP only; UI Toolkit is not supported. See [Declarative UI Tasks](#declarative-ui-tasks).
+**Unity Bridge Plugin** — a plugin for Claude Agent. It ships two skills:
 
-There are two task types, both dropped into `Assets/Editor/CoworkBridge/` and processed sequentially in creation order:
+- `unity-bridge` — instructions for Claude on script generation, the client protocol, and error handling. It commands the Unity-side Bridge and auto-triggers on any Unity Editor task ("list all prefabs using shader X", "rename these assets", "compile the project", "run the tests"), or invoke it explicitly via `/unity-bridge`.
+- `unity-ui` — declarative uGUI layout: creating/editing UI prefabs, dumping layout geometry, and screenshotting screens through `.ui.json` tasks (no C# compilation, no domain reload — iterations take seconds). Auto-triggers on layout phrasing ("build this popup", "move/recolor this element", "screenshot the screen"), or `/unity-ui`. uGUI + TMP only; UI Toolkit is not supported. See [Declarative UI Tasks](#declarative-ui-tasks).
 
-- A **C# task** is the `.cs` script itself — Bridge compiles and runs its `Run()` method.
-- A **UI task** is a `Task_*.ui.json` file — Bridge applies it to a prefab directly, without compilation. Multiple agents or users can create tasks independently.
+There are four task kinds, all created via the CLI and processed sequentially, one at a time:
+
+- **`csharp`** — a `.cs` script; Bridge compiles it in memory with Roslyn and runs its `Run()` method on the main thread.
+- **`ui`** — a `.ui.json` file; Bridge applies it to a prefab directly, without compilation.
+- **`compile`** — forces Unity to compile the project and returns the resulting errors, surviving the domain reload this triggers.
+- **`tests`** — runs EditMode or PlayMode tests and returns pass/fail counts and failure details in the same result record, surviving Play Mode's domain reload.
+
+## Installing AgentBridge CLI
+
+Published releases contain self-contained binaries for Windows, macOS, and Linux on x64 and Arm64. The installer verifies the release checksum, installs into a per-user directory, and adds it to the user `PATH`.
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/elmortem/unitycoworkbridge/roslyn-cli/scripts/install-agentbridge.ps1 | iex
+```
+
+macOS or Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/elmortem/unitycoworkbridge/roslyn-cli/scripts/install-agentbridge.sh | bash
+```
+
+Open a new terminal or restart the agent application, then verify:
+
+```bash
+agentbridge --version
+```
+
+If a GUI agent has not inherited the updated `PATH`, use the stable per-user install path directly: `%LOCALAPPDATA%\AgentBridge\bin\agentbridge.exe` on Windows or `$HOME/.local/bin/agentbridge` on macOS/Linux. The CLI is never discovered inside Unity's hashed `Library/PackageCache` path.
+
+For development directly from this checkout:
+
+```bash
+dotnet run --project AgentBridgeCli/AgentBridgeCli.csproj -- --project AgentBridgeUnity doctor
+```
+
+Release assets are produced by `.github/workflows/agentbridge-cli.yml` from tags named `agentbridge-v*`.
 
 ## Installing Unity Bridge
 
@@ -24,21 +62,19 @@ There are two task types, both dropped into `Assets/Editor/CoworkBridge/` and pr
 
 1. Open **Window → Package Manager** in Unity Editor
 2. Click **+** → **Add package from git URL...**
-3. Enter: `https://github.com/elmortem/unitycoworkbridge.git?path=CoworkBridge`
-4. Add `Assets/Editor/CoworkBridge/` to your project's `.gitignore`
+3. Enter: `https://github.com/elmortem/unitycoworkbridge.git?path=/AgentBridgeUnity/Packages/com.elmortem.agentbridge#roslyn-cli`
 
 ### Option 2: Manual Copy
 
-1. Copy the `CoworkBridge/` folder into the `Packages/` folder of your Unity project
-2. Add `Assets/Editor/CoworkBridge/` to your project's `.gitignore`
+1. Copy the `com.elmortem.agentbridge/` folder into the `Packages/` folder of your Unity project
 
 The package has no dependencies on other project assemblies and will work even if the project has compilation errors.
 
-## Installing Cowork Plugin
+## Installing Agent Plugin
 
 ### Requirements
 
-Cowork is only available in the Claude desktop application (macOS and Windows). The web version and mobile apps do not support Cowork and plugins.
+Agent is only available in the Claude desktop application (macOS and Windows). The web version and mobile apps do not support Agent and plugins.
 
 ### Option 1: Via Claude Code CLI
 
@@ -50,9 +86,9 @@ claude --plugin-dir /path/to/unity-bridge-plugin
 
 For permanent installation, create your own marketplace or use the `--plugin-dir` flag on each launch.
 
-### Option 2: Via Cowork UI
+### Option 2: Via Agent UI
 
-1. Open Claude Desktop and go to the **Cowork** tab
+1. Open Claude Desktop and go to the **Agent** tab
 2. In the sidebar, click **Customize**
 3. Click **Browse plugins** → upload the `unity-bridge-plugin/` folder or a `.zip` archive of it
 
@@ -85,13 +121,13 @@ After installation, just ask Claude to do something inside the Unity Editor (e.g
 
 ### Starting Bridge
 
-In Unity Editor, open **Tools → Cowork Bridge → Start**. Bridge will start watching the `Assets/Editor/CoworkBridge/` folder.
+In Unity Editor, open **Tools → Agent Bridge → Start**. Bridge will start watching `Library/AgentBridge/Inbox/`.
 
 ### Stopping Bridge
 
-**Tools → Cowork Bridge → Stop**
+**Tools → Agent Bridge → Stop**
 
-### Running Tasks via Cowork
+### Running Tasks via Agent
 
 Just describe the task in natural language — the `unity-bridge` skill auto-triggers on Unity Editor requests:
 
@@ -105,35 +141,37 @@ If you want to force the skill to handle a request, invoke it explicitly:
 /unity-bridge add a Rigidbody component to all objects with the Enemy tag
 ```
 
-Claude will generate a script, send it to Bridge, wait for the result, and show the outcome. If there are compilation errors, it will automatically fix the code and retry (up to 3 times).
+Claude will generate a script, hand it to the CLI, wait for the result, and show the outcome. If there are compilation errors, it will automatically fix the code and retry (up to 3 times).
 
-### How Cowork Waits for Results
+### The CLI
 
-Bridge writes `result_<id>.json` and then an empty `result_<id>.done` marker. To wait for a task, the skill runs the helper that Bridge installs into the watched folder:
+One cross-platform command creates a task, waits for it, and prints the result JSON to stdout. Run it from the Unity project root or any subdirectory. Outside the project, pass `--project <path>`.
 
 ```bash
-bash Assets/Editor/CoworkBridge/wait-for-result.sh <TaskName> <timeout-seconds>
+agentbridge csharp /tmp/Task_20260226_143052.cs
+agentbridge compile
+agentbridge tests --mode EditMode --assembly MyGame.Tests
+agentbridge status
+agentbridge doctor --format human
 ```
 
-The helper polls for the `.done` marker, then prints the result JSON to stdout (or a `{"status":"timeout"}` JSON and exit code 1 if it times out). Bridge auto-creates this script in the watched folder on every Editor load when it is missing, so you never place it by hand.
+Exit codes: `0` success, `1` a terminal task failure including `test_failure`, `2` client wait exhausted (the task is still running — retry with `agentbridge wait <TaskId>`), `3` project/bridge unavailable, protocol mismatch, or bad usage.
 
-To stop Claude Code from asking for confirmation on every wait, allow this exact command in your settings — `~/.claude/settings.json` (all projects) or `.claude/settings.local.json` (per project):
+To stop Claude Code from asking for confirmation on every call, allow this exact command in your settings — `~/.claude/settings.json` (all projects) or `.claude/settings.local.json` (per project):
 
 ```json
 {
   "permissions": {
     "allow": [
-      "Bash(bash Assets/Editor/CoworkBridge/wait-for-result.sh:*)"
+      "Bash(agentbridge:*)"
     ]
   }
 }
 ```
 
-`wait-for-result.sh` is a bash script and must keep **LF** line endings — on Windows, CRLF breaks it. The package enforces this via `.gitattributes` (`*.sh text eol=lf`), so the file stays LF when Unity fetches the package. If you commit the watched folder in your own project instead of gitignoring it, add the same `.gitattributes` rule there too.
+`agentbridge status` validates the project path, package presence, Editor PID, heartbeat freshness and protocol version. `agentbridge doctor` additionally reports the CLI path/version, Unity/package versions, Roslyn readiness, capabilities and active task.
 
-### Running Tasks Manually
-
-You can create a script manually and run it via **Tools → Cowork Bridge → Run Task...** (a file dialog for selecting a .cs file).
+### C# Task Script
 
 The script must follow this template:
 
@@ -152,26 +190,17 @@ public static class Task_20260226_143052
 }
 ```
 
-`Run()` must return `Task<string>` — the old `string Run()` signature is rejected with `runtime_error`. Bridge invokes `Run()` without blocking the editor thread and writes the result only after the returned `Task` completes, so you can freely `await` async APIs (thread pool, `Task.Delay`, Unity async operations). Declare the method `async Task<string>` even when you don't `await` anything (the CS1998 warning does not break compilation).
+The class name must match the file name — that name becomes the `TaskId`. `Run()` must return `Task<string>` (an overload taking a `CancellationToken` is also accepted and preferred when present) — any other signature is rejected before compilation. Bridge compiles the script in memory with Roslyn and invokes `Run()` on the main thread without blocking it, so you can freely `await` async APIs (thread pool, `Task.Delay`, Unity async operations); it writes the result only after the returned `Task` completes. Blocking constructs (`.Wait()`, `.GetAwaiter().GetResult()`, `.Result`, `Thread.Sleep`, unconditional `while(true)`/`for(;;)`) are rejected before execution — use `await` instead.
 
 ### Cleaning Up Tasks
 
-Bridge cleans up **successful** tasks on its own:
-
-- **Auto-trim** — while idle, Bridge keeps only the last N successful tasks (default 10), removing older ones together with all their outputs (`result_*`, `testresult_*`, and the task-owned `Artifacts/<id>/` directory). N is configurable via `KeepCompletedCount` in `ProjectSettings/CoworkBridge.json`.
-- **Orphan sweep** — while idle and during any manual clean, Bridge also removes result files and `Artifacts/<id>/` directories whose owning task file (`.cs` / `.ui.json`) is already gone. This catches outputs written after their task was trimmed — notably `testresult_*`, produced asynchronously after a test run — which would otherwise pile up forever.
-- **`clean.command`** — to remove **all** successful tasks at once, drop an empty file at `Assets/Editor/CoworkBridge/clean.command`. Bridge deletes every successful task and the command file itself. Don't create it while a test run is in progress.
-
-Failed tasks (`compiler_error` / `runtime_error`) are left untouched by auto-cleanup. Manual cleanup is still available:
-
-- **Tools → Cowork Bridge → Clean Completed** — removes completed tasks (script + result + marker)
-- **Tools → Cowork Bridge → Clean All** — removes all tasks
+Bridge cleans up on its own: while idle, it keeps only the last N tasks per `KeepCompletedCount` (default 10, configurable in `ProjectSettings/AgentBridge.json`), removing older journal entries together with their inbox files and `Artifacts/<id>/` directory. Nothing to clean up by hand.
 
 ## Custom Project APIs
 
-If the project has custom APIs (libraries, tools, builders), you can describe them for Bridge so that Claude uses them when generating scripts. Create a `UNITYCOWORK.md` file next to the library code.
+If the project has custom APIs (libraries, tools, builders), you can describe them for Bridge so that Claude uses them when generating scripts. Create a `UNITYAGENT.md` file next to the library code.
 
-When executing a task, the skill recursively searches for all `UNITYCOWORK.md` files in the project and reads them. If the described API is suitable for the task, Claude will use it instead of the standard Unity Editor API.
+When executing a task, the skill recursively searches for all `UNITYAGENT.md` files in the project and reads them. If the described API is suitable for the task, Claude will use it instead of the standard Unity Editor API.
 
 File format:
 
@@ -197,13 +226,13 @@ Public API with examples.
 Ready-made examples for typical scenarios.
 ```
 
-Detailed template with recommendations: `Docs/UNITYCOWORK-template.md`
+Detailed template with recommendations: `Docs/UNITYAGENT-template.md`
 
 No separate documentation is needed for the standard Unity Editor API — Claude knows it out of the box.
 
 ## Declarative UI Tasks
 
-Besides C# scripts, Bridge accepts a second task type for uGUI layout: a `Task_YYYYMMDD_HHMMSS.ui.json` file placed in `Assets/Editor/CoworkBridge/`. Bridge applies it to a prefab **directly**, without compiling C# or reloading the domain, so layout iterations take seconds. The task id is the file name without the `.ui.json` suffix; results are the usual `result_<id>.json` + `.done`. Scope is uGUI + TMP only — UI Toolkit is not supported.
+Besides C# scripts, Bridge accepts a second task kind for uGUI layout: `agentbridge ui <path-to-ui-json>`. Bridge applies the file to a prefab **directly**, without compiling C# or reloading the domain, so layout iterations take seconds. The task id is the file name without the `.ui.json` suffix. Scope is uGUI + TMP only — UI Toolkit is not supported.
 
 One task targets one prefab and runs a list of actions:
 
@@ -226,26 +255,30 @@ One task targets one prefab and runs a list of actions:
 
 - `apply` — create/update a node by path; specified properties are set, unspecified are left alone, `null` clears; `children` are synced by name (extra children are never removed).
 - `delete` — remove a node by path.
-- `dump` — write `Artifacts/<id>/uidump.json`: the whole tree with anchors, sizes, `screenRect` in reference pixels, and object references of custom components.
-- `shot` — render the prefab offscreen to `Artifacts/<id>/shot.png` (1920×1080 by default) plus a `.rects.json` with every node's screen rect; `outline` draws colored frames for the listed paths. Optional `output` is a PNG file name only, never a path. Absolute paths and directory segments are rejected, so every transient UI artifact remains owned by its task.
+- `dump` — write `Library/AgentBridge/Artifacts/<id>/uidump.json`: the whole tree with anchors, sizes, `screenRect` in reference pixels, and object references of custom components.
+- `shot` — render the prefab offscreen to `Library/AgentBridge/Artifacts/<id>/shot.png` (1920×1080 by default) plus a `.rects.json` with every node's screen rect; `outline` draws colored frames for the listed paths. Optional `output` is a PNG file name only, never a path. Absolute paths and directory segments are rejected, so every transient UI artifact remains owned by its task.
 
 Order within a task: all `apply`/`delete` run first over the loaded prefab contents, then a single save, then `dump`/`shot` over the saved asset. If the prefab does not exist and there is an `apply`, it is created (root `RectTransform` stretched 0..1). Any error (bad JSON, missing prefab/sprite/type/path) yields `runtime_error` and leaves the prefab unchanged.
 
-### Layout conventions (`UNITYCOWORK-UI.md`)
+### Layout conventions (`UNITYAGENT-UI.md`)
 
-Before laying out UI, the `unity-ui` skill recursively searches the project for a `UNITYCOWORK-UI.md` file describing your layout conventions — reference resolution, palette, fonts, art paths, prefab paths, and custom view components. Create one so Claude uses your real colors, fonts and assets instead of guessing. Template with recommendations: `Docs/UNITYCOWORK-UI-template.md`.
+Before laying out UI, the `unity-ui` skill recursively searches the project for a `UNITYAGENT-UI.md` file describing your layout conventions — reference resolution, palette, fonts, art paths, prefab paths, and custom view components. Create one so Claude uses your real colors, fonts and assets instead of guessing. Template with recommendations: `Docs/UNITYAGENT-UI-template.md`.
 
 ## Working Directory
 
 ```
-Assets/Editor/CoworkBridge/
-├── wait-for-result.sh          ← result-wait helper (auto-installed by Bridge)
-├── Task_XXX.cs                 ← generated C# scripts = tasks
-├── Task_XXX.ui.json            ← declarative UI tasks
-├── result_<id>.json            ← execution results
-├── result_<id>.done            ← result readiness markers
+Library/AgentBridge/
+├── status.json                 ← protocol/package/project/Editor status and capabilities
+├── heartbeat                   ← liveness marker, updated every ~2s
+├── Inbox/
+│   ├── Task_XXX.task.json      ← task request (Id, Kind, PayloadFile, ...)
+│   ├── Task_XXX.cs             ← payload for a csharp task
+│   └── Task_XXX.ui.json        ← payload for a ui task
+├── Journal/
+│   └── Task_XXX.json           ← single result record per task (TaskRecord)
+├── Roslyn/                     ← downloaded Roslyn assemblies (NuGet source only)
 └── Artifacts/
-    └── <id>/                   ← removed together with the owning task
+    └── <id>/                   ← removed together with the owning journal entry
         ├── uidump.json         ← UI dump output
         ├── shot.png            ← default UI screenshot output
         └── shot.png.rects.json ← screen rects for the screenshot
@@ -253,8 +286,9 @@ Assets/Editor/CoworkBridge/
 
 ## Limitations
 
-- Works only in Unity Editor, not in Play Mode
-- Tasks are processed sequentially — while an async task is in flight Bridge picks up neither it again nor the next task
-- `Run()` is invoked on Unity's main thread; awaited continuations resume there too, so heavy synchronous work still blocks the Editor — offload it via `await Task.Run(...)`. Bridge caps a task at `AsyncTimeoutSeconds` (default 300, configurable in `ProjectSettings/CoworkBridge.json`); on timeout it writes `status: "timeout"` and unblocks the queue
-- A running async task can be aborted via **Tools → Cowork Bridge → Cancel Running Task** (writes `status: "canceled"` and triggers a script reload). If the domain reloads mid-flight, the task auto-restarts when its `.cs` is still in the folder
-- Generated scripts must not depend on assemblies with compilation errors
+- Works only in Unity Editor, not in Play Mode (except `tests --mode PlayMode`, which enters Play Mode itself)
+- Tasks are processed strictly one at a time, oldest first — Bridge does not start a new task while one is in flight
+- `Run()` is invoked on Unity's main thread; awaited continuations resume there too, so heavy synchronous work still blocks the Editor — offload it via `await Task.Run(...)`. Bridge caps a task at `TaskTimeoutSeconds` (default 300, configurable in `ProjectSettings/AgentBridge.json`); on timeout it writes `Status: "timeout"` and unblocks the queue
+- A running task can be aborted via **Tools → Agent Bridge → Cancel Running Task**
+- `csharp` tasks compile against whatever assemblies are already loaded in the domain — they cannot reference project code that has compilation errors, since the broken assembly itself would never have loaded. Use a `compile` task first to confirm the project builds.
+- Roslyn is not bundled with the package — Bridge resolves it from the project's own references, a local folder, or downloads it from NuGet on demand (**Tools → Agent Bridge → Setup...**). The Unity Editor's own bundled compiler is only usable as a source when it targets a runtime compatible with the Editor's own CLR.

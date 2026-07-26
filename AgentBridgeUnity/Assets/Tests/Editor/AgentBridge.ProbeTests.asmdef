@@ -1,0 +1,9 @@
+{
+    "name": "AgentBridge.ProbeTests",
+    "references": [],
+    "includePlatforms": ["Editor"],
+    "excludePlatforms": [],
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

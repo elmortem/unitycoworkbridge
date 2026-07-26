@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>agentbridge</AssemblyName>
+    <RootNamespace>AgentBridge.Cli</RootNamespace>
+    <Version>1.3.0</Version>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <PublishSingleFile Condition="'$(RuntimeIdentifier)' != ''">true</PublishSingleFile>
+    <SelfContained Condition="'$(RuntimeIdentifier)' != ''">true</SelfContained>
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+</Project>

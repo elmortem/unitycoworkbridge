@@ -1,0 +1,118 @@
+name: AgentBridge CLI
+
+on:
+  push:
+    branches:
+      - main
+      - roslyn-cli
+    tags:
+      - agentbridge-v*
+    paths:
+      - AgentBridgeCli/**
+      - AgentBridgeCli.Tests/**
+      - scripts/install-agentbridge.*
+      - .github/workflows/agentbridge-cli.yml
+  pull_request:
+    paths:
+      - AgentBridgeCli/**
+      - AgentBridgeCli.Tests/**
+      - scripts/install-agentbridge.*
+      - .github/workflows/agentbridge-cli.yml
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os:
+          - windows-latest
+          - macos-latest
+          - ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - run: dotnet build AgentBridgeCli/AgentBridgeCli.csproj -c Release
+      - run: dotnet run --project AgentBridgeCli.Tests/AgentBridgeCli.Tests.csproj -c Release
+
+  package:
+    if: startsWith(github.ref, 'refs/tags/agentbridge-v')
+    needs: test
+    strategy:
+      matrix:
+        include:
+          - rid: win-x64
+            os: windows-latest
+          - rid: win-arm64
+            os: windows-latest
+          - rid: osx-x64
+            os: macos-latest
+          - rid: osx-arm64
+            os: macos-latest
+          - rid: linux-x64
+            os: ubuntu-latest
+          - rid: linux-arm64
+            os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Validate release version
+        shell: pwsh
+        run: |
+          $tagVersion = "${{ github.ref_name }}".Substring("agentbridge-v".Length)
+          [xml]$project = Get-Content AgentBridgeCli/AgentBridgeCli.csproj
+          $projectVersion = [string]$project.Project.PropertyGroup.Version
+          if ($projectVersion -ne $tagVersion) {
+            throw "Tag version $tagVersion does not match AgentBridgeCli version $projectVersion"
+          }
+      - run: dotnet publish AgentBridgeCli/AgentBridgeCli.csproj -c Release -r ${{ matrix.rid }} --self-contained true -o publish/${{ matrix.rid }}
+      - name: Smoke published CLI
+        shell: pwsh
+        run: |
+          $rid = "${{ matrix.rid }}"
+          $executable = if ($rid.StartsWith("win-")) {
+            "publish/$rid/agentbridge.exe"
+          } else {
+            "publish/$rid/agentbridge"
+          }
+          & $executable --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "Published CLI smoke test failed with exit code $LASTEXITCODE"
+          }
+      - name: Pack
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $rid = "${{ matrix.rid }}"
+          if ($rid.StartsWith("win-")) {
+            $archive = "agentbridge-$rid.zip"
+            Compress-Archive "publish/$rid/agentbridge.exe" "artifacts/$archive"
+          } else {
+            $archive = "agentbridge-$rid.tar.gz"
+            tar -czf "artifacts/$archive" -C "publish/$rid" agentbridge
+          }
+          $hash = (Get-FileHash "artifacts/$archive" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $archive" | Set-Content "artifacts/$archive.sha256" -NoNewline
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agentbridge-${{ matrix.rid }}
+          path: artifacts/*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/agentbridge-v')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - run: gh release create "$GITHUB_REF_NAME" artifacts/* --generate-notes --title "$GITHUB_REF_NAME"
+        env:
+          GH_TOKEN: ${{ github.token }}
