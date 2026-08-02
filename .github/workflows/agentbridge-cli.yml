@@ -26,6 +26,10 @@ on:
       - scripts/install-agentbridge.*
       - .github/workflows/agentbridge-cli.yml
 
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+  SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+
 jobs:
   test:
     strategy:
@@ -36,18 +40,42 @@ jobs:
           - ubuntu-latest
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
+      - name: Checkout source
+        shell: pwsh
+        run: |
+          git init .
+          git remote add origin "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY.git"
+          git fetch --depth 1 origin "$env:SOURCE_REF"
+          git checkout --detach FETCH_HEAD
       - run: dotnet build AgentBridgeCli/AgentBridgeCli.csproj -c Release
       - run: dotnet run --project AgentBridgeCli.Tests/AgentBridgeCli.Tests.csproj -c Release
 
-  package:
+  ensure-release:
     if: startsWith(github.ref, 'refs/tags/agentbridge-v') || github.event_name == 'workflow_dispatch'
     needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create release when absent
+        shell: bash
+        run: |
+          if [[ "$RELEASE_TAG" != agentbridge-v* ]]; then
+            echo "Release tag must start with agentbridge-v: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --generate-notes --title "$RELEASE_TAG"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+
+  package:
+    if: startsWith(github.ref, 'refs/tags/agentbridge-v') || github.event_name == 'workflow_dispatch'
+    needs:
+      - test
+      - ensure-release
     strategy:
       matrix:
         include:
@@ -64,17 +92,20 @@ jobs:
           - rid: linux-arm64
             os: ubuntu-latest
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
+      - name: Checkout source
+        shell: pwsh
+        run: |
+          git init .
+          git remote add origin "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY.git"
+          git fetch --depth 1 origin "$env:SOURCE_REF"
+          git checkout --detach FETCH_HEAD
       - name: Validate release version
         shell: pwsh
         run: |
-          $releaseTag = "${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}"
+          $releaseTag = $env:RELEASE_TAG
           if (-not $releaseTag.StartsWith("agentbridge-v")) {
             throw "Release tag must start with agentbridge-v: $releaseTag"
           }
@@ -112,31 +143,10 @@ jobs:
           }
           $hash = (Get-FileHash "artifacts/$archive" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $archive" | Set-Content "artifacts/$archive.sha256" -NoNewline
-      - uses: actions/upload-artifact@v4
-        with:
-          name: agentbridge-${{ matrix.rid }}
-          path: artifacts/*
-
-  release:
-    if: startsWith(github.ref, 'refs/tags/agentbridge-v') || github.event_name == 'workflow_dispatch'
-    needs: package
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
-      - name: Create or repair release
-        shell: bash
+      - name: Upload release assets
+        shell: pwsh
         run: |
-          release_tag="${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}"
-          if gh release view "$release_tag" >/dev/null 2>&1; then
-            gh release upload "$release_tag" artifacts/* --clobber
-          else
-            gh release create "$release_tag" artifacts/* --generate-notes --title "$release_tag"
-          fi
+          gh release upload $env:RELEASE_TAG artifacts/* --clobber
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
