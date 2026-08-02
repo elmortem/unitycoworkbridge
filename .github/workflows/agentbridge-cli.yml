@@ -1,6 +1,13 @@
 name: AgentBridge CLI
 
 on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing agentbridge-v* tag to package or repair
+        required: true
+        default: agentbridge-v1.3.0
+        type: string
   push:
     branches:
       - main
@@ -30,6 +37,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
@@ -37,7 +46,7 @@ jobs:
       - run: dotnet run --project AgentBridgeCli.Tests/AgentBridgeCli.Tests.csproj -c Release
 
   package:
-    if: startsWith(github.ref, 'refs/tags/agentbridge-v')
+    if: startsWith(github.ref, 'refs/tags/agentbridge-v') || github.event_name == 'workflow_dispatch'
     needs: test
     strategy:
       matrix:
@@ -57,13 +66,19 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
       - name: Validate release version
         shell: pwsh
         run: |
-          $tagVersion = "${{ github.ref_name }}".Substring("agentbridge-v".Length)
+          $releaseTag = "${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}"
+          if (-not $releaseTag.StartsWith("agentbridge-v")) {
+            throw "Release tag must start with agentbridge-v: $releaseTag"
+          }
+          $tagVersion = $releaseTag.Substring("agentbridge-v".Length)
           [xml]$project = Get-Content AgentBridgeCli/AgentBridgeCli.csproj
           $projectVersion = [string]$project.Project.PropertyGroup.Version
           if ($projectVersion -ne $tagVersion) {
@@ -103,7 +118,7 @@ jobs:
           path: artifacts/*
 
   release:
-    if: startsWith(github.ref, 'refs/tags/agentbridge-v')
+    if: startsWith(github.ref, 'refs/tags/agentbridge-v') || github.event_name == 'workflow_dispatch'
     needs: package
     runs-on: ubuntu-latest
     permissions:
@@ -113,6 +128,15 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
-      - run: gh release create "$GITHUB_REF_NAME" artifacts/* --generate-notes --title "$GITHUB_REF_NAME"
+      - name: Create or repair release
+        shell: bash
+        run: |
+          release_tag="${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}"
+          if gh release view "$release_tag" >/dev/null 2>&1; then
+            gh release upload "$release_tag" artifacts/* --clobber
+          else
+            gh release create "$release_tag" artifacts/* --generate-notes --title "$release_tag"
+          fi
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
