@@ -57,7 +57,7 @@ internal static class BridgeInspector
 		}
 		else
 		{
-			health.HeartbeatAgeMs = ReadHeartbeatAgeMs(paths.HeartbeatFile, health.ForeignHost);
+			health.HeartbeatAgeMs = ReadHeartbeatAgeMs(paths.HeartbeatFile);
 			if (health.HeartbeatAgeMs == null)
 			{
 				health.Problems.Add("heartbeat_invalid");
@@ -168,48 +168,22 @@ internal static class BridgeInspector
 		}
 	}
 
-	private static long? ReadHeartbeatAgeMs(string path, bool foreignHost)
+	private static long? ReadHeartbeatAgeMs(string path)
 	{
-		var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-		long? fromContent = null;
 		try
 		{
 			var value = File.ReadAllText(path).Trim();
-			if (long.TryParse(value, out var timestamp))
+			if (!long.TryParse(value, out var timestamp))
 			{
-				fromContent = Math.Max(0, now - timestamp);
+				return null;
 			}
+
+			return Math.Max(0, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - timestamp);
 		}
 		catch
 		{
+			return null;
 		}
-
-		if (!foreignHost)
-		{
-			return fromContent;
-		}
-
-		long? fromWriteTime = null;
-		try
-		{
-			var written = new DateTimeOffset(File.GetLastWriteTimeUtc(path), TimeSpan.Zero).ToUnixTimeMilliseconds();
-			fromWriteTime = Math.Max(0, now - written);
-		}
-		catch
-		{
-		}
-
-		if (fromContent == null)
-		{
-			return fromWriteTime;
-		}
-
-		if (fromWriteTime == null)
-		{
-			return fromContent;
-		}
-
-		return Math.Min(fromContent.Value, fromWriteTime.Value);
 	}
 
 	private static bool MatchesProject(BridgePaths paths, BridgeStatus status, out string matchedBy)
