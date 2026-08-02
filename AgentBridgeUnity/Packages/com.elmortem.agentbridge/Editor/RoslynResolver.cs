@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using UnityEditor;
@@ -10,6 +11,8 @@ namespace AgentBridge
 	{
 		private const string CSharpDllFileName = "Microsoft.CodeAnalysis.CSharp.dll";
 		private const int MaxSearchDepth = 4;
+
+		private static readonly Dictionary<RoslynSourceKind, RoslynLocation> _probeCache = new Dictionary<RoslynSourceKind, RoslynLocation>();
 
 		private static bool _handlerInstalled;
 		private static string _activeDirectory;
@@ -26,17 +29,33 @@ namespace AgentBridge
 		{
 			switch (kind)
 			{
-				case RoslynSourceKind.UnityBuiltin:
-					return ProbeDirectorySearch(kind, EditorApplication.applicationContentsPath, MaxSearchDepth);
+				case RoslynSourceKind.Vendored:
+					return ProbeVendored();
 				case RoslynSourceKind.Project:
 					return ProbeProject();
-				case RoslynSourceKind.NuGet:
-					return ProbeDirectory(kind, BridgePaths.Roslyn);
 				case RoslynSourceKind.Local:
 					return ProbeDirectory(kind, AgentBridgeSettingsStore.GetRoslynLocalPath());
 				default:
 					return new RoslynLocation { Kind = kind, Available = false, Reason = "unsupported" };
 			}
+		}
+
+		public static RoslynLocation ProbeCached(RoslynSourceKind kind)
+		{
+			RoslynLocation cached;
+			if (_probeCache.TryGetValue(kind, out cached))
+			{
+				return cached;
+			}
+
+			RoslynLocation location = Probe(kind);
+			_probeCache[kind] = location;
+			return location;
+		}
+
+		public static void ClearProbeCache()
+		{
+			_probeCache.Clear();
 		}
 
 		public static RoslynLocation ResolveAuto()
@@ -45,13 +64,12 @@ namespace AgentBridge
 			{
 				RoslynSourceKind.Project,
 				RoslynSourceKind.Local,
-				RoslynSourceKind.NuGet,
-				RoslynSourceKind.UnityBuiltin
+				RoslynSourceKind.Vendored
 			};
 
 			foreach (RoslynSourceKind kind in order)
 			{
-				RoslynLocation location = Probe(kind);
+				RoslynLocation location = ProbeCached(kind);
 				if (location.Available)
 				{
 					return location;
@@ -69,7 +87,30 @@ namespace AgentBridge
 				return ResolveAuto();
 			}
 
-			return Probe(configured);
+			return ProbeCached(configured);
+		}
+
+		private static string GetVendoredDirectory()
+		{
+			UnityEditor.PackageManager.PackageInfo package =
+				UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(RoslynResolver).Assembly);
+			if (package == null || string.IsNullOrEmpty(package.resolvedPath))
+			{
+				return null;
+			}
+
+			return Path.Combine(package.resolvedPath, "Roslyn~");
+		}
+
+		private static RoslynLocation ProbeVendored()
+		{
+			string directory = GetVendoredDirectory();
+			if (directory == null)
+			{
+				return new RoslynLocation { Kind = RoslynSourceKind.Vendored, Available = false, Reason = "package path unavailable" };
+			}
+
+			return ProbeDirectory(RoslynSourceKind.Vendored, directory);
 		}
 
 		public static void InstallAssemblyResolve(string directoryPath)
@@ -92,40 +133,68 @@ namespace AgentBridge
 				return null;
 			}
 
-			string shortName = new AssemblyName(args.Name).Name;
+			var requested = new AssemblyName(args.Name);
+			string candidate = Path.Combine(_activeDirectory, requested.Name + ".dll");
 
-			foreach (Assembly loaded in AppDomain.CurrentDomain.GetAssemblies())
+			if (File.Exists(candidate))
 			{
-				if (loaded.GetName().Name == shortName)
+				try
 				{
-					return null;
+					AssemblyName candidateName = AssemblyName.GetAssemblyName(candidate);
+					if (requested.Version == null || candidateName.Version >= requested.Version)
+					{
+						return Assembly.LoadFrom(candidate);
+					}
+				}
+				catch
+				{
 				}
 			}
 
-			string candidate = Path.Combine(_activeDirectory, shortName + ".dll");
-			if (!File.Exists(candidate))
+			foreach (Assembly loaded in AppDomain.CurrentDomain.GetAssemblies())
 			{
-				return null;
+				if (loaded.GetName().Name != requested.Name)
+				{
+					continue;
+				}
+
+				if (requested.Version == null || loaded.GetName().Version >= requested.Version)
+				{
+					return loaded;
+				}
 			}
 
-			try
-			{
-				return Assembly.LoadFrom(candidate);
-			}
-			catch
-			{
-				return null;
-			}
+			return null;
 		}
 
 		private static RoslynLocation ProbeProject()
 		{
+			string vendoredDirectory = GetVendoredDirectory();
+
 			foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
 			{
-				if (assembly.GetName().Name == "Microsoft.CodeAnalysis.CSharp")
+				if (assembly.GetName().Name != "Microsoft.CodeAnalysis.CSharp")
 				{
-					return TryLoadAndVerify(RoslynSourceKind.Project, assembly.Location);
+					continue;
 				}
+
+				string assemblyLocation;
+				try
+				{
+					assemblyLocation = assembly.Location;
+				}
+				catch
+				{
+					continue;
+				}
+
+				if (vendoredDirectory != null && !string.IsNullOrEmpty(assemblyLocation)
+					&& Path.GetFullPath(assemblyLocation).StartsWith(Path.GetFullPath(vendoredDirectory), StringComparison.OrdinalIgnoreCase))
+				{
+					continue;
+				}
+
+				return TryLoadAndVerify(RoslynSourceKind.Project, assemblyLocation);
 			}
 
 			string assetsRoot = Path.Combine(Path.GetDirectoryName(Application.dataPath), "Assets");
@@ -136,17 +205,6 @@ namespace AgentBridge
 			}
 
 			return TryLoadAndVerify(RoslynSourceKind.Project, found);
-		}
-
-		private static RoslynLocation ProbeDirectorySearch(RoslynSourceKind kind, string rootDirectory, int depth)
-		{
-			string found = FindFileRecursive(rootDirectory, CSharpDllFileName, depth);
-			if (found == null)
-			{
-				return new RoslynLocation { Kind = kind, Available = false, Reason = "not found" };
-			}
-
-			return TryLoadAndVerify(kind, found);
 		}
 
 		private static RoslynLocation ProbeDirectory(RoslynSourceKind kind, string directoryPath)
@@ -199,10 +257,6 @@ namespace AgentBridge
 
 				CodeAnalysisAssembly = baseAssembly;
 				CodeAnalysisCSharpAssembly = csharpAssembly;
-
-				BridgeStatusWriter.Current.RoslynReady = true;
-				BridgeStatusWriter.Current.RoslynSource = kind.ToString();
-				BridgeStatusWriter.Write();
 
 				return new RoslynLocation { Kind = kind, Available = true, Reason = "ok", DirectoryPath = directory };
 			}

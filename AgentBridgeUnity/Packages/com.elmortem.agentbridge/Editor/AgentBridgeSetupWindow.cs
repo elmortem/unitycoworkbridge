@@ -7,29 +7,19 @@ namespace AgentBridge
 	{
 		private static readonly RoslynSourceKind[] Sources =
 		{
-			RoslynSourceKind.UnityBuiltin,
+			RoslynSourceKind.Vendored,
 			RoslynSourceKind.Project,
-			RoslynSourceKind.NuGet,
 			RoslynSourceKind.Local
 		};
+
+		private Vector2 _scroll;
 
 		[MenuItem("Tools/Agent Bridge/Setup...")]
 		public static void Open()
 		{
 			var window = GetWindow<AgentBridgeSetupWindow>(true, "Unity Agent Bridge Setup");
-			window.minSize = new Vector2(460, 320);
-			window.maxSize = new Vector2(460, 320);
+			window.minSize = new Vector2(560, 260);
 			window.Show();
-		}
-
-		private void OnEnable()
-		{
-			RoslynInstaller.Completed += OnInstallCompleted;
-		}
-
-		private void OnDisable()
-		{
-			RoslynInstaller.Completed -= OnInstallCompleted;
 		}
 
 		private void OnGUI()
@@ -37,63 +27,61 @@ namespace AgentBridge
 			EditorGUILayout.LabelField("Roslyn source", EditorStyles.boldLabel);
 			EditorGUILayout.Space();
 
+			_scroll = EditorGUILayout.BeginScrollView(_scroll);
+
 			foreach (RoslynSourceKind kind in Sources)
 			{
 				DrawRow(kind);
 			}
 
-			EditorGUILayout.Space();
-
-			using (new EditorGUI.DisabledScope(RoslynInstaller.IsBusy))
-			{
-				if (GUILayout.Button("Close"))
-				{
-					SessionState.SetBool("AgentBridge_SetupDismissed", true);
-					Close();
-				}
-			}
-		}
-
-		private void DrawRow(RoslynSourceKind kind)
-		{
-			RoslynLocation location = RoslynResolver.Probe(kind);
+			EditorGUILayout.EndScrollView();
 
 			EditorGUILayout.BeginHorizontal();
-			EditorGUILayout.LabelField(kind.ToString(), GUILayout.Width(110));
-			EditorGUILayout.LabelField(DescriptionFor(kind));
-			EditorGUILayout.LabelField(location.Available ? "Ready" : location.Reason, GUILayout.Width(140));
 
-			using (new EditorGUI.DisabledScope(RoslynInstaller.IsBusy))
+			if (GUILayout.Button("Refresh"))
 			{
-				if (location.Available && GUILayout.Button("Use", GUILayout.Width(60)))
-				{
-					AgentBridgeSettingsStore.SetRoslynSource(kind.ToString());
-				}
+				RoslynResolver.ClearProbeCache();
+				Repaint();
+			}
 
-				if (kind == RoslynSourceKind.NuGet && !location.Available && GUILayout.Button("Download", GUILayout.Width(80)))
-				{
-					RoslynInstaller.Download();
-				}
+			if (GUILayout.Button("Close"))
+			{
+				SessionState.SetBool("AgentBridge_SetupDismissed", true);
+				Close();
 			}
 
 			EditorGUILayout.EndHorizontal();
 		}
 
-		private void OnInstallCompleted(bool success, string message)
+		private void DrawRow(RoslynSourceKind kind)
 		{
-			Repaint();
+			RoslynLocation location = RoslynResolver.ProbeCached(kind);
+
+			EditorGUILayout.LabelField(kind + " — " + DescriptionFor(kind), EditorStyles.boldLabel);
+
+			EditorGUILayout.BeginHorizontal();
+			EditorGUILayout.SelectableLabel(location.Available ? "Ready" : location.Reason, GUILayout.Height(EditorGUIUtility.singleLineHeight));
+
+			using (new EditorGUI.DisabledScope(!location.Available))
+			{
+				if (GUILayout.Button("Use", GUILayout.Width(60)))
+				{
+					AgentBridgeSettingsStore.SetRoslynSource(kind.ToString());
+				}
+			}
+
+			EditorGUILayout.EndHorizontal();
+			EditorGUILayout.Space();
 		}
 
 		private static string DescriptionFor(RoslynSourceKind kind)
 		{
 			switch (kind)
 			{
-				case RoslynSourceKind.UnityBuiltin:
-					return "Roslyn bundled with the Unity Editor";
+				case RoslynSourceKind.Vendored:
+					return "Roslyn shipped with the package";
 				case RoslynSourceKind.Project:
 					return "Roslyn already referenced by the project";
-				case RoslynSourceKind.NuGet:
-					return "Download Roslyn from NuGet";
 				case RoslynSourceKind.Local:
 					return "Roslyn from a local folder";
 				default:

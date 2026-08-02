@@ -3,9 +3,8 @@ namespace AgentBridge
 	public enum RoslynSourceKind
 	{
 		Auto,
-		UnityBuiltin,
+		Vendored,
 		Project,
-		NuGet,
 		Local
 	}
 }

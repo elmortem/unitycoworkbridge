@@ -1,5 +1,5 @@
 param(
-	[string]$Version = "1.3.0",
+	[string]$Version = "",
 	[string]$InstallDirectory = (Join-Path $env:LOCALAPPDATA "AgentBridge\bin"),
 	[switch]$NoPathUpdate
 )
@@ -8,7 +8,16 @@ $ErrorActionPreference = "Stop"
 
 $architecture = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
 $assetName = "agentbridge-win-$architecture.zip"
-$releaseBase = "https://github.com/elmortem/unitycoworkbridge/releases/download/agentbridge-v$Version"
+
+if ([string]::IsNullOrWhiteSpace($Version)) {
+	$releaseBase = "https://github.com/elmortem/unitycoworkbridge/releases/latest/download"
+	$releasePage = "https://github.com/elmortem/unitycoworkbridge/releases/latest"
+	$releaseName = "the latest release"
+} else {
+	$releaseBase = "https://github.com/elmortem/unitycoworkbridge/releases/download/agentbridge-v$Version"
+	$releasePage = "https://github.com/elmortem/unitycoworkbridge/releases/tag/agentbridge-v$Version"
+	$releaseName = "release agentbridge-v$Version"
+}
 
 function Get-ReleaseAsset {
 	param(
@@ -26,7 +35,7 @@ function Get-ReleaseAsset {
 		}
 
 		if ($statusCode -eq 404) {
-			throw "AgentBridge release asset '$Name' was not found. Release agentbridge-v$Version may be incomplete: https://github.com/elmortem/unitycoworkbridge/releases/tag/agentbridge-v$Version"
+			throw "AgentBridge release asset '$Name' was not found. $releaseName may be incomplete: $releasePage"
 		}
 
 		throw "Failed to download AgentBridge release asset '$Name' from $uri. $($_.Exception.Message)"

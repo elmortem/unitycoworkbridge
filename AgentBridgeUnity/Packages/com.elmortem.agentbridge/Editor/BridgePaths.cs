@@ -35,11 +35,6 @@ namespace AgentBridge
 			return EnsureDirectory(Path.Combine(ArtifactsRoot, taskId));
 		}
 
-		public static string Roslyn
-		{
-			get { return EnsureDirectory(Path.Combine(WorkingRoot, "Roslyn")); }
-		}
-
 		public static string StatusFile
 		{
 			get { return Path.Combine(WorkingRoot, "status.json"); }

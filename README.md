@@ -40,11 +40,17 @@ macOS or Linux:
 curl -fsSL https://raw.githubusercontent.com/elmortem/unitycoworkbridge/roslyn-cli/scripts/install-agentbridge.sh | bash
 ```
 
+Both installers always fetch the latest published release. To pin a specific one, pass `-Version 1.4.0` on Windows or set `AGENTBRIDGE_VERSION=1.4.0` on macOS/Linux.
+
 Open a new terminal or restart the agent application, then verify:
 
 ```bash
 agentbridge --version
 ```
+
+### Updating
+
+Once Unity Bridge is installed, the CLI can be updated from the Editor: **Tools → Agent Bridge → Update CLI**. It runs the same installer, pulls the latest release, and reports the result in the Console. Restart the agent application afterwards so it picks up the new binary.
 
 If a GUI agent has not inherited the updated `PATH`, use the stable per-user install path directly: `%LOCALAPPDATA%\AgentBridge\bin\agentbridge.exe` on Windows or `$HOME/.local/bin/agentbridge` on macOS/Linux. The CLI is never discovered inside Unity's hashed `Library/PackageCache` path.
 
@@ -69,6 +75,8 @@ Release assets are produced by `.github/workflows/agentbridge-cli.yml` from tags
 1. Copy the `com.elmortem.agentbridge/` folder into the `Packages/` folder of your Unity project
 
 The package has no dependencies on other project assemblies and will work even if the project has compilation errors.
+
+Roslyn is bundled in the package under `Roslyn~/` — nothing to download and no setup step.
 
 ## Installing Agent Plugin
 
@@ -276,7 +284,6 @@ Library/AgentBridge/
 │   └── Task_XXX.ui.json        ← payload for a ui task
 ├── Journal/
 │   └── Task_XXX.json           ← single result record per task (TaskRecord)
-├── Roslyn/                     ← downloaded Roslyn assemblies (NuGet source only)
 └── Artifacts/
     └── <id>/                   ← removed together with the owning journal entry
         ├── uidump.json         ← UI dump output
@@ -291,4 +298,20 @@ Library/AgentBridge/
 - `Run()` is invoked on Unity's main thread; awaited continuations resume there too, so heavy synchronous work still blocks the Editor — offload it via `await Task.Run(...)`. Bridge caps a task at `TaskTimeoutSeconds` (default 300, configurable in `ProjectSettings/AgentBridge.json`); on timeout it writes `Status: "timeout"` and unblocks the queue
 - A running task can be aborted via **Tools → Agent Bridge → Cancel Running Task**
 - `csharp` tasks compile against whatever assemblies are already loaded in the domain — they cannot reference project code that has compilation errors, since the broken assembly itself would never have loaded. Use a `compile` task first to confirm the project builds.
-- Roslyn is not bundled with the package — Bridge resolves it from the project's own references, a local folder, or downloads it from NuGet on demand (**Tools → Agent Bridge → Setup...**). The Unity Editor's own bundled compiler is only usable as a source when it targets a runtime compatible with the Editor's own CLR.
+- Roslyn ships inside the package (`Roslyn~/`), so no download and no network access are required; third-party licenses are in `Roslyn~/THIRD-PARTY-NOTICES.md`.
+
+## Releasing
+
+The three components version independently:
+
+| Component | Version source |
+|---|---|
+| AgentBridge CLI | `<Version>` in `AgentBridgeCli/AgentBridgeCli.csproj` |
+| Unity package | `version` in `AgentBridgeUnity/Packages/com.elmortem.agentbridge/package.json` |
+| Agent plugin | `version` in `unity-bridge-plugin/.claude-plugin/plugin.json` |
+
+Only the CLI has a publishing pipeline. Bumping `<Version>` in the csproj and pushing is the entire release procedure: the workflow runs the tests, sees that no `agentbridge-v<version>` release exists yet, creates the tag and release at that commit, then builds and attaches the six self-contained binaries with checksums. Pushing without a version bump only runs the tests — the release step is skipped because the tag already exists, so no tags are created by hand.
+
+`workflow_dispatch` re-packages an existing tag; use it to repair a release whose assets failed to upload.
+
+The Unity package is consumed straight from the git URL, so it needs no publishing step — pushing the branch is enough. The plugin is distributed as a folder or through your own marketplace.

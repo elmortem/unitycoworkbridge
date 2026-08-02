@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-version="${AGENTBRIDGE_VERSION:-1.3.0}"
+version="${AGENTBRIDGE_VERSION:-}"
 install_dir="${AGENTBRIDGE_INSTALL_DIR:-$HOME/.local/bin}"
 
 case "$(uname -s)" in
@@ -17,14 +17,23 @@ case "$(uname -m)" in
 esac
 
 asset_name="agentbridge-$os-$arch.tar.gz"
-release_base="https://github.com/elmortem/unitycoworkbridge/releases/download/agentbridge-v$version"
+
+if [ -z "$version" ]; then
+	release_base="https://github.com/elmortem/unitycoworkbridge/releases/latest/download"
+	release_page="https://github.com/elmortem/unitycoworkbridge/releases/latest"
+	release_name="the latest release"
+else
+	release_base="https://github.com/elmortem/unitycoworkbridge/releases/download/agentbridge-v$version"
+	release_page="https://github.com/elmortem/unitycoworkbridge/releases/tag/agentbridge-v$version"
+	release_name="release agentbridge-v$version"
+fi
 
 download_release_asset() {
 	local asset_name="$1"
 	local destination="$2"
 	local asset_url="$release_base/$asset_name"
 	if ! curl -fsSL "$asset_url" -o "$destination"; then
-		echo "Failed to download AgentBridge release asset '$asset_name'. Release agentbridge-v$version may be incomplete: https://github.com/elmortem/unitycoworkbridge/releases/tag/agentbridge-v$version" >&2
+		echo "Failed to download AgentBridge release asset '$asset_name'. $release_name may be incomplete: $release_page" >&2
 		return 1
 	fi
 }

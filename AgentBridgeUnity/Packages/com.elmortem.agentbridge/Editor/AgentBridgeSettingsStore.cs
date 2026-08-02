@@ -19,6 +19,20 @@ namespace AgentBridge
 		private static void Initialize()
 		{
 			_mainThreadId = Thread.CurrentThread.ManagedThreadId;
+			MigrateRoslynSource();
+		}
+
+		private static void MigrateRoslynSource()
+		{
+			AgentBridgeSettings settings = Load();
+			if (!string.Equals(settings.RoslynSource, "UnityBuiltin", StringComparison.Ordinal)
+				&& !string.Equals(settings.RoslynSource, "NuGet", StringComparison.Ordinal))
+			{
+				return;
+			}
+
+			settings.RoslynSource = "Auto";
+			Save(settings);
 		}
 
 		public static bool IsEnabled()

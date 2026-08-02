@@ -7,9 +7,8 @@ namespace AgentBridge
 		public static string Run()
 		{
 			var builder = new StringBuilder();
-			AppendResult(builder, RoslynSourceKind.UnityBuiltin);
+			AppendResult(builder, RoslynSourceKind.Vendored);
 			AppendResult(builder, RoslynSourceKind.Project);
-			AppendResult(builder, RoslynSourceKind.NuGet);
 			AppendResult(builder, RoslynSourceKind.Local);
 			return builder.ToString();
 		}
@@ -21,7 +20,7 @@ namespace AgentBridge
 				builder.Append("; ");
 			}
 
-			RoslynLocation location = RoslynResolver.Probe(kind);
+			RoslynLocation location = RoslynResolver.ProbeCached(kind);
 			builder.Append(kind);
 			builder.Append('=');
 			builder.Append(location.Available ? "ok" : location.Reason);

@@ -14,10 +14,17 @@ namespace AgentBridge
 
 		public static readonly BridgeStatus Current = new BridgeStatus();
 
+		private static readonly bool Suspended = Application.isBatchMode;
+
 		private static double _lastBeatTime = double.MinValue;
 
 		static BridgeStatusWriter()
 		{
+			if (Suspended)
+			{
+				return;
+			}
+
 			WriteOnLoad();
 			EditorApplication.update -= OnUpdate;
 			EditorApplication.update += OnUpdate;
@@ -47,12 +54,22 @@ namespace AgentBridge
 
 		public static void Write()
 		{
+			if (Suspended)
+			{
+				return;
+			}
+
 			string json = UnityEngine.JsonUtility.ToJson(Current, true);
 			WriteAtomic(BridgePaths.StatusFile, json);
 		}
 
 		public static void Beat()
 		{
+			if (Suspended)
+			{
+				return;
+			}
+
 			double now = EditorApplication.timeSinceStartup;
 			if (now - _lastBeatTime < BeatIntervalSeconds)
 			{
