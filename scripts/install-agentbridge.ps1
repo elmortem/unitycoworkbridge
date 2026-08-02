@@ -10,14 +10,37 @@ $architecture = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { 
 $assetName = "agentbridge-win-$architecture.zip"
 $releaseBase = "https://github.com/elmortem/unitycoworkbridge/releases/download/agentbridge-v$Version"
 
+function Get-ReleaseAsset {
+	param(
+		[string]$Name,
+		[string]$Destination
+	)
+
+	$uri = "$releaseBase/$Name"
+	try {
+		Invoke-WebRequest $uri -OutFile $Destination
+	} catch {
+		$statusCode = $null
+		if ($null -ne $_.Exception.Response -and $null -ne $_.Exception.Response.StatusCode) {
+			$statusCode = [int]$_.Exception.Response.StatusCode
+		}
+
+		if ($statusCode -eq 404) {
+			throw "AgentBridge release asset '$Name' was not found. Release agentbridge-v$Version may be incomplete: https://github.com/elmortem/unitycoworkbridge/releases/tag/agentbridge-v$Version"
+		}
+
+		throw "Failed to download AgentBridge release asset '$Name' from $uri. $($_.Exception.Message)"
+	}
+}
+
 $temporaryDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ("agentbridge-install-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $temporaryDirectory | Out-Null
 
 try {
 	$archivePath = Join-Path $temporaryDirectory $assetName
 	$checksumPath = $archivePath + ".sha256"
-	Invoke-WebRequest "$releaseBase/$assetName" -OutFile $archivePath
-	Invoke-WebRequest "$releaseBase/$assetName.sha256" -OutFile $checksumPath
+	Get-ReleaseAsset $assetName $archivePath
+	Get-ReleaseAsset "$assetName.sha256" $checksumPath
 
 	$expectedHash = ((Get-Content $checksumPath -Raw).Trim() -split "\s+")[0].ToLowerInvariant()
 	$actualHash = (Get-FileHash $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
