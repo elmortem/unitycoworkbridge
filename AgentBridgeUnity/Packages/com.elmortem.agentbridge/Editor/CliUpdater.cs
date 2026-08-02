@@ -25,7 +25,10 @@ namespace AgentBridge
 
 			bool confirmed = EditorUtility.DisplayDialog(
 				"Agent Bridge",
-				"Download and install the latest AgentBridge CLI release?",
+				"Download and install the latest AgentBridge CLI release?\n\n"
+				+ "Two builds are installed: the native one for this machine, and a "
+				+ HostPlatform.SandboxRuntimeIdentifier
+				+ " build inside Library/AgentBridge/cli for agents whose shell runs in a Linux sandbox.",
 				"Install",
 				"Cancel");
 
@@ -78,17 +81,30 @@ namespace AgentBridge
 				WorkingDirectory = BridgePaths.ProjectRoot
 			};
 
+			string sandboxDirectory = BridgePaths.CliRoot;
+			string sandboxRid = HostPlatform.SandboxRuntimeIdentifier;
+
 			if (Application.platform == RuntimePlatform.WindowsEditor)
 			{
 				startInfo.FileName = ResolveWindowsShell();
 				startInfo.Arguments = "-NoProfile -ExecutionPolicy Bypass -Command \""
 					+ "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; "
-					+ "irm " + ScriptsBase + "/install-agentbridge.ps1 | iex\"";
+					+ "$installer = Join-Path $env:TEMP 'install-agentbridge.ps1'; "
+					+ "Invoke-WebRequest " + ScriptsBase + "/install-agentbridge.ps1 -OutFile $installer; "
+					+ "& $installer; "
+					+ "& $installer -Rid " + sandboxRid
+					+ " -InstallDirectory '" + sandboxDirectory + "' -NoPathUpdate\"";
 			}
 			else
 			{
 				startInfo.FileName = "/bin/bash";
-				startInfo.Arguments = "-c \"curl -fsSL " + ScriptsBase + "/install-agentbridge.sh | bash\"";
+				startInfo.Arguments = "-c \""
+					+ "installer=$(mktemp); "
+					+ "curl -fsSL " + ScriptsBase + "/install-agentbridge.sh -o $installer && "
+					+ "bash $installer && "
+					+ "AGENTBRIDGE_RID=" + sandboxRid
+					+ " AGENTBRIDGE_INSTALL_DIR='" + sandboxDirectory + "'"
+					+ " AGENTBRIDGE_NO_PATH_UPDATE=1 bash $installer\"";
 			}
 
 			return startInfo;
@@ -149,7 +165,8 @@ namespace AgentBridge
 				UnityEngine.Debug.Log("[AgentBridge] CLI updated.\n" + log);
 				EditorUtility.DisplayDialog(
 					"Agent Bridge",
-					"AgentBridge CLI updated.\n\nRestart the agent application so it picks up the new binary.",
+					"AgentBridge CLI updated.\n\nSandbox build: " + BridgePaths.CliRoot
+					+ "\n\nRestart the agent application so it picks up the new binary.",
 					"OK");
 				return;
 			}

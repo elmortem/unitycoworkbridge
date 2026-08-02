@@ -3,6 +3,7 @@ set -euo pipefail
 
 version="${AGENTBRIDGE_VERSION:-}"
 install_dir="${AGENTBRIDGE_INSTALL_DIR:-$HOME/.local/bin}"
+rid="${AGENTBRIDGE_RID:-}"
 
 case "$(uname -s)" in
 	Darwin) os="osx" ;;
@@ -16,7 +17,17 @@ case "$(uname -m)" in
 	*) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
-asset_name="agentbridge-$os-$arch.tar.gz"
+native_rid="$os-$arch"
+if [ -z "$rid" ]; then
+	rid="$native_rid"
+fi
+
+case "$rid" in
+	linux-x64|linux-arm64|osx-x64|osx-arm64) ;;
+	*) echo "unsupported runtime identifier: $rid" >&2; exit 1 ;;
+esac
+
+asset_name="agentbridge-$rid.tar.gz"
 
 if [ -z "$version" ]; then
 	release_base="https://github.com/elmortem/unitycoworkbridge/releases/latest/download"
@@ -57,7 +68,7 @@ download_release_asset "$asset_name.sha256" "$temporary_directory/$asset_name.sh
 mkdir -p "$install_dir"
 install -m 0755 "$temporary_directory/agentbridge" "$install_dir/agentbridge"
 
-if [[ ":$PATH:" != *":$install_dir:"* ]] && [ "${AGENTBRIDGE_NO_PATH_UPDATE:-0}" != "1" ]; then
+if [ "$rid" = "$native_rid" ] && [[ ":$PATH:" != *":$install_dir:"* ]] && [ "${AGENTBRIDGE_NO_PATH_UPDATE:-0}" != "1" ]; then
 	case "${SHELL:-}" in
 		*/zsh) profile="$HOME/.zprofile" ;;
 		*) profile="$HOME/.profile" ;;
@@ -68,5 +79,7 @@ if [[ ":$PATH:" != *":$install_dir:"* ]] && [ "${AGENTBRIDGE_NO_PATH_UPDATE:-0}"
 	fi
 fi
 
-echo "Installed agentbridge to $install_dir/agentbridge"
-echo "Open a new terminal or restart the agent application, then run: agentbridge --version"
+echo "Installed agentbridge ($rid) to $install_dir/agentbridge"
+if [ "$rid" = "$native_rid" ]; then
+	echo "Open a new terminal or restart the agent application, then run: agentbridge --version"
+fi

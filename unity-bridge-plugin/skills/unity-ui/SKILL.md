@@ -5,7 +5,9 @@ description: "Use this skill for any uGUI layout work in a Unity project via Age
 
 # Unity UI — декларативная вёрстка uGUI
 
-Вёрстка через декларативные задачи Agent Bridge: пишешь `<TaskName>.ui.json` в рабочую папку `<ProjectRoot>/Temp/AgentBridge/`, выполняешь установленную в `PATH` команду `agentbridge ui <файл>`, мост применяет его к префабу без компиляции и без domain reload, возвращает результат в stdout. Если GUI-агент ещё не подхватил обновлённый `PATH`, используй `%LOCALAPPDATA%\AgentBridge\bin\agentbridge.exe` в Windows или `$HOME/.local/bin/agentbridge` в macOS/Linux; не ищи CLI внутри UPM-пакета. CLI находит Unity-проект от текущей директории вверх; вне проекта используй `--project <path>`.
+Вёрстка через декларативные задачи Agent Bridge: пишешь `<TaskName>.ui.json` в рабочую папку `<ProjectRoot>/Temp/AgentBridge/`, выполняешь `agentbridge ui <файл>`, мост применяет его к префабу без компиляции и без domain reload, возвращает результат в stdout. CLI находит Unity-проект от текущей директории вверх; вне проекта используй `--project <path>`.
+
+Где искать CLI, по порядку: `agentbridge` в `PATH`; затем стабильный путь установщика — `%LOCALAPPDATA%\AgentBridge\bin\agentbridge.exe` в Windows, `$HOME/.local/bin/agentbridge` в macOS/Linux; затем `<ProjectRoot>/Library/AgentBridge/cli/agentbridge` — сборка под Linux для агентов с шеллом в отдельной песочнице (Cowork, devcontainer, WSL). Не ищи CLI внутри UPM-пакета. Если не нашёл нигде — остановись и попроси пользователя поставить CLI через **Tools → Agent Bridge → Update CLI**; писать задачи в `Library/AgentBridge/Inbox` руками нельзя.
 
 ## Quick reference
 

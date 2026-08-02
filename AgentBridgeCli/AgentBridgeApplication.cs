@@ -195,6 +195,12 @@ internal static class AgentBridgeApplication
 			Console.Out.WriteLine(health.BridgeReady ? "Agent Bridge is ready." : "Agent Bridge is unavailable: " + health.Code);
 			Console.Out.WriteLine("Project: " + health.ProjectPath);
 			Console.Out.WriteLine("Task files: " + health.ScratchDir);
+			if (health.ForeignHost)
+			{
+				Console.Out.WriteLine(
+					"Host: editor on " + health.HostOs + ", client on " + health.ClientOs
+					+ " (process check skipped, liveness from heartbeat)");
+			}
 			if (health.Bridge != null)
 			{
 				Console.Out.WriteLine("Package: " + health.Bridge.PackageVersion);

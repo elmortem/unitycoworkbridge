@@ -5,6 +5,8 @@ internal sealed class BridgeStatus
 	public int ProtocolVersion { get; set; }
 	public string? PackageVersion { get; set; }
 	public string? ProjectPath { get; set; }
+	public string? ProjectId { get; set; }
+	public string? HostOs { get; set; }
 	public string? UnityVersion { get; set; }
 	public int EditorPid { get; set; }
 	public string? SessionId { get; set; }

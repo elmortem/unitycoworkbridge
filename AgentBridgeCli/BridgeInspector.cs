@@ -13,6 +13,7 @@ internal static class BridgeInspector
 			ProjectPath = projectRoot,
 			WorkingRoot = paths.WorkingRoot,
 			ScratchDir = paths.Scratch,
+			ClientOs = HostPlatform.Current,
 			PackageDeclared = IsPackageDeclared(projectRoot),
 			StatusFileExists = File.Exists(paths.StatusFile),
 			HeartbeatExists = File.Exists(paths.HeartbeatFile)
@@ -44,25 +45,26 @@ internal static class BridgeInspector
 			}
 		}
 
+		health.HostOs = health.Bridge?.HostOs?.Trim() ?? "";
+		health.ForeignHost = HostPlatform.IsForeign(health.HostOs);
+		health.HeartbeatToleranceMs = health.ForeignHost
+			? BridgeConstants.MaximumForeignHeartbeatAgeMs
+			: BridgeConstants.MaximumHeartbeatAgeMs;
+
 		if (!health.HeartbeatExists)
 		{
 			health.Problems.Add("heartbeat_missing");
 		}
 		else
 		{
-			try
-			{
-				var value = File.ReadAllText(paths.HeartbeatFile).Trim();
-				var timestamp = long.Parse(value);
-				health.HeartbeatAgeMs = Math.Max(0, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - timestamp);
-				if (health.HeartbeatAgeMs > BridgeConstants.MaximumHeartbeatAgeMs)
-				{
-					health.Problems.Add("heartbeat_stale");
-				}
-			}
-			catch
+			health.HeartbeatAgeMs = ReadHeartbeatAgeMs(paths.HeartbeatFile, health.ForeignHost);
+			if (health.HeartbeatAgeMs == null)
 			{
 				health.Problems.Add("heartbeat_invalid");
+			}
+			else if (health.HeartbeatAgeMs > health.HeartbeatToleranceMs)
+			{
+				health.Problems.Add("heartbeat_stale");
 			}
 		}
 
@@ -74,16 +76,24 @@ internal static class BridgeInspector
 				health.Problems.Add("protocol_mismatch");
 			}
 
-			health.ProjectMatches = PathsEqual(projectRoot, health.Bridge.ProjectPath);
+			health.ProjectMatches = MatchesProject(paths, health.Bridge, out var matchedBy);
+			health.ProjectMatchedBy = matchedBy;
 			if (!health.ProjectMatches)
 			{
 				health.Problems.Add("project_mismatch");
 			}
 
-			health.EditorProcessAlive = IsProcessAlive(health.Bridge.EditorPid);
-			if (health.EditorProcessAlive != true)
+			if (health.ForeignHost)
 			{
-				health.Problems.Add("editor_process_not_running");
+				health.EditorProcessAlive = null;
+			}
+			else
+			{
+				health.EditorProcessAlive = IsProcessAlive(health.Bridge.EditorPid);
+				if (health.EditorProcessAlive != true)
+				{
+					health.Problems.Add("editor_process_not_running");
+				}
 			}
 
 			if (!health.Bridge.Enabled)
@@ -101,9 +111,9 @@ internal static class BridgeInspector
 			&& health.Bridge != null
 			&& health.ProtocolCompatible
 			&& health.ProjectMatches
-			&& health.EditorProcessAlive == true
+			&& (health.ForeignHost || health.EditorProcessAlive == true)
 			&& health.Bridge.Enabled
-			&& health.HeartbeatAgeMs <= BridgeConstants.MaximumHeartbeatAgeMs;
+			&& health.HeartbeatAgeMs <= health.HeartbeatToleranceMs;
 		health.CSharpReady = health.BridgeReady && health.Bridge!.RoslynReady;
 		health.Ok = health.BridgeReady;
 		health.Code = health.BridgeReady ? "ready" : FirstOperationalProblem(health.Problems);
@@ -155,6 +165,76 @@ internal static class BridgeInspector
 		catch
 		{
 			return false;
+		}
+	}
+
+	private static long? ReadHeartbeatAgeMs(string path, bool foreignHost)
+	{
+		var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+		long? fromContent = null;
+		try
+		{
+			var value = File.ReadAllText(path).Trim();
+			if (long.TryParse(value, out var timestamp))
+			{
+				fromContent = Math.Max(0, now - timestamp);
+			}
+		}
+		catch
+		{
+		}
+
+		if (!foreignHost)
+		{
+			return fromContent;
+		}
+
+		long? fromWriteTime = null;
+		try
+		{
+			var written = new DateTimeOffset(File.GetLastWriteTimeUtc(path), TimeSpan.Zero).ToUnixTimeMilliseconds();
+			fromWriteTime = Math.Max(0, now - written);
+		}
+		catch
+		{
+		}
+
+		if (fromContent == null)
+		{
+			return fromWriteTime;
+		}
+
+		if (fromWriteTime == null)
+		{
+			return fromContent;
+		}
+
+		return Math.Min(fromContent.Value, fromWriteTime.Value);
+	}
+
+	private static bool MatchesProject(BridgePaths paths, BridgeStatus status, out string matchedBy)
+	{
+		var localId = ReadProjectId(paths.ProjectIdFile);
+		var reportedId = status.ProjectId?.Trim() ?? "";
+		if (localId.Length > 0 && reportedId.Length > 0)
+		{
+			matchedBy = "project_id";
+			return string.Equals(localId, reportedId, StringComparison.OrdinalIgnoreCase);
+		}
+
+		matchedBy = "path";
+		return PathsEqual(paths.ProjectRoot, status.ProjectPath);
+	}
+
+	private static string ReadProjectId(string path)
+	{
+		try
+		{
+			return File.ReadAllText(path).Trim();
+		}
+		catch
+		{
+			return "";
 		}
 	}
 

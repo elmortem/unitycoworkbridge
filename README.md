@@ -54,6 +54,14 @@ Once Unity Bridge is installed, the CLI can be updated from the Editor: **Tools 
 
 If a GUI agent has not inherited the updated `PATH`, use the stable per-user install path directly: `%LOCALAPPDATA%\AgentBridge\bin\agentbridge.exe` on Windows or `$HOME/.local/bin/agentbridge` on macOS/Linux. The CLI is never discovered inside Unity's hashed `Library/PackageCache` path.
 
+### Agents whose shell runs in a Linux sandbox
+
+Some agents (Claude Cowork, dev containers, WSL) run the Editor on the host machine but give the agent a shell in a separate Linux environment where only the project folder is mounted. A host-native CLI is unreachable from there.
+
+**Tools → Agent Bridge → Update CLI** therefore installs two builds: the native one for the current machine, and a `linux-x64`/`linux-arm64` build inside `<project>/Library/AgentBridge/cli/agentbridge`. That folder is inside the project, so the sandbox sees it through the same mount it already has, and the skills look for it as the last step of CLI discovery. `Library/` is not committed, so the extra binary never reaches the repository.
+
+The bridge protocol is host-agnostic: `status.json` carries `ProjectId` (mirrored in `Library/AgentBridge/project-id`) and `HostOs`. When the CLI detects that the Editor reports a different operating system than its own, it identifies the project by `ProjectId` instead of comparing absolute paths, skips the Editor PID check — a host PID means nothing inside a container — and relies on the heartbeat for liveness with a wider tolerance. `agentbridge status` reports this as `Host: editor on windows, client on linux`. Both fields are optional: against an older package the CLI falls back to path comparison, and an older CLI ignores them.
+
 For development directly from this checkout:
 
 ```bash
@@ -282,6 +290,9 @@ Bridge's own transport lives separately:
 Library/AgentBridge/
 ├── status.json                 ← protocol/package/project/Editor status and capabilities
 ├── heartbeat                   ← liveness marker, updated every ~2s
+├── project-id                  ← host-independent project identity, mirrored in status.json
+├── cli/
+│   └── agentbridge             ← Linux build for agents running in a sandbox
 ├── Inbox/
 │   ├── Task_XXX.task.json      ← task request (Id, Kind, PayloadFile, ...)
 │   ├── Task_XXX.cs             ← payload for a csharp task

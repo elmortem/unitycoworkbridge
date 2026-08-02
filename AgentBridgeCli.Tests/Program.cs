@@ -10,6 +10,7 @@ try
 	RunTaskIdTests();
 	RunResultClassificationTests();
 	RunHealthTests(root);
+	RunForeignHostTests(root);
 	RunScratchTests(root);
 	Console.WriteLine("AgentBridgeCli.Tests: PASS");
 	return 0;
@@ -87,6 +88,71 @@ static void RunHealthTests(string temporaryRoot)
 		(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - 60000).ToString());
 	health = BridgeInspector.Inspect(project);
 	Expect(!health.BridgeReady && health.Code == "heartbeat_stale", "stale heartbeat must fail closed");
+}
+
+static void RunForeignHostTests(string temporaryRoot)
+{
+	var project = Path.Combine(temporaryRoot, "ForeignHostProject");
+	CreateProject(project);
+	var bridgeRoot = Path.Combine(project, "Library", "AgentBridge");
+	Directory.CreateDirectory(bridgeRoot);
+
+	var projectId = Guid.NewGuid().ToString("N");
+	var foreignOs = HostPlatform.Current == HostPlatform.Windows ? HostPlatform.Linux : HostPlatform.Windows;
+	File.WriteAllText(Path.Combine(bridgeRoot, "project-id"), projectId);
+	WriteHeartbeat(bridgeRoot, 0);
+	WriteStatus(bridgeRoot, projectId, foreignOs, "D:\\Somewhere\\Else", 0x7FFFFFFF);
+
+	var health = BridgeInspector.Inspect(project);
+	Expect(health.ForeignHost, "different host os must be detected as foreign");
+	Expect(health.ProjectMatchedBy == "project_id", "project id must win over the path comparison");
+	Expect(health.ProjectMatches, "matching project id must satisfy the identity check");
+	Expect(health.EditorProcessAlive == null, "foreign host must not judge the editor process");
+	Expect(health.BridgeReady, "foreign host with a fresh heartbeat must be ready");
+	Expect(health.HeartbeatToleranceMs == 60000, "foreign host must use the widened heartbeat tolerance");
+
+	WriteStatus(bridgeRoot, Guid.NewGuid().ToString("N"), foreignOs, project, Environment.ProcessId);
+	health = BridgeInspector.Inspect(project);
+	Expect(!health.BridgeReady && health.Code == "project_mismatch", "foreign status from another project must fail closed");
+
+	WriteHeartbeat(bridgeRoot, 120000);
+	WriteStatus(bridgeRoot, projectId, foreignOs, project, 0x7FFFFFFF);
+	health = BridgeInspector.Inspect(project);
+	Expect(!health.BridgeReady && health.Code == "heartbeat_stale", "foreign host must still fail on a dead heartbeat");
+
+	WriteHeartbeat(bridgeRoot, 0);
+	WriteStatus(bridgeRoot, projectId, HostPlatform.Current, project, Environment.ProcessId);
+	health = BridgeInspector.Inspect(project);
+	Expect(!health.ForeignHost, "same host os must not be treated as foreign");
+	Expect(health.EditorProcessAlive == true, "same host must still verify the editor process");
+	Expect(health.HeartbeatToleranceMs == 15000, "same host must keep the strict heartbeat tolerance");
+}
+
+static void WriteHeartbeat(string bridgeRoot, long ageMs)
+{
+	File.WriteAllText(
+		Path.Combine(bridgeRoot, "heartbeat"),
+		(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - ageMs).ToString());
+}
+
+static void WriteStatus(string bridgeRoot, string projectId, string hostOs, string projectPath, int editorPid)
+{
+	var status = new
+	{
+		ProtocolVersion = 1,
+		PackageVersion = "0.9.0",
+		ProjectPath = projectPath,
+		ProjectId = projectId,
+		HostOs = hostOs,
+		UnityVersion = "2022.3.62f2",
+		EditorPid = editorPid,
+		SessionId = "test",
+		Enabled = true,
+		RoslynSource = "Vendored",
+		RoslynReady = true,
+		Capabilities = new[] { "csharp", "ui", "compile", "tests" }
+	};
+	File.WriteAllText(Path.Combine(bridgeRoot, "status.json"), JsonSerializer.Serialize(status));
 }
 
 static void RunScratchTests(string temporaryRoot)

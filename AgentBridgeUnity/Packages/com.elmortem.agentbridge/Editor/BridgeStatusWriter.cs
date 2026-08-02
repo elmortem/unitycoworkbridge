@@ -37,6 +37,8 @@ namespace AgentBridge
 			Current.ProtocolVersion = ProtocolVersion;
 			Current.PackageVersion = package != null ? package.version : "unknown";
 			Current.ProjectPath = BridgePaths.ProjectRoot;
+			Current.ProjectId = ProjectIdentity.Ensure();
+			Current.HostOs = HostPlatform.Name;
 			Current.UnityVersion = Application.unityVersion;
 			Current.EditorPid = Process.GetCurrentProcess().Id;
 			Current.SessionId = Guid.NewGuid().ToString("N");

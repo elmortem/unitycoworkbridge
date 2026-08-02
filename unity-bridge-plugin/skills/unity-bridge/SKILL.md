@@ -7,7 +7,7 @@ description: "Use whenever the user wants Claude to execute anything inside the 
 
 Скилл для выполнения произвольных задач в Unity Editor через Agent Bridge.
 
-Принцип работы: ты пишешь C#-скрипт в рабочую папку `Temp/AgentBridge/` внутри Unity-проекта и вызываешь установленную в `PATH` команду `agentbridge`. CLI находит Unity-проект из текущей директории, кладёт задачу в очередь моста и ждёт результата. Мост компилирует скрипт в памяти через Roslyn (без domain reload, без файлов в `Assets`) и выполняет на главном потоке редактора. Результат — один JSON в stdout.
+Принцип работы: ты пишешь C#-скрипт в рабочую папку `Temp/AgentBridge/` внутри Unity-проекта и вызываешь CLI `agentbridge` (где его искать — см. «Где искать CLI»). CLI находит Unity-проект из текущей директории, кладёт задачу в очередь моста и ждёт результата. Мост компилирует скрипт в памяти через Roslyn (без domain reload, без файлов в `Assets`) и выполняет на главном потоке редактора. Результат — один JSON в stdout.
 
 Для вёрстки uGUI-префабов (создание/правка UI, скриншоты экранов) используй скилл `unity-ui` — декларативные задачи без компиляции. Этот скилл — для логики, компиляции проекта и тестов.
 
@@ -71,9 +71,23 @@ public static class Task_XXX
 
 Если файлов не найдено или ни один из описанных API не подходит для задачи — используй стандартное Unity Editor API.
 
+## Где искать CLI
+
+Порядок поиска, сверху вниз — побеждает первый рабочий:
+
+1. `agentbridge` в `PATH`.
+2. Стабильный путь установщика: `%LOCALAPPDATA%\AgentBridge\bin\agentbridge.exe` (Windows), `$HOME/.local/bin/agentbridge` (macOS/Linux) — на случай, если GUI-агент не подхватил обновлённый `PATH`.
+3. `<ProjectRoot>/Library/AgentBridge/cli/agentbridge` — сборка под Linux для агентов, у которых шелл живёт в отдельной песочнице (Cowork, devcontainer, WSL), а редактор — на хост-машине. Её кладёт туда **Tools → Agent Bridge → Update CLI**.
+
+Не ищи CLI внутри `Library/PackageCache` или каталога UPM-пакета.
+
+Если CLI не найден ни по одному пути — **остановись и скажи пользователю**: «AgentBridge CLI не установлен, поставь его через Tools → Agent Bridge → Update CLI». Не пиши задачи в `Library/AgentBridge/Inbox` руками и не воспроизводи протокол моста самостоятельно: в обход CLI не работают ни health-проверки, ни сверка версии протокола, а из команд остаётся только запуск скриптов — без `status`, `doctor`, `compile`, `tests`, `ui` и артефактов.
+
 ## Команды CLI
 
-`agentbridge` должен быть установлен в `PATH`. Если GUI-агент ещё не подхватил обновлённый `PATH`, используй стабильный путь установщика: `%LOCALAPPDATA%\AgentBridge\bin\agentbridge.exe` в Windows или `$HOME/.local/bin/agentbridge` в macOS/Linux. Не ищи CLI внутри `Library/PackageCache` или каталога UPM-пакета. CLI ищет Unity-проект от `cwd` вверх. Если агент запущен вне проекта, передай `--project <path>`; CLI намеренно не ищет проекты рекурсивно вниз.
+CLI ищет Unity-проект от `cwd` вверх. Если агент запущен вне проекта, передай `--project <path>`; CLI намеренно не ищет проекты рекурсивно вниз.
+
+Когда клиент и редактор на разных ОС (песочница), `agentbridge status` показывает строку `Host: editor on <os>, client on <os>`. Это нормальный режим: проверка PID редактора отключается, живость определяется по heartbeat, а идентичность проекта — по `Library/AgentBridge/project-id`, а не по абсолютному пути.
 
 ```bash
 agentbridge <команда> [аргументы] [--project <путь>] [--wait <секунды>]
@@ -161,4 +175,6 @@ agentbridge tests --mode EditMode --assembly MyProject.Tests
 
 ### Код выхода `3` (мост недоступен)
 
-Смотри поле `code` в JSON. Для `project_not_found` найди корень Unity-проекта и повтори с `--project`; для `heartbeat_stale`/`editor_process_not_running` сообщи: «Открой проект в Unity»; для `bridge_disabled` — «Включи мост через Tools → Agent Bridge → Start»; для `protocol_mismatch` обнови CLI или пакет. Не пытайся запускать Unity самостоятельно.
+Смотри поле `code` в JSON. Для `project_not_found` найди корень Unity-проекта и повтори с `--project`; для `heartbeat_stale`/`editor_process_not_running` сообщи: «Открой проект в Unity»; для `bridge_disabled` — «Включи мост через Tools → Agent Bridge → Start»; для `protocol_mismatch` обнови CLI или пакет; для `project_mismatch` — `status.json` от другого проекта, проверь `--project`. Не пытайся запускать Unity самостоятельно.
+
+Ни один из этих кодов не повод обойти CLI. Если мост недоступен — сообщи пользователю и остановись.

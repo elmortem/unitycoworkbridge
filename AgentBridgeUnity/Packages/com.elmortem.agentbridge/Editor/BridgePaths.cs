@@ -45,6 +45,16 @@ namespace AgentBridge
 			get { return Path.Combine(WorkingRoot, "heartbeat"); }
 		}
 
+		public static string ProjectIdFile
+		{
+			get { return Path.Combine(WorkingRoot, "project-id"); }
+		}
+
+		public static string CliRoot
+		{
+			get { return EnsureDirectory(Path.Combine(WorkingRoot, "cli")); }
+		}
+
 		public static string LegacyInbox
 		{
 			get { return Path.Combine(Application.dataPath, "Editor", "AgentBridge"); }

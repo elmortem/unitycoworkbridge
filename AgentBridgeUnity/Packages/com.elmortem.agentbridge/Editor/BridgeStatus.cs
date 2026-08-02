@@ -8,6 +8,8 @@ namespace AgentBridge
 		public int ProtocolVersion;
 		public string PackageVersion;
 		public string ProjectPath;
+		public string ProjectId;
+		public string HostOs;
 		public string UnityVersion;
 		public int EditorPid;
 		public string SessionId;

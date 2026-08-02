@@ -1,6 +1,7 @@
 param(
 	[string]$Version = "",
 	[string]$InstallDirectory = (Join-Path $env:LOCALAPPDATA "AgentBridge\bin"),
+	[string]$Rid = "",
 	[switch]$NoPathUpdate
 )
 
@@ -10,7 +11,23 @@ $ProgressPreference = "SilentlyContinue"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $architecture = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
-$assetName = "agentbridge-win-$architecture.zip"
+$nativeRid = "win-$architecture"
+
+if ([string]::IsNullOrWhiteSpace($Rid)) {
+	$Rid = $nativeRid
+}
+
+if ($Rid -notin @("win-x64", "win-arm64", "linux-x64", "linux-arm64", "osx-x64", "osx-arm64")) {
+	throw "Unsupported runtime identifier: $Rid"
+}
+
+if ($Rid -like "win-*") {
+	$assetName = "agentbridge-$Rid.zip"
+	$binaryName = "agentbridge.exe"
+} else {
+	$assetName = "agentbridge-$Rid.tar.gz"
+	$binaryName = "agentbridge"
+}
 
 if ([string]::IsNullOrWhiteSpace($Version)) {
 	$releaseBase = "https://github.com/elmortem/unitycoworkbridge/releases/latest/download"
@@ -61,11 +78,21 @@ try {
 	}
 
 	$expandedPath = Join-Path $temporaryDirectory "expanded"
-	Expand-Archive $archivePath -DestinationPath $expandedPath
-	New-Item -ItemType Directory -Force -Path $InstallDirectory | Out-Null
-	Copy-Item (Join-Path $expandedPath "agentbridge.exe") (Join-Path $InstallDirectory "agentbridge.exe") -Force
+	New-Item -ItemType Directory -Force -Path $expandedPath | Out-Null
 
-	if (-not $NoPathUpdate) {
+	if ($assetName -like "*.zip") {
+		Expand-Archive $archivePath -DestinationPath $expandedPath -Force
+	} else {
+		& tar -xzf $archivePath -C $expandedPath
+		if ($LASTEXITCODE -ne 0) {
+			throw "Failed to extract $assetName. The tar command is required (Windows 10 1803 or newer)."
+		}
+	}
+
+	New-Item -ItemType Directory -Force -Path $InstallDirectory | Out-Null
+	Copy-Item (Join-Path $expandedPath $binaryName) (Join-Path $InstallDirectory $binaryName) -Force
+
+	if (-not $NoPathUpdate -and $Rid -eq $nativeRid) {
 		$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 		$entries = @($userPath -split ";" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 		if ($entries -notcontains $InstallDirectory) {
@@ -78,8 +105,10 @@ try {
 		}
 	}
 
-	Write-Output "Installed agentbridge to $InstallDirectory"
-	Write-Output "Open a new terminal or restart the agent application, then run: agentbridge --version"
+	Write-Output "Installed agentbridge ($Rid) to $InstallDirectory"
+	if ($Rid -eq $nativeRid) {
+		Write-Output "Open a new terminal or restart the agent application, then run: agentbridge --version"
+	}
 } finally {
 	if (Test-Path -LiteralPath $temporaryDirectory) {
 		Remove-Item -LiteralPath $temporaryDirectory -Recurse -Force
