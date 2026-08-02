@@ -19,11 +19,21 @@ esac
 asset_name="agentbridge-$os-$arch.tar.gz"
 release_base="https://github.com/elmortem/unitycoworkbridge/releases/download/agentbridge-v$version"
 
+download_release_asset() {
+	local asset_name="$1"
+	local destination="$2"
+	local asset_url="$release_base/$asset_name"
+	if ! curl -fsSL "$asset_url" -o "$destination"; then
+		echo "Failed to download AgentBridge release asset '$asset_name'. Release agentbridge-v$version may be incomplete: https://github.com/elmortem/unitycoworkbridge/releases/tag/agentbridge-v$version" >&2
+		return 1
+	fi
+}
+
 temporary_directory="$(mktemp -d)"
 trap 'rm -rf "$temporary_directory"' EXIT
 
-curl -fsSL "$release_base/$asset_name" -o "$temporary_directory/$asset_name"
-curl -fsSL "$release_base/$asset_name.sha256" -o "$temporary_directory/$asset_name.sha256"
+download_release_asset "$asset_name" "$temporary_directory/$asset_name"
+download_release_asset "$asset_name.sha256" "$temporary_directory/$asset_name.sha256"
 
 (
 	cd "$temporary_directory"
