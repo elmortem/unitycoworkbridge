@@ -12,6 +12,7 @@ internal static class BridgeInspector
 		{
 			ProjectPath = projectRoot,
 			WorkingRoot = paths.WorkingRoot,
+			ScratchDir = paths.Scratch,
 			PackageDeclared = IsPackageDeclared(projectRoot),
 			StatusFileExists = File.Exists(paths.StatusFile),
 			HeartbeatExists = File.Exists(paths.HeartbeatFile)

@@ -6,6 +6,7 @@ internal sealed class BridgeHealth
 	public string Code { get; set; } = "";
 	public string ProjectPath { get; set; } = "";
 	public string WorkingRoot { get; set; } = "";
+	public string ScratchDir { get; set; } = "";
 	public bool PackageDeclared { get; set; }
 	public bool StatusFileExists { get; set; }
 	public bool HeartbeatExists { get; set; }

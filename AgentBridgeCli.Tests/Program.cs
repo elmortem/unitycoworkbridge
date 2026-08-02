@@ -10,6 +10,7 @@ try
 	RunTaskIdTests();
 	RunResultClassificationTests();
 	RunHealthTests(root);
+	RunScratchTests(root);
 	Console.WriteLine("AgentBridgeCli.Tests: PASS");
 	return 0;
 }
@@ -86,6 +87,25 @@ static void RunHealthTests(string temporaryRoot)
 		(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - 60000).ToString());
 	health = BridgeInspector.Inspect(project);
 	Expect(!health.BridgeReady && health.Code == "heartbeat_stale", "stale heartbeat must fail closed");
+}
+
+static void RunScratchTests(string temporaryRoot)
+{
+	var project = Path.Combine(temporaryRoot, "ScratchProject");
+	CreateProject(project);
+	var paths = new BridgePaths(project);
+
+	Expect(paths.Scratch == Path.Combine(project, "Temp", "AgentBridge"), "scratch must live in the Unity Temp folder");
+
+	paths.EnsureScratch();
+	Expect(Directory.Exists(paths.Scratch), "scratch directory must be created");
+
+	Expect(paths.IsInsideAssets(Path.Combine(project, "Assets", "Editor", "Task_1.cs")), "payload under Assets must be detected");
+	Expect(paths.IsInsideAssets(Path.Combine(project, "Assets", "Task_1.cs")), "payload directly in Assets must be detected");
+	Expect(!paths.IsInsideAssets(Path.Combine(paths.Scratch, "Task_1.cs")), "scratch payload must not be flagged");
+	Expect(!paths.IsInsideAssets(Path.Combine(project, "AssetsExtra", "Task_1.cs")), "sibling folder must not be flagged");
+	Expect(!paths.IsInsideAssets(Path.Combine(Path.GetTempPath(), "Task_1.cs")), "payload outside the project must not be flagged");
+	Expect(!paths.IsInsideAssets("\0"), "malformed payload path must not crash the check");
 }
 
 static void CreateProject(string path)

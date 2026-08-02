@@ -1,13 +1,13 @@
 ---
 name: unity-bridge
-description: "Use this skill whenever the user wants Claude to execute anything inside the Unity Editor — listing or modifying assets, scenes, prefabs, components, materials, project settings; running editor-side analysis, refactors, or batch operations; querying the scene hierarchy; forcing a project compile; running tests; or any task that requires running C# code in the Unity Editor context. The skill works via Agent Bridge: Claude writes a C# script and hands it to the cross-platform `agentbridge` CLI, which compiles it in memory with Roslyn and runs it on the main thread, returning logs plus a result string. Trigger this even for casual phrasings like 'check what's in the scene', 'find all prefabs using shader X', 'rename these assets', 'what does this component reference', 'compile the project', 'run the tests' — anything that needs Unity Editor introspection or modification. Do NOT use for runtime gameplay code, build pipeline tasks unrelated to Editor scripting, or pure C# questions outside of Unity. For uGUI prefab layout and UI screenshots prefer the unity-ui skill."
+description: "Use whenever the user wants Claude to execute anything inside the Unity Editor — listing or modifying assets, scenes, prefabs, components, materials, project settings; editor-side analysis, refactors, batch operations; querying the scene hierarchy; compiling the project; running tests; or any task needing C# code run in the Editor context. Works via Agent Bridge: Claude writes a C# script and hands it to the `agentbridge` CLI, which compiles it in memory with Roslyn and runs it on the main thread, returning logs plus a result string. Trigger even for casual phrasings like 'check what's in the scene', 'find all prefabs using shader X', 'rename these assets', 'what does this component reference', 'compile the project', 'run the tests'. Do NOT use for runtime gameplay code, build pipeline tasks unrelated to Editor scripting, or pure C# questions outside Unity. For uGUI prefab layout and UI screenshots prefer the unity-ui skill."
 ---
 
 # Unity Bridge
 
 Скилл для выполнения произвольных задач в Unity Editor через Agent Bridge.
 
-Принцип работы: ты пишешь C#-скрипт во временный файл и вызываешь установленную в `PATH` команду `agentbridge`. CLI находит Unity-проект из текущей директории, кладёт задачу в очередь моста и ждёт результата. Мост компилирует скрипт в памяти через Roslyn (без domain reload, без файлов в `Assets`) и выполняет на главном потоке редактора. Результат — один JSON в stdout.
+Принцип работы: ты пишешь C#-скрипт в рабочую папку `Temp/AgentBridge/` внутри Unity-проекта и вызываешь установленную в `PATH` команду `agentbridge`. CLI находит Unity-проект из текущей директории, кладёт задачу в очередь моста и ждёт результата. Мост компилирует скрипт в памяти через Roslyn (без domain reload, без файлов в `Assets`) и выполняет на главном потоке редактора. Результат — один JSON в stdout.
 
 Для вёрстки uGUI-префабов (создание/правка UI, скриншоты экранов) используй скилл `unity-ui` — декларативные задачи без компиляции. Этот скилл — для логики, компиляции проекта и тестов.
 
@@ -16,7 +16,17 @@ description: "Use this skill whenever the user wants Claude to execute anything 
 - Мост — дорогой канал: каждый C#-таск — это компиляция. Используй его для того, что умеет только живой Editor: AssetDatabase, выполнение кода в редакторе, тесты, состояние сцены. Код и текстовые ассеты читай и правь обычными файловыми инструментами — без моста.
 - Один таск — один осмысленный шаг работы, а не проверка каждой мелочи.
 - `compile` и `tests` — самостоятельные команды, а не побочный эффект `csharp`-таска.
-- Файлы тасков не удаляй: очистка старых записей — работа моста (авто-трим по `KeepCompletedCount`).
+- Файлы тасков не удаляй: очистка — не твоя работа (см. «Где лежат файлы тасков»).
+
+## Где лежат файлы тасков
+
+Файл таска пиши **только** в `<ProjectRoot>/Temp/AgentBridge/` — это рабочая папка агента внутри Unity-проекта. Абсолютный путь печатает `agentbridge status` (`ScratchDir` в JSON, строка `Task files:` в `--format human`); CLI создаёт эту папку сам.
+
+**Никогда не пиши файлы тасков в `Assets/`** (в том числе в `Assets/Editor/...`). Всё в `Assets/` Unity импортирует и компилирует: каждый таск дёргает пересборку проекта и domain reload, ломает состояние редактора и оставляет мусор с `.meta`-файлами в репозитории. `agentbridge csharp`/`ui` предупредит в stderr, если файл лежит в `Assets/` — увидев это, перенеси файл в `Temp/AgentBridge/`, а тот, что в `Assets/`, удали вместе с его `.meta`.
+
+Почему именно `Temp/`: Unity туда не смотрит (нет импорта, нет `.meta`, нет рекомпиляции), папка вне git, и редактор сам вычищает её при старте и закрытии — никакой уборки за собой делать не надо. Внутри сессии редактора файл никуда не денется, так что упавший таск можно чинить и перезапускать сколько нужно.
+
+`Library/AgentBridge/` — внутренняя кухня CLI и редактора (очередь, журнал, артефакты). Это не твоя зона: не пиши туда и ничего там не чисти. Всё, что нужно от задачи, CLI печатает в stdout; единственное исключение — артефакты своей же задачи (скриншоты, дампы), которые читаешь по путям из поля `Artifacts`.
 
 ## Quick reference
 
@@ -25,7 +35,7 @@ description: "Use this skill whenever the user wants Claude to execute anything 
 | 1 | Выполнить `agentbridge status`; если cwd вне проекта — повторить с `--project <path>` |
 | 2 | Найти все `UNITYAGENT.md` (или устаревшие `UNITYCOWORK.md`) в проекте — описания кастомных API |
 | 3 | Сгенерировать уникальное имя задачи: `Task_YYYYMMDD_HHMMSS_fff_<random>` |
-| 4 | Написать `.cs` во временный файл `<TaskName>.cs` по шаблону ниже |
+| 4 | Написать `.cs` по шаблону ниже в `<ProjectRoot>/Temp/AgentBridge/<TaskName>.cs` — не в `Assets/` |
 | 5 | Выполнить `agentbridge csharp <файл>` и обработать JSON из stdout |
 
 ## Шаблон C# скрипта
@@ -53,7 +63,7 @@ public static class Task_XXX
 4. Для вывода информации использовать `Debug.Log()` — логи перехватываются мостом и включаются в результат.
 5. Не добавлять зависимости от пользовательских сборок проекта — только Unity API и кастомные API из `UNITYAGENT.md`. Скрипт компилируется изолированно от `Assets`, поэтому доступны только уже загруженные в домен сборки.
 6. Запрещены блокирующие конструкции: `.Wait()`, `.GetAwaiter().GetResult()`, `.Result` на task-подобных выражениях, `Thread.Sleep`, `while (true)`/`for (;;)` без `await` внутри. Мост отклоняет такой код до исполнения (`rejected`, причина в `Diagnostics`/`Logs`) — переписывай через `await`.
-7. **Упавший таск чини, а не удаляй.** Битый `.cs` ничего не блокирует (задачи не участвуют в компиляции проекта) — просто исправь файл и запусти `csharp` заново с тем же или новым именем.
+7. **Упавший таск чини, а не удаляй.** Битый `.cs` в `Temp/AgentBridge/` ничего не блокирует (задачи не участвуют в компиляции проекта) — просто исправь файл и запусти `csharp` заново с тем же или новым именем.
 
 ## Кастомные API проекта
 
@@ -76,7 +86,7 @@ agentbridge <команда> [аргументы] [--project <путь>] [--wait
 Выполнить C#-таск. `TaskName` — имя файла без расширения, класс внутри обязан называться так же. Ждёт результат, печатает JSON в stdout.
 
 ```bash
-agentbridge csharp /tmp/Task_20260226_143052.cs
+agentbridge csharp Temp/AgentBridge/Task_20260226_143052_871_a3f.cs
 ```
 
 ### `compile`
@@ -99,7 +109,7 @@ agentbridge tests --mode EditMode --assembly MyProject.Tests
 
 ### `status`
 
-Проверить найденный проект, наличие пакета, PID редактора, свежесть heartbeat, версию протокола и готовность моста — без создания задачи. Для подробной диагностики используй `agentbridge doctor`.
+Проверить найденный проект, рабочую папку для файлов тасков (`ScratchDir`), наличие пакета, PID редактора, свежесть heartbeat, версию протокола и готовность моста — без создания задачи. Для подробной диагностики используй `agentbridge doctor`.
 
 ### `wait <TaskId>`
 

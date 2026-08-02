@@ -156,7 +156,7 @@ Claude will generate a script, hand it to the CLI, wait for the result, and show
 One cross-platform command creates a task, waits for it, and prints the result JSON to stdout. Run it from the Unity project root or any subdirectory. Outside the project, pass `--project <path>`.
 
 ```bash
-agentbridge csharp /tmp/Task_20260226_143052.cs
+agentbridge csharp Temp/AgentBridge/Task_20260226_143052_871_a3f.cs
 agentbridge compile
 agentbridge tests --mode EditMode --assembly MyGame.Tests
 agentbridge status
@@ -273,6 +273,10 @@ Order within a task: all `apply`/`delete` run first over the loaded prefab conte
 Before laying out UI, the `unity-ui` skill recursively searches the project for a `UNITYAGENT-UI.md` file describing your layout conventions — reference resolution, palette, fonts, art paths, prefab paths, and custom view components. Create one so Claude uses your real colors, fonts and assets instead of guessing. Template with recommendations: `Docs/UNITYAGENT-UI-template.md`.
 
 ## Working Directory
+
+Claude writes its own task files (`Task_XXX.cs`, `Task_XXX.ui.json`) to `<project>/Temp/AgentBridge/` — the absolute path is reported as `ScratchDir` by `agentbridge status`, and the CLI creates the folder itself. Unity never imports `Temp/`, so tasks never trigger an asset import, a recompile, or stray `.meta` files, and the Editor wipes the folder on start and shutdown — nothing to clean up. Never keep task files under `Assets/`; `agentbridge csharp|ui` prints a warning to stderr when the payload lives there.
+
+Bridge's own transport lives separately:
 
 ```
 Library/AgentBridge/

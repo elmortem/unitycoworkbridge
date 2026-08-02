@@ -5,7 +5,7 @@ description: "Use this skill for any uGUI layout work in a Unity project via Age
 
 # Unity UI — декларативная вёрстка uGUI
 
-Вёрстка через декларативные задачи Agent Bridge: пишешь `<TaskName>.ui.json` во временный файл, выполняешь установленную в `PATH` команду `agentbridge ui <файл>`, мост применяет его к префабу без компиляции и без domain reload, возвращает результат в stdout. Если GUI-агент ещё не подхватил обновлённый `PATH`, используй `%LOCALAPPDATA%\AgentBridge\bin\agentbridge.exe` в Windows или `$HOME/.local/bin/agentbridge` в macOS/Linux; не ищи CLI внутри UPM-пакета. CLI находит Unity-проект от текущей директории вверх; вне проекта используй `--project <path>`.
+Вёрстка через декларативные задачи Agent Bridge: пишешь `<TaskName>.ui.json` в рабочую папку `<ProjectRoot>/Temp/AgentBridge/`, выполняешь установленную в `PATH` команду `agentbridge ui <файл>`, мост применяет его к префабу без компиляции и без domain reload, возвращает результат в stdout. Если GUI-агент ещё не подхватил обновлённый `PATH`, используй `%LOCALAPPDATA%\AgentBridge\bin\agentbridge.exe` в Windows или `$HOME/.local/bin/agentbridge` в macOS/Linux; не ищи CLI внутри UPM-пакета. CLI находит Unity-проект от текущей директории вверх; вне проекта используй `--project <path>`.
 
 ## Quick reference
 
@@ -14,10 +14,12 @@ description: "Use this skill for any uGUI layout work in a Unity project via Age
 | 1 | Выполнить `agentbridge status`; если cwd вне проекта — повторить с `--project <path>` |
 | 2 | Найти `UNITYAGENT-UI.md` в проекте (или устаревшее `UNITYCOWORK-UI.md`) — соглашения вёрстки |
 | 3 | Незнакомый префаб — сначала задача с `dump`, изучить `Library/AgentBridge/Artifacts/<TaskId>/uidump.json` |
-| 4 | Итерация: задача `[apply..., shot]`, затем `agentbridge ui <файл>` |
+| 4 | Итерация: задача `[apply..., shot]` в `Temp/AgentBridge/<TaskName>.ui.json`, затем `agentbridge ui <файл>` |
 | 5 | Посмотреть PNG и `rects.json` в `Library/AgentBridge/Artifacts/<TaskId>/`, продолжить итерации |
 
-Имя задачи: `Task_YYYYMMDD_HHMMSS`, временный файл `<TaskName>.ui.json` — имя файла становится `TaskId`. Результат — один JSON в stdout (`TaskRecord`), статусы `success`/`runtime_error`/`rejected`/`timeout`; список созданных файлов — в поле `Artifacts`. Все временные UI-артефакты принадлежат задаче и лежат только в `Library/AgentBridge/Artifacts/<TaskId>/`; авто-трим по `KeepCompletedCount` удаляет этот каталог вместе с задачей.
+Файл задачи пиши **только** в `<ProjectRoot>/Temp/AgentBridge/` (абсолютный путь — в `ScratchDir` из `agentbridge status`, папку CLI создаёт сам). **Никогда не пиши в `Assets/`**: всё оттуда Unity импортирует, а на `.ui.json` заводит `.meta` и мусорит в репозитории; `agentbridge ui` предупредит в stderr, если файл лежит в `Assets/`. Unity сама чистит `Temp/` при старте и закрытии редактора — убирать за собой не надо.
+
+Имя задачи: `Task_YYYYMMDD_HHMMSS`, файл `<TaskName>.ui.json` — имя файла становится `TaskId`. Результат — один JSON в stdout (`TaskRecord`), статусы `success`/`runtime_error`/`rejected`/`timeout`; список созданных файлов — в поле `Artifacts`. Все временные UI-артефакты принадлежат задаче и лежат только в `Library/AgentBridge/Artifacts/<TaskId>/`; авто-трим по `KeepCompletedCount` удаляет этот каталог вместе с задачей.
 
 ## Формат задачи
 

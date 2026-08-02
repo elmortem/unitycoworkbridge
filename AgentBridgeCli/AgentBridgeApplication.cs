@@ -37,6 +37,8 @@ internal static class AgentBridgeApplication
 
 		var command = options.Arguments[0];
 		var commandArguments = options.Arguments.Skip(1).ToArray();
+		var paths = new BridgePaths(projectRoot);
+		paths.EnsureScratch();
 		var health = BridgeInspector.Inspect(projectRoot);
 
 		if (command == "status")
@@ -71,6 +73,7 @@ internal static class AgentBridgeApplication
 					return WriteError("roslyn_not_ready", "Roslyn is not ready. Run agentbridge doctor.");
 				}
 
+				WarnIfPayloadInsideAssets(paths, commandArguments[0]);
 				return await client.SubmitPayloadAsync("csharp", commandArguments[0], options.WaitSeconds);
 
 			case "ui":
@@ -79,6 +82,7 @@ internal static class AgentBridgeApplication
 					return WriteError("bad_usage", "usage: agentbridge ui <file.ui.json> [--project <path>] [--wait <seconds>]");
 				}
 
+				WarnIfPayloadInsideAssets(paths, commandArguments[0]);
 				return await client.SubmitPayloadAsync("ui", commandArguments[0], options.WaitSeconds);
 
 			case "compile":
@@ -169,12 +173,28 @@ internal static class AgentBridgeApplication
 		return true;
 	}
 
+	private static void WarnIfPayloadInsideAssets(BridgePaths paths, string payloadPath)
+	{
+		if (!paths.IsInsideAssets(payloadPath))
+		{
+			return;
+		}
+
+		Console.Error.WriteLine(
+			"[AgentBridge] warning: task file is inside Assets ("
+			+ payloadPath
+			+ "). Unity imports it and recompiles the project on every task. Write task files to "
+			+ paths.Scratch
+			+ " instead and delete the one in Assets.");
+	}
+
 	private static void WriteHealth(BridgeHealth health, string format)
 	{
 		if (format == "human")
 		{
 			Console.Out.WriteLine(health.BridgeReady ? "Agent Bridge is ready." : "Agent Bridge is unavailable: " + health.Code);
 			Console.Out.WriteLine("Project: " + health.ProjectPath);
+			Console.Out.WriteLine("Task files: " + health.ScratchDir);
 			if (health.Bridge != null)
 			{
 				Console.Out.WriteLine("Package: " + health.Bridge.PackageVersion);
@@ -241,7 +261,7 @@ internal static class AgentBridgeApplication
 			commands:
 			  status
 			  doctor
-			  csharp <file.cs>
+			  csharp <file.cs>          task files belong in <project>/Temp/AgentBridge, never in Assets
 			  ui <file.ui.json>
 			  compile
 			  tests [--mode EditMode|PlayMode] [--assembly A] [--test T] [--category C]
