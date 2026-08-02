@@ -1,4 +1,6 @@
+using System;
 using System.Diagnostics;
+using System.IO;
 using System.Text;
 using UnityEditor;
 using UnityEngine;
@@ -36,7 +38,20 @@ namespace AgentBridge
 			_process = new Process { StartInfo = CreateStartInfo(), EnableRaisingEvents = true };
 			_process.OutputDataReceived += OnOutputReceived;
 			_process.ErrorDataReceived += OnOutputReceived;
-			_process.Start();
+
+			try
+			{
+				_process.Start();
+			}
+			catch (Exception ex)
+			{
+				_process.Dispose();
+				_process = null;
+				UnityEngine.Debug.LogError("[AgentBridge] Could not launch the CLI installer. " + ex.Message);
+				EditorUtility.DisplayDialog("Agent Bridge", "Could not launch the CLI installer. See the Console for details.", "OK");
+				return;
+			}
+
 			_process.BeginOutputReadLine();
 			_process.BeginErrorReadLine();
 
@@ -59,13 +74,16 @@ namespace AgentBridge
 				UseShellExecute = false,
 				RedirectStandardOutput = true,
 				RedirectStandardError = true,
-				CreateNoWindow = true
+				CreateNoWindow = true,
+				WorkingDirectory = BridgePaths.ProjectRoot
 			};
 
 			if (Application.platform == RuntimePlatform.WindowsEditor)
 			{
-				startInfo.FileName = "powershell";
-				startInfo.Arguments = "-NoProfile -ExecutionPolicy Bypass -Command \"irm " + ScriptsBase + "/install-agentbridge.ps1 | iex\"";
+				startInfo.FileName = ResolveWindowsShell();
+				startInfo.Arguments = "-NoProfile -ExecutionPolicy Bypass -Command \""
+					+ "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; "
+					+ "irm " + ScriptsBase + "/install-agentbridge.ps1 | iex\"";
 			}
 			else
 			{
@@ -74,6 +92,18 @@ namespace AgentBridge
 			}
 
 			return startInfo;
+		}
+
+		private static string ResolveWindowsShell()
+		{
+			string systemDirectory = Environment.GetFolderPath(Environment.SpecialFolder.System);
+			string candidate = Path.Combine(systemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
+			if (File.Exists(candidate))
+			{
+				return candidate;
+			}
+
+			return "powershell.exe";
 		}
 
 		private static void OnOutputReceived(object sender, DataReceivedEventArgs args)
