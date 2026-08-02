@@ -116,7 +116,23 @@ jobs:
             throw "Tag version $tagVersion does not match AgentBridgeCli version $projectVersion"
           }
       - run: dotnet publish AgentBridgeCli/AgentBridgeCli.csproj -c Release -r ${{ matrix.rid }} --self-contained true -o publish/${{ matrix.rid }}
+      - name: Validate published executable
+        shell: pwsh
+        run: |
+          $rid = "${{ matrix.rid }}"
+          $executable = if ($rid.StartsWith("win-")) {
+            "publish/$rid/agentbridge.exe"
+          } else {
+            "publish/$rid/agentbridge"
+          }
+          if (-not (Test-Path $executable -PathType Leaf)) {
+            throw "Published CLI executable is missing: $executable"
+          }
+          if ((Get-Item $executable).Length -le 0) {
+            throw "Published CLI executable is empty: $executable"
+          }
       - name: Smoke published CLI
+        if: ${{ !endsWith(matrix.rid, '-arm64') }}
         shell: pwsh
         run: |
           $rid = "${{ matrix.rid }}"
