@@ -1,0 +1,58 @@
+name: Release Contract
+
+on:
+  pull_request:
+    paths:
+      - AgentBridgeCli/**
+      - AgentBridgeCli.Tests/**
+      - AgentBridgeUnity/Packages/com.elmortem.agentbridge/**
+      - unity-bridge-plugin/**
+      - scripts/build-plugin.ps1
+      - .github/workflows/release-contract.yml
+  push:
+    branches:
+      - main
+      - roslyn-cli
+    paths:
+      - AgentBridgeCli/**
+      - AgentBridgeCli.Tests/**
+      - AgentBridgeUnity/Packages/com.elmortem.agentbridge/**
+      - unity-bridge-plugin/**
+      - scripts/build-plugin.ps1
+      - .github/workflows/release-contract.yml
+
+jobs:
+  validate-release-contract:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve comparison base
+        shell: pwsh
+        run: |
+          $baseRef = if ("${{ github.event_name }}" -eq "pull_request") {
+            "${{ github.event.pull_request.base.sha }}"
+          } else {
+            "${{ github.event.before }}"
+          }
+          if ([string]::IsNullOrWhiteSpace($baseRef) -or $baseRef -match '^0+$') {
+            $baseRef = (git rev-parse HEAD^).Trim()
+          }
+          "RELEASE_BASE_REF=$baseRef" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Validate committed versions and plugin ZIP
+        shell: pwsh
+        run: ./scripts/build-plugin.ps1 -BaseRef $env:RELEASE_BASE_REF -ValidateOnly
+
+      - name: Build validated plugin artifact
+        shell: pwsh
+        run: ./scripts/build-plugin.ps1 -SkipVersionCheck -OutputPath "$env:RUNNER_TEMP/unity-bridge-plugin.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unity-bridge-plugin
+          path: ${{ runner.temp }}/unity-bridge-plugin.zip
+          if-no-files-found: error
+

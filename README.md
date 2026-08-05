@@ -334,8 +334,18 @@ The three components version independently:
 | Unity package | `version` in `AgentBridgeUnity/Packages/com.elmortem.agentbridge/package.json` |
 | Agent plugin | `version` in `unity-bridge-plugin/.claude-plugin/plugin.json` |
 
+Every changed component must increase its own version. This is fail-closed in `scripts/build-plugin.ps1` and in the **Release Contract** GitHub Action: a package, plugin, or CLI change without a greater corresponding version fails validation.
+
+Build the distributable plugin only with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-plugin.ps1
+```
+
+Do not use `Compress-Archive` for this artifact. On Windows it can store backslashes in ZIP central-directory entry names and consumers then report `Zip file contains path with invalid characters`. The canonical script writes explicit forward-slash names, rejects `\`, absolute paths, `..`, duplicates and Windows-invalid characters, then compares every archived file hash with its source. A successful build ends with `invalid_entries=0` and `zip_validation=PASS`.
+
 Only the CLI has a publishing pipeline. Bumping `<Version>` in the csproj and pushing is the entire release procedure: the workflow runs the tests, sees that no `agentbridge-v<version>` release exists yet, creates the tag and release at that commit, then builds and attaches the six self-contained binaries with checksums. Pushing without a version bump only runs the tests — the release step is skipped because the tag already exists, so no tags are created by hand.
 
 `workflow_dispatch` re-packages an existing tag; use it to repair a release whose assets failed to upload.
 
-The Unity package is consumed straight from the git URL, so it needs no publishing step — pushing the branch is enough. The plugin is distributed as a folder or through your own marketplace.
+The Unity package is consumed straight from the git URL, so it needs no publishing step — pushing the branch is enough. The plugin ZIP remains tracked in the repository; the Release Contract action validates the committed archive, rebuilds it independently, and uploads it as a workflow artifact. It does not attach the plugin to the CLI GitHub Release.
