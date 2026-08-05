@@ -25,9 +25,13 @@ jobs:
   validate-release-contract:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - name: Checkout source
+        shell: pwsh
+        run: |
+          git init .
+          git remote add origin "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY.git"
+          git fetch --no-tags origin "$env:GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
 
       - name: Resolve comparison base
         shell: pwsh
@@ -50,9 +54,21 @@ jobs:
         shell: pwsh
         run: ./scripts/build-plugin.ps1 -SkipVersionCheck -OutputPath "$env:RUNNER_TEMP/unity-bridge-plugin.zip"
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: unity-bridge-plugin
-          path: ${{ runner.temp }}/unity-bridge-plugin.zip
-          if-no-files-found: error
+      - name: Verify built plugin artifact
+        shell: pwsh
+        run: |
+          $artifactPath = Join-Path $env:RUNNER_TEMP "unity-bridge-plugin.zip"
+          if (-not (Test-Path $artifactPath -PathType Leaf)) {
+            throw "Plugin artifact is missing: $artifactPath"
+          }
 
+          $artifact = Get-Item $artifactPath
+          if ($artifact.Length -le 0) {
+            throw "Plugin artifact is empty: $artifactPath"
+          }
+
+          $hash = (Get-FileHash $artifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          "### Validated plugin artifact" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          "- File: ``$($artifact.Name)``" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          "- Size: $($artifact.Length) bytes" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          "- SHA-256: ``$hash``" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
