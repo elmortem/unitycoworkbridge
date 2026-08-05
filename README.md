@@ -161,17 +161,26 @@ Claude will generate a script, hand it to the CLI, wait for the result, and show
 
 ### The CLI
 
-One cross-platform command creates a task, waits for it, and prints the result JSON to stdout. Run it from the Unity project root or any subdirectory. Outside the project, pass `--project <path>`.
+One cross-platform command creates a task, waits for it, and prints the result to stdout. JSON is the default and remains the stable machine-readable contract. Add `--format human` to any command for a compact summary with actionable logs, diagnostics, test failures, and artifact paths. Run it from the Unity project root or any subdirectory. Outside the project, pass `--project <path>`.
 
 ```bash
 agentbridge csharp Temp/AgentBridge/Task_20260226_143052_871_a3f.cs
-agentbridge compile
-agentbridge tests --mode EditMode --assembly MyGame.Tests
+agentbridge compile --format human
+agentbridge tests --mode EditMode --assembly MyGame.Tests --format human
 agentbridge status
 agentbridge doctor --format human
 ```
 
 Exit codes: `0` success, `1` a terminal task failure including `test_failure`, `2` client wait exhausted (the task is still running — retry with `agentbridge wait <TaskId>`), `3` project/bridge unavailable, protocol mismatch, or bad usage.
+
+Typical successful human output is deliberately short, so agents do not need a second JSON parser just to report validation:
+
+```text
+compile: success (Task_20260805_092200_123_abcd1234, foreign errors: no)
+tests: success (Task_20260805_092233_477_6cc4b1d1, 202 passed, 0 failed, 0 skipped, 0 inconclusive, 202 total, 4.103s)
+```
+
+Keep the default JSON format when another program needs the complete structured `TaskRecord` contract.
 
 To stop Claude Code from asking for confirmation on every call, allow this exact command in your settings — `~/.claude/settings.json` (all projects) or `.claude/settings.local.json` (per project):
 

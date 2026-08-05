@@ -9,6 +9,7 @@ try
 	RunProjectDiscoveryTests(root);
 	RunTaskIdTests();
 	RunResultClassificationTests();
+	RunHumanResultFormattingTests();
 	RunHealthTests(root);
 	RunForeignHostTests(root);
 	RunScratchTests(root);
@@ -52,6 +53,45 @@ static void RunResultClassificationTests()
 	Expect(BridgeClient.ClassifyResult("""{"Kind":"tests","Status":"success","Tests":{"failed":0,"inconclusive":0}}""") == 0, "green tests must exit 0");
 	Expect(BridgeClient.ClassifyResult("""{"Kind":"tests","Status":"success","Tests":{"failed":1,"inconclusive":0}}""") == 1, "legacy red tests must exit 1");
 	Expect(BridgeClient.ClassifyResult("""{"Kind":"tests","Status":"test_failure","Tests":{"failed":1}}""") == 1, "test_failure must exit 1");
+}
+
+static void RunHumanResultFormattingTests()
+{
+	var compile = TaskResultFormatter.FormatHuman(
+		"""{"Id":"Task_compile","Kind":"compile","Status":"success","ForeignErrors":false,"Tests":{"passed":0,"failed":0,"skipped":0,"inconclusive":0,"total":0,"duration":0},"Timing":{"TotalMs":1234}}""");
+	Expect(
+		compile == "compile: success (Task_compile, foreign errors: no, 1.234s)",
+		"human compile output must be a compact one-line summary");
+
+	var tests = TaskResultFormatter.FormatHuman(
+		"""{"Id":"Task_tests","Kind":"tests","Status":"success","Tests":{"passed":202,"failed":0,"skipped":0,"inconclusive":0,"total":202,"duration":4.1034231,"aborted":false,"message":"","failures":[]}}""");
+	Expect(
+		tests == "tests: success (Task_tests, 202 passed, 0 failed, 0 skipped, 0 inconclusive, 202 total, 4.103s)",
+		"human test output must expose the complete result matrix without a JSON parser");
+
+	var failedTests = TaskResultFormatter.FormatHuman(
+		"""{"Id":"Task_failed","Kind":"tests","Status":"test_failure","Tests":{"passed":1,"failed":1,"skipped":0,"inconclusive":0,"total":2,"duration":0.5,"aborted":false,"message":"run failed","failures":[{"name":"MyTests.Fails","message":"Expected true","stacktrace":"at MyTests.Fails()"}]}}""");
+	Expect(failedTests.Contains("tests: test_failure (Task_failed, 1 passed, 1 failed", StringComparison.Ordinal), "human failed-test output must keep the result matrix");
+	Expect(failedTests.Contains("Message: run failed", StringComparison.Ordinal), "human failed-test output must include the runner message");
+	Expect(failedTests.Contains("- MyTests.Fails: Expected true", StringComparison.Ordinal), "human failed-test output must include failure details");
+	Expect(failedTests.Contains("  at MyTests.Fails()", StringComparison.Ordinal), "human failed-test output must include the stack trace");
+
+	var csharp = TaskResultFormatter.FormatHuman(
+		"""{"Id":"Task_script","Kind":"csharp","Status":"success","ReturnValue":"done","Logs":["changed 3 assets"],"Diagnostics":[{"Code":"CS0001","Severity":"warning","Message":"example","File":"Task.cs","Line":4,"Column":2}],"Artifacts":["Artifacts/Task_script/report.json"],"Timing":{"TotalMs":25}}""");
+	Expect(csharp.Contains("csharp: success (Task_script, 0.025s)", StringComparison.Ordinal), "human csharp output must have a compact header");
+	Expect(csharp.Contains("Result: done", StringComparison.Ordinal), "human csharp output must include the return value");
+	Expect(csharp.Contains("- changed 3 assets", StringComparison.Ordinal), "human csharp output must include logs");
+	Expect(csharp.Contains("- Task.cs(4,2): warning CS0001: example", StringComparison.Ordinal), "human csharp output must include diagnostics");
+	Expect(csharp.Contains("- Artifacts/Task_script/report.json", StringComparison.Ordinal), "human csharp output must include artifacts");
+
+	var running = TaskResultFormatter.FormatHuman("""{"Id":"Task_running","Status":"running"}""");
+	Expect(running == "task: running (Task_running)", "human wait timeout output must remain actionable");
+
+	var error = TaskResultFormatter.FormatHuman("""{"Ok":false,"Code":"payload_not_found","Message":"missing.cs"}""");
+	Expect(error == "agentbridge: error (payload_not_found)" + Environment.NewLine + "Message: missing.cs", "human client errors must not fall back to JSON");
+
+	var invalid = TaskResultFormatter.FormatHuman("not-json");
+	Expect(invalid.StartsWith("agentbridge: invalid result", StringComparison.Ordinal), "malformed task output must not crash human formatting");
 }
 
 static void RunHealthTests(string temporaryRoot)

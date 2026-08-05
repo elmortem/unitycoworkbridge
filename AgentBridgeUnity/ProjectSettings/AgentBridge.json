@@ -1,1 +1,12 @@
-{"Enabled":true,"KeepCompletedCount":10,"TaskTimeoutSeconds":300}
+{
+    "Enabled": true,
+    "KeepCompletedCount": 10,
+    "TaskTimeoutSeconds": 300,
+    "IdleTickIntervalMs": 500,
+    "ActiveTickIntervalMs": 33,
+    "RoslynSource": "Auto",
+    "RoslynLocalPath": "",
+    "EmitPdb": true,
+    "ClientWaitSeconds": 110,
+    "DirtyUntitledScenePolicy": "Discard"
+}

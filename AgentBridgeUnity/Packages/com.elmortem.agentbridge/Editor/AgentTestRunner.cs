@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEditor;
-using UnityEditor.SceneManagement;
 using UnityEditor.TestTools.TestRunner.Api;
 
 namespace AgentBridge
@@ -10,19 +9,21 @@ namespace AgentBridge
 	public static class AgentTestRunner
 	{
 		public const string CoordinatorTestTaskKey = "AgentBridge_CoordinatorTestTask";
+		public const string CoordinatorTestModeKey = "AgentBridge_CoordinatorTestMode";
 		private static TestRunnerApi _api;
 
 		static AgentTestRunner()
 		{
 			_api = ScriptableObject.CreateInstance<TestRunnerApi>();
 			_api.RegisterCallbacks(new TestCallbacks());
+			PlayModeSceneRecovery.Start();
 		}
 
 		public static bool TryRequestRunForCoordinator(string taskId, string testMode, string[] assemblyNames, string[] testNames, string[] categoryNames, out TestRunResult abortedResult)
 		{
 			abortedResult = null;
 
-			if (EditorApplication.isPlaying)
+			if (EditorApplication.isPlayingOrWillChangePlaymode)
 			{
 				abortedResult = new TestRunResult
 				{
@@ -32,24 +33,48 @@ namespace AgentBridge
 				return false;
 			}
 
-			Filter filter = BuildFilter(testMode, assemblyNames, testNames, categoryNames);
+			TestMode mode = ParseMode(testMode);
+			if (mode == TestMode.PlayMode)
+			{
+				string recoveryError;
+				if (!PlayModeSceneRecovery.Begin(taskId, out recoveryError))
+				{
+					abortedResult = new TestRunResult
+					{
+						aborted = true,
+						message = recoveryError
+					};
+					return false;
+				}
+			}
+
+			Filter filter = BuildFilter(mode, assemblyNames, testNames, categoryNames);
 
 			SessionState.SetString(CoordinatorTestTaskKey, taskId);
+			SessionState.SetString(CoordinatorTestModeKey, mode.ToString());
 
-			TestRunnerApi api = ScriptableObject.CreateInstance<TestRunnerApi>();
-			api.Execute(new ExecutionSettings(filter));
+			try
+			{
+				TestRunnerApi api = ScriptableObject.CreateInstance<TestRunnerApi>();
+				api.Execute(new ExecutionSettings(filter));
+			}
+			catch
+			{
+				SessionState.EraseString(CoordinatorTestTaskKey);
+				SessionState.EraseString(CoordinatorTestModeKey);
+				if (mode == TestMode.PlayMode)
+				{
+					PlayModeSceneRecovery.Cancel();
+				}
+
+				throw;
+			}
+
 			return true;
 		}
 
-		private static Filter BuildFilter(string testMode, string[] assemblyNames, string[] testNames, string[] categoryNames)
+		private static Filter BuildFilter(TestMode mode, string[] assemblyNames, string[] testNames, string[] categoryNames)
 		{
-			TestMode mode = ParseMode(testMode);
-
-			if (mode == TestMode.PlayMode)
-			{
-				EditorSceneManager.SaveOpenScenes();
-			}
-
 			Filter filter = new Filter { testMode = mode };
 			if (assemblyNames != null && assemblyNames.Length > 0)
 			{
@@ -77,7 +102,7 @@ namespace AgentBridge
 			return TestMode.EditMode;
 		}
 
-		private static void FinalizeCoordinatorRun(string taskId, TestRunResult run)
+		private static void FinalizeCoordinatorRun(string taskId, TestRunResult run, string recoveryError)
 		{
 			TaskRecord record;
 			if (!TaskJournal.TryRead(taskId, out record))
@@ -86,9 +111,43 @@ namespace AgentBridge
 			}
 
 			record.Tests = run;
-			record.Status = run.failed > 0 || run.inconclusive > 0 ? "test_failure" : "success";
+			if (run == null || run.aborted || !string.IsNullOrEmpty(recoveryError))
+			{
+				record.Status = "runtime_error";
+				if (!string.IsNullOrEmpty(recoveryError))
+				{
+					if (record.Logs == null)
+					{
+						record.Logs = new List<string>();
+					}
+
+					record.Logs.Add(recoveryError);
+				}
+			}
+			else
+			{
+				record.Status = run.failed > 0 || run.inconclusive > 0 ? "test_failure" : "success";
+			}
+
 			record.FinishedAtUtc = System.DateTime.UtcNow.ToString("o");
 			TaskJournal.Write(record);
+		}
+
+		public static void FinalizeRecoveredPlayModeRun(string taskId, TestRunResult run, string recoveryError)
+		{
+			SessionState.EraseString(CoordinatorTestTaskKey);
+			SessionState.EraseString(CoordinatorTestModeKey);
+
+			if (run == null)
+			{
+				run = new TestRunResult
+				{
+					aborted = true,
+					message = "PlayMode test run ended before a result was recorded."
+				};
+			}
+
+			FinalizeCoordinatorRun(taskId, run, recoveryError);
 		}
 
 		private static TestRunResult BuildResult(ITestResultAdaptor result)
@@ -133,6 +192,10 @@ namespace AgentBridge
 		{
 			public void RunStarted(ITestAdaptor testsToRun)
 			{
+				if (SessionState.GetString(CoordinatorTestModeKey, "") == TestMode.PlayMode.ToString())
+				{
+					PlayModeSceneRecovery.CaptureBootstrapScene();
+				}
 			}
 
 			public void TestStarted(ITestAdaptor test)
@@ -148,10 +211,17 @@ namespace AgentBridge
 				string coordinatorTaskId = SessionState.GetString(CoordinatorTestTaskKey, "");
 				if (!string.IsNullOrEmpty(coordinatorTaskId))
 				{
-					SessionState.EraseString(CoordinatorTestTaskKey);
-
 					TestRunResult run = BuildResult(result);
-					FinalizeCoordinatorRun(coordinatorTaskId, run);
+					if (SessionState.GetString(CoordinatorTestModeKey, "") == TestMode.PlayMode.ToString()
+						&& PlayModeSceneRecovery.IsPending)
+					{
+						PlayModeSceneRecovery.RecordResult(run);
+						return;
+					}
+
+					SessionState.EraseString(CoordinatorTestTaskKey);
+					SessionState.EraseString(CoordinatorTestModeKey);
+					FinalizeCoordinatorRun(coordinatorTaskId, run, null);
 				}
 			}
 		}

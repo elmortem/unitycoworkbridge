@@ -33,6 +33,7 @@ namespace AgentBridge
 					CheckWaitCall(node, violations);
 					CheckGetAwaiterGetResult(node, violations);
 					CheckThreadSleep(node, violations);
+					CheckSceneTransitionCall(node, violations);
 				}
 				else if (IsKind(node, "SimpleMemberAccessExpression"))
 				{
@@ -49,6 +50,39 @@ namespace AgentBridge
 			}
 
 			return violations.Count == 0;
+		}
+
+		private static void CheckSceneTransitionCall(dynamic invocation, List<GuardrailViolation> violations)
+		{
+			dynamic expr = invocation.Expression;
+			if (!IsKind(expr, "SimpleMemberAccessExpression"))
+			{
+				return;
+			}
+
+			string target = expr.Expression.ToString();
+			string typeName = target;
+			int lastDot = typeName.LastIndexOf('.');
+			if (lastDot >= 0)
+			{
+				typeName = typeName.Substring(lastDot + 1);
+			}
+
+			string methodName = (string)expr.Name.Identifier.Text;
+			bool editorTransition = typeName == "EditorSceneManager"
+				&& (methodName == "OpenScene"
+					|| methodName == "NewScene"
+					|| methodName == "CloseScene"
+					|| methodName == "RestoreSceneManagerSetup");
+			bool runtimeTransition = typeName == "SceneManager"
+				&& (methodName == "LoadScene"
+					|| methodName == "LoadSceneAsync"
+					|| methodName == "UnloadSceneAsync");
+
+			if (editorTransition || runtimeTransition)
+			{
+				AddViolation(violations, invocation, "direct scene transition is not allowed; use AgentBridge.AgentSceneManager");
+			}
 		}
 
 		private static void CollectDescendants(dynamic node, List<object> result)

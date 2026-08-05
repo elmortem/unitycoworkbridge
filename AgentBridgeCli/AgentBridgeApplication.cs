@@ -10,7 +10,7 @@ internal static class AgentBridgeApplication
 		var options = CliOptions.Parse(args);
 		if (options.Error != null)
 		{
-			return WriteError("bad_usage", options.Error);
+			return WriteError("bad_usage", options.Error, options.Format);
 		}
 
 		if (options.Arguments.Count == 0 || options.Arguments[0] is "help" or "--help" or "-h")
@@ -32,7 +32,8 @@ internal static class AgentBridgeApplication
 				"project_not_found",
 				options.ProjectPath == null
 					? "No Unity project found at or above the current directory. Use --project <path>."
-					: "The --project path is not a Unity project.");
+					: "The --project path is not a Unity project.",
+				options.Format);
 		}
 
 		var command = options.Arguments[0];
@@ -59,18 +60,18 @@ internal static class AgentBridgeApplication
 			return 3;
 		}
 
-		var client = new BridgeClient(projectRoot);
+		var client = new BridgeClient(projectRoot, options.Format);
 		switch (command)
 		{
 			case "csharp":
 				if (commandArguments.Length != 1)
 				{
-					return WriteError("bad_usage", "usage: agentbridge csharp <file> [--project <path>] [--wait <seconds>]");
+					return WriteError("bad_usage", "usage: agentbridge csharp <file> [--project <path>] [--wait <seconds>] [--format json|human]", options.Format);
 				}
 
 				if (!health.CSharpReady)
 				{
-					return WriteError("roslyn_not_ready", "Roslyn is not ready. Run agentbridge doctor.");
+					return WriteError("roslyn_not_ready", "Roslyn is not ready. Run agentbridge doctor.", options.Format);
 				}
 
 				WarnIfPayloadInsideAssets(paths, commandArguments[0]);
@@ -79,7 +80,7 @@ internal static class AgentBridgeApplication
 			case "ui":
 				if (commandArguments.Length != 1)
 				{
-					return WriteError("bad_usage", "usage: agentbridge ui <file.ui.json> [--project <path>] [--wait <seconds>]");
+					return WriteError("bad_usage", "usage: agentbridge ui <file.ui.json> [--project <path>] [--wait <seconds>] [--format json|human]", options.Format);
 				}
 
 				WarnIfPayloadInsideAssets(paths, commandArguments[0]);
@@ -88,7 +89,7 @@ internal static class AgentBridgeApplication
 			case "compile":
 				if (commandArguments.Length != 0)
 				{
-					return WriteError("bad_usage", "usage: agentbridge compile [--project <path>] [--wait <seconds>]");
+					return WriteError("bad_usage", "usage: agentbridge compile [--project <path>] [--wait <seconds>] [--format json|human]", options.Format);
 				}
 
 				return await client.SubmitCompileAsync(options.WaitSeconds);
@@ -96,7 +97,7 @@ internal static class AgentBridgeApplication
 			case "tests":
 				if (!TryParseTests(commandArguments, out var mode, out var assemblies, out var tests, out var categories, out var error))
 				{
-					return WriteError("bad_usage", error);
+					return WriteError("bad_usage", error, options.Format);
 				}
 
 				return await client.SubmitTestsAsync(mode, assemblies, tests, categories, options.WaitSeconds);
@@ -104,13 +105,13 @@ internal static class AgentBridgeApplication
 			case "wait":
 				if (commandArguments.Length != 1)
 				{
-					return WriteError("bad_usage", "usage: agentbridge wait <TaskId> [--project <path>] [--wait <seconds>]");
+					return WriteError("bad_usage", "usage: agentbridge wait <TaskId> [--project <path>] [--wait <seconds>] [--format json|human]", options.Format);
 				}
 
 				return await client.WaitForTaskAsync(commandArguments[0], options.WaitSeconds);
 
 			default:
-				return WriteError("bad_usage", "Unknown command: " + command);
+				return WriteError("bad_usage", "Unknown command: " + command, options.Format);
 		}
 	}
 
@@ -245,8 +246,15 @@ internal static class AgentBridgeApplication
 		return Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
 	}
 
-	private static int WriteError(string code, string message)
+	private static int WriteError(string code, string message, string format)
 	{
+		if (format == "human")
+		{
+			Console.Out.WriteLine("agentbridge: error (" + code + ")");
+			Console.Out.WriteLine("Message: " + message);
+			return 3;
+		}
+
 		JsonSupport.Write(new
 		{
 			Ok = false,
@@ -262,7 +270,7 @@ internal static class AgentBridgeApplication
 			"""
 			Unity Agent Bridge CLI
 
-			usage: agentbridge <command> [arguments] [--project <path>] [--wait <seconds>]
+			usage: agentbridge <command> [arguments] [--project <path>] [--wait <seconds>] [--format json|human]
 
 			commands:
 			  status
@@ -276,7 +284,7 @@ internal static class AgentBridgeApplication
 			global options:
 			  --project <path>   Unity project root; otherwise discovered from cwd
 			  --wait <seconds>   client wait timeout, default 110
-			  --format <value>   json or human for status and doctor
+			  --format <value>   json (default, machine-readable) or human for every command
 			  --version
 			""");
 	}

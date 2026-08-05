@@ -18,12 +18,27 @@ namespace AgentBridge
 		public static void Open()
 		{
 			var window = GetWindow<AgentBridgeSetupWindow>(true, "Unity Agent Bridge Setup");
-			window.minSize = new Vector2(560, 260);
+			window.minSize = new Vector2(560, 340);
 			window.Show();
 		}
 
 		private void OnGUI()
 		{
+			EditorGUILayout.LabelField("Scene safety", EditorStyles.boldLabel);
+			bool discardUntitledScenes = AgentBridgeSettingsStore.GetDiscardDirtyUntitledScenes();
+			bool nextDiscardUntitledScenes = EditorGUILayout.ToggleLeft("Discard dirty untitled scenes", discardUntitledScenes);
+			if (nextDiscardUntitledScenes != discardUntitledScenes)
+			{
+				AgentBridgeSettingsStore.SetDiscardDirtyUntitledScenes(nextDiscardUntitledScenes);
+			}
+
+			EditorGUILayout.HelpBox(
+				nextDiscardUntitledScenes
+					? "Dirty untitled scenes are closed without saving before an agent task changes scenes."
+					: "Agent tasks stop without opening a save dialog while a dirty untitled scene is open.",
+				MessageType.Info);
+			EditorGUILayout.Space();
+
 			EditorGUILayout.LabelField("Roslyn source", EditorStyles.boldLabel);
 			EditorGUILayout.Space();
 

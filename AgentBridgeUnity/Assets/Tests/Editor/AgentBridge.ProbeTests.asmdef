@@ -1,6 +1,8 @@
 {
     "name": "AgentBridge.ProbeTests",
-    "references": [],
+    "references": [
+        "AgentBridge"
+    ],
     "includePlatforms": ["Editor"],
     "excludePlatforms": [],
     "optionalUnityReferences": [

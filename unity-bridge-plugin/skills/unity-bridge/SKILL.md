@@ -7,7 +7,7 @@ description: "Use whenever the user wants Claude to execute anything inside the 
 
 Скилл для выполнения произвольных задач в Unity Editor через Agent Bridge.
 
-Принцип работы: ты пишешь C#-скрипт в рабочую папку `Temp/AgentBridge/` внутри Unity-проекта и вызываешь CLI `agentbridge` (где его искать — см. «Где искать CLI»). CLI находит Unity-проект из текущей директории, кладёт задачу в очередь моста и ждёт результата. Мост компилирует скрипт в памяти через Roslyn (без domain reload, без файлов в `Assets`) и выполняет на главном потоке редактора. Результат — один JSON в stdout.
+Принцип работы: ты пишешь C#-скрипт в рабочую папку `Temp/AgentBridge/` внутри Unity-проекта и вызываешь CLI `agentbridge` (где его искать — см. «Где искать CLI»). CLI находит Unity-проект из текущей директории, кладёт задачу в очередь моста и ждёт результата. Мост компилирует скрипт в памяти через Roslyn (без domain reload, без файлов в `Assets`) и выполняет на главном потоке редактора. Результат приходит в stdout: полный JSON по умолчанию или читаемое резюме с `--format human`.
 
 Для вёрстки uGUI-префабов (создание/правка UI, скриншоты экранов) используй скилл `unity-ui` — декларативные задачи без компиляции. Этот скилл — для логики, компиляции проекта и тестов.
 
@@ -36,7 +36,7 @@ description: "Use whenever the user wants Claude to execute anything inside the 
 | 2 | Найти все `UNITYAGENT.md` (или устаревшие `UNITYCOWORK.md`) в проекте — описания кастомных API |
 | 3 | Сгенерировать уникальное имя задачи: `Task_YYYYMMDD_HHMMSS_fff_<random>` |
 | 4 | Написать `.cs` по шаблону ниже в `<ProjectRoot>/Temp/AgentBridge/<TaskName>.cs` — не в `Assets/` |
-| 5 | Выполнить `agentbridge csharp <файл>` и обработать JSON из stdout |
+| 5 | Выполнить `agentbridge csharp <файл>` и обработать результат из stdout |
 
 ## Шаблон C# скрипта
 
@@ -63,7 +63,12 @@ public static class Task_XXX
 4. Для вывода информации использовать `Debug.Log()` — логи перехватываются мостом и включаются в результат.
 5. Не добавлять зависимости от пользовательских сборок проекта — только Unity API и кастомные API из `UNITYAGENT.md`. Скрипт компилируется изолированно от `Assets`, поэтому доступны только уже загруженные в домен сборки.
 6. Запрещены блокирующие конструкции: `.Wait()`, `.GetAwaiter().GetResult()`, `.Result` на task-подобных выражениях, `Thread.Sleep`, `while (true)`/`for (;;)` без `await` внутри. Мост отклоняет такой код до исполнения (`rejected`, причина в `Diagnostics`/`Logs`) — переписывай через `await`.
-7. **Упавший таск чини, а не удаляй.** Битый `.cs` в `Temp/AgentBridge/` ничего не блокирует (задачи не участвуют в компиляции проекта) — просто исправь файл и запусти `csharp` заново с тем же или новым именем.
+7. Для смены Editor-сцен используй только `AgentBridge.AgentSceneManager`. Прямые вызовы `EditorSceneManager.OpenScene` / `NewScene` / `CloseScene` / `RestoreSceneManagerSetup` и `SceneManager.LoadScene*` отклоняются guardrail: безопасный API сначала разрешает dirty-состояние без модального save-диалога.
+8. **Упавший таск чини, а не удаляй.** Битый `.cs` в `Temp/AgentBridge/` ничего не блокирует (задачи не участвуют в компиляции проекта) — просто исправь файл и запусти `csharp` заново с тем же или новым именем.
+
+### Политика dirty untitled-сцен
+
+`ProjectSettings/AgentBridge.json` содержит `DirtyUntitledScenePolicy`. Значение `Discard` используется по умолчанию и закрывает dirty untitled-сцены без сохранения перед задачей. `Block` оставляет сцену открытой и завершает задачу как `runtime_error`, не показывая диалог. Настройка доступна в Unity через **Tools → Agent Bridge → Setup...**.
 
 ## Кастомные API проекта
 
@@ -90,14 +95,14 @@ CLI ищет Unity-проект от `cwd` вверх. Если агент за�
 Когда клиент и редактор на разных ОС (песочница), `agentbridge status` показывает строку `Host: editor on <os>, client on <os>`. Это нормальный режим: проверка PID редактора отключается, живость определяется по heartbeat, а идентичность проекта — по `Library/AgentBridge/project-id`, а не по абсолютному пути.
 
 ```bash
-agentbridge <команда> [аргументы] [--project <путь>] [--wait <секунды>]
+agentbridge <команда> [аргументы] [--project <путь>] [--wait <секунды>] [--format json|human]
 ```
 
 > Чтобы команда не требовала подтверждения при каждом запуске: `"Bash(agentbridge:*)"` в `.claude/settings.local.json`.
 
 ### `csharp <path-to-cs>`
 
-Выполнить C#-таск. `TaskName` — имя файла без расширения, класс внутри обязан называться так же. Ждёт результат, печатает JSON в stdout.
+Выполнить C#-таск. `TaskName` — имя файла без расширения, класс внутри обязан называться так же. Ждёт результат, печатает JSON по умолчанию; для простого читаемого результата доступен `--format human`.
 
 ```bash
 agentbridge csharp Temp/AgentBridge/Task_20260226_143052_871_a3f.cs
@@ -108,17 +113,19 @@ agentbridge csharp Temp/AgentBridge/Task_20260226_143052_871_a3f.cs
 Заставить Unity скомпилировать проект (переживает вызванный этим domain reload) и вернуть список ошибок.
 
 ```bash
-agentbridge compile
+agentbridge compile --format human
 ```
 
-Используй для проверки состояния проекта после серии файловых правок (не C#-тасков), либо когда нужно убедиться, что редактор компилируется чисто.
+Перед успешным ответом Bridge делает синхронный AssetDatabase refresh и проверяет каждый проектный `.cs`: рядом существует `.meta`, AssetDatabase знает GUID, Unity назначил файлу сборку, а файл присутствует в source inventory скомпилированных assemblies. Нарушения возвращаются как `compiler_error` с кодами `ABIMPORT001`–`ABIMPORT004`; такой результат нельзя считать чистой компиляцией.
+
+Используй для структурной проверки проекта после серии файловых правок (не C#-тасков). `compile: success` доказывает только импорт и компилируемость текущего source inventory. Он не является поведенческим proof и не закрывает работу: после него обязательно запусти релевантные EditMode/PlayMode тесты через `agentbridge tests`.
 
 ### `tests [--mode EditMode|PlayMode] [--assembly A] [--test T] [--category C]`
 
 Прогнать тесты. Каждый флаг можно повторять несколько раз. Без `--mode` — `EditMode`.
 
 ```bash
-agentbridge tests --mode EditMode --assembly MyProject.Tests
+agentbridge tests --mode EditMode --assembly MyProject.Tests --format human
 ```
 
 ### `status`
@@ -131,7 +138,9 @@ agentbridge tests --mode EditMode --assembly MyProject.Tests
 
 ## Формат ответа
 
-Один JSON-объект в stdout (`TaskRecord`): `Id`, `Kind`, `Status`, `ReturnValue`, `Logs`, `Diagnostics`, `ForeignErrors`, `Artifacts`, `Tests`, `Timing`, `SessionId`, `StartedAtUtc`, `FinishedAtUtc`.
+По умолчанию CLI печатает один JSON-объект в stdout (`TaskRecord`): `Id`, `Kind`, `Status`, `ReturnValue`, `Logs`, `Diagnostics`, `ForeignErrors`, `Artifacts`, `Tests`, `Timing`, `SessionId`, `StartedAtUtc`, `FinishedAtUtc`.
+
+Для обычной проверки компиляции и тестов используй `--format human`: CLI сам печатает краткий итог, а при ошибке сохраняет логи, диагностики и test failures. Не перенаправляй `2>&1` в JSON-файл и не запускай Python/`jq` только ради строки `success` или счётчиков тестов. Формат JSON оставляй для случаев, когда действительно нужна программная обработка отдельных полей полного `TaskRecord`; stderr с прогрессом держи отдельно от stdout.
 
 Коды выхода: `0` — `Status: "success"`; `1` — любой другой терминальный статус, включая `test_failure`; `2` — таймаут ожидания, задача ещё идёт (`{"Id":"...","Status":"running"}` в stdout, повтори через `wait <TaskId>`); `3` — проект/мост недоступен, несовместим протокол или команда использована неверно.
 

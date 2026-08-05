@@ -50,6 +50,11 @@ namespace AgentBridge
 			get { return Path.Combine(WorkingRoot, "project-id"); }
 		}
 
+		public static string PlayModeSceneStateFile
+		{
+			get { return Path.Combine(WorkingRoot, "pending-playmode-scene.json"); }
+		}
+
 		public static string CliRoot
 		{
 			get { return EnsureDirectory(Path.Combine(WorkingRoot, "cli")); }

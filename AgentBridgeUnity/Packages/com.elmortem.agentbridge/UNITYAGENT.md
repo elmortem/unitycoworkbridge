@@ -4,6 +4,8 @@
 
 Прогон дорог (для PlayMode — вход в Play Mode). Запускай тесты как финальную проверку завершённого этапа работы, а не после каждой правки.
 
+`agentbridge compile` — только структурный gate. Перед `success` мост синхронно импортирует проектные исходники и проверяет для каждого `.cs` наличие `.meta`, AssetDatabase GUID, назначенную Unity сборку и присутствие в source inventory этой сборки. Ошибки импорта возвращаются кодами `ABIMPORT001`–`ABIMPORT004`. Даже успешный `compile` не является поведенческим доказательством: завершённая работа требует релевантного прогона `agentbridge tests`.
+
 ## Домен
 
 - запусти тесты, прогони тесты, проверь тесты
@@ -40,7 +42,13 @@ agentbridge tests --mode EditMode --assembly MyGame.Tests --wait 600
 
 ## PlayMode
 
-PlayMode-прогон надёжен при любой настройке Enter Play Mode (Reload Domain включён или выключен) — колбэк моста персистентный. Перед PlayMode-прогоном мост сохраняет открытые сцены (`SaveOpenScenes`), чтобы тест-фреймворк не падал на сохранении. Если на момент запроса редактор уже в Play Mode, прогон не стартует — `Status` будет `runtime_error`, `Tests.aborted: true`.
+PlayMode-прогон надёжен при любой настройке Enter Play Mode (Reload Domain включён или выключен) — колбэк и scene-recovery state моста персистентные. Перед прогоном мост сохраняет dirty-сцены с путём, отбрасывает временные `Assets/InitTestScene*.unity` и dirty untitled-сцены, затем запоминает исходный scene setup. После выхода из Play Mode мост отбрасывает тестовые изменения, восстанавливает setup и только после этого завершает задачу. Интерактивные save-диалоги в этом пути не используются. Если на момент запроса редактор уже входит в Play Mode или находится в нём, прогон не стартует — `Status` будет `runtime_error`, `Tests.aborted: true`.
+
+## Безопасная смена сцен из C#-задач
+
+Не вызывай `EditorSceneManager.OpenScene`, `NewScene`, `CloseScene`, `RestoreSceneManagerSetup` и runtime `SceneManager.LoadScene*` напрямую: guardrail отклонит задачу. Используй `AgentBridge.AgentSceneManager` с теми же основными операциями. Перед переходом он сохраняет dirty-сцены с путём, удаляет тестовые сцены и применяет политику dirty untitled-сцен без модального окна.
+
+Политика задаётся в `ProjectSettings/AgentBridge.json` полем `DirtyUntitledScenePolicy`: `Discard` (по умолчанию) закрывает dirty untitled-сцену без сохранения; `Block` оставляет её открытой и завершает задачу как `runtime_error`. Настройка доступна в **Tools → Agent Bridge → Setup...**.
 
 ## Примечания
 

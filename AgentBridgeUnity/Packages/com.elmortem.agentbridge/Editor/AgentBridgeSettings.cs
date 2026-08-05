@@ -14,5 +14,6 @@ namespace AgentBridge
 		public string RoslynLocalPath = "";
 		public bool EmitPdb = true;
 		public int ClientWaitSeconds = 110;
+		public string DirtyUntitledScenePolicy = "Discard";
 	}
 }

@@ -19,10 +19,12 @@ internal sealed class BridgeClient
 	};
 
 	private readonly BridgePaths _paths;
+	private readonly string _format;
 
-	public BridgeClient(string projectRoot)
+	public BridgeClient(string projectRoot, string format)
 	{
 		_paths = new BridgePaths(projectRoot);
+		_format = format;
 	}
 
 	public async Task<int> SubmitPayloadAsync(string kind, string sourcePath, int waitSeconds)
@@ -108,7 +110,7 @@ internal sealed class BridgeClient
 		{
 			if (TryReadFile(journalFile, out var json) && TryGetTerminalStatus(json, out _))
 			{
-				Console.Out.WriteLine(json.TrimEnd());
+				WriteResult(json);
 				return ClassifyResult(json);
 			}
 
@@ -117,11 +119,11 @@ internal sealed class BridgeClient
 			{
 				if (TryReadFile(journalFile, out json))
 				{
-					Console.Out.WriteLine(json.TrimEnd());
+					WriteResult(json);
 				}
 				else
 				{
-					Console.Out.WriteLine(JsonSerializer.Serialize(
+					WriteResult(JsonSerializer.Serialize(
 						new Dictionary<string, object?>
 						{
 							["Id"] = taskId,
@@ -230,14 +232,14 @@ internal sealed class BridgeClient
 					["ForeignErrors"] = false,
 					["Artifacts"] = Array.Empty<string>()
 				};
-				Console.Out.WriteLine(JsonSerializer.Serialize(conflict, JsonSupport.Task));
+				WriteResult(JsonSerializer.Serialize(conflict, JsonSupport.Task));
 				result = 1;
 				return true;
 			}
 
 			if (TerminalStatuses.Contains(status))
 			{
-				Console.Out.WriteLine(json.TrimEnd());
+				WriteResult(json);
 				result = ClassifyResult(json);
 				return true;
 			}
@@ -337,14 +339,23 @@ internal sealed class BridgeClient
 			: 0;
 	}
 
-	private static int WriteError(string code, string message)
+	private void WriteResult(string json)
 	{
-		JsonSupport.Write(new
+		Console.Out.WriteLine(
+			_format == "human"
+				? TaskResultFormatter.FormatHuman(json)
+				: json.TrimEnd());
+	}
+
+	private int WriteError(string code, string message)
+	{
+		var json = JsonSerializer.Serialize(new
 		{
 			Ok = false,
 			Code = code,
 			Message = message
-		});
+		}, JsonSupport.Task);
+		WriteResult(json);
 		return 3;
 	}
 }

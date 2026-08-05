@@ -24,7 +24,7 @@ namespace AgentBridge
 
 			EnsureSubscribed();
 
-			AssetDatabase.Refresh();
+			AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
 			CompilationPipeline.RequestScriptCompilation();
 		}
 
@@ -63,6 +63,8 @@ namespace AgentBridge
 
 				File.Delete(pendingPath);
 			}
+
+			diagnostics.AddRange(SourceImportVerifier.ValidateProjectSources());
 
 			return new TaskRecordOutcome
 			{

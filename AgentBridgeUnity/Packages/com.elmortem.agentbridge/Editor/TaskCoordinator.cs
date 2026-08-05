@@ -34,6 +34,7 @@ namespace AgentBridge
 			AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
 			AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
 
+			PlayModeSceneRecovery.Start();
 			TryFinalizePendingCompileTask();
 			FinalizeOrphanRecords();
 		}
@@ -112,6 +113,7 @@ namespace AgentBridge
 		{
 			EditorApplication.update -= OnUpdate;
 			AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
+			PlayModeSceneRecovery.Stop();
 		}
 
 		public static bool HasActiveTask
@@ -136,6 +138,8 @@ namespace AgentBridge
 
 		private static void OnUpdate()
 		{
+			PlayModeSceneRecovery.Tick();
+
 			if (_pendingTimeoutReload && _activeTaskId == null)
 			{
 				_pendingTimeoutReload = false;
@@ -178,6 +182,11 @@ namespace AgentBridge
 			}
 
 			if (EditorApplication.isCompiling)
+			{
+				return;
+			}
+
+			if (EditorApplication.isPlayingOrWillChangePlaymode || PlayModeSceneRecovery.IsPending)
 			{
 				return;
 			}
@@ -310,6 +319,16 @@ namespace AgentBridge
 			};
 			TaskJournal.Write(_activeRecord);
 
+			if (RequiresScenePreflight(request.Kind))
+			{
+				string sceneError;
+				if (!SceneSafetyGuard.TryPrepareForTask(out sceneError))
+				{
+					FinishTask("runtime_error", null, new List<string> { sceneError }, false);
+					return;
+				}
+			}
+
 			try
 			{
 				RunTask(request);
@@ -318,6 +337,11 @@ namespace AgentBridge
 			{
 				FinishTask("runtime_error", null, new List<string> { ex.Message }, false);
 			}
+		}
+
+		private static bool RequiresScenePreflight(string kind)
+		{
+			return kind == "csharp" || kind == "ui" || kind == "tests";
 		}
 
 		private static void RunTask(TaskRequest request)

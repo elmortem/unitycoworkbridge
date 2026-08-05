@@ -133,6 +133,19 @@ namespace AgentBridge
 			return settings.ClientWaitSeconds;
 		}
 
+		public static bool GetDiscardDirtyUntitledScenes()
+		{
+			AgentBridgeSettings settings = Load();
+			return !string.Equals(settings.DirtyUntitledScenePolicy, "Block", StringComparison.OrdinalIgnoreCase);
+		}
+
+		public static void SetDiscardDirtyUntitledScenes(bool value)
+		{
+			AgentBridgeSettings settings = Load();
+			settings.DirtyUntitledScenePolicy = value ? "Discard" : "Block";
+			Save(settings);
+		}
+
 		private static AgentBridgeSettings Load()
 		{
 			double now = CurrentTime();
