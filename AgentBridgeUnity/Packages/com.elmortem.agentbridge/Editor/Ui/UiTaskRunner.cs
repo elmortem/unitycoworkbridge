@@ -110,7 +110,9 @@ namespace AgentBridge.Ui
 						context.AddArtifact(output);
 						summary.Add("dump -> " + output);
 					}
-					else if (kind == "shot")
+					// "shot" is the pre-0.11 name, kept so an older skill still
+					// works against a newer package.
+					else if (kind == "uishot" || kind == "shot")
 					{
 						int width = action.TryGetValue("width", out object w) ? UiValue.I(w) : 1920;
 						int height = action.TryGetValue("height", out object h) ? UiValue.I(h) : 1080;
@@ -123,7 +125,7 @@ namespace AgentBridge.Ui
 						UiScreenshot.Shot(prefabPath, output, width, height, outline);
 						context.AddArtifact(output);
 						wrotePng = true;
-						summary.Add("shot -> " + output + " (" + width + "x" + height + ")");
+						summary.Add("uishot -> " + output + " (" + width + "x" + height + ")");
 					}
 				}
 

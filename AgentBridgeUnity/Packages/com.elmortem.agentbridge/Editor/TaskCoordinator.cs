@@ -25,6 +25,8 @@ namespace AgentBridge
 		private static double _activeStartTime;
 		private static TaskRecord _activeRecord;
 		private static CSharpTaskExecutor _activeCSharpExecutor;
+		private static SceneShot.SceneShotTaskExecutor _activeShotExecutor;
+		private static TaskContext _activeShotContext;
 
 		public static void Start()
 		{
@@ -37,6 +39,7 @@ namespace AgentBridge
 			PlayModeSceneRecovery.Start();
 			TryFinalizePendingCompileTask();
 			FinalizeOrphanRecords();
+			SceneShot.SceneShotTaskExecutor.CloseOrphanWindows();
 		}
 
 		private static void FinalizeOrphanRecords()
@@ -156,6 +159,10 @@ namespace AgentBridge
 				if (_activeCSharpExecutor != null)
 				{
 					PollCSharpExecutor();
+				}
+				else if (_activeShotExecutor != null)
+				{
+					PollShotExecutor();
 				}
 				else if (_activeRecord != null && _activeRecord.Kind == "compile")
 				{
@@ -363,6 +370,9 @@ namespace AgentBridge
 				case "tests":
 					StartTestsTask(request);
 					break;
+				case "sceneshot":
+					StartShotTask(request);
+					break;
 				default:
 					FinishTask("rejected", null, new List<string> { "unknown kind" }, false);
 					break;
@@ -405,6 +415,58 @@ namespace AgentBridge
 				_activeRecord.Artifacts.Add(artifact);
 			}
 
+			FinishTask(result.Status, result.ReturnValue, result.Logs, false);
+		}
+
+		private static void StartShotTask(TaskRequest request)
+		{
+			string payloadPath = Path.Combine(BridgePaths.Inbox, request.Id + ".sceneshot.json");
+			if (!File.Exists(payloadPath))
+			{
+				FinishTask("rejected", null, new List<string> { "payload file not found: " + request.Id + ".sceneshot.json" }, false);
+				return;
+			}
+
+			_activeShotContext = new TaskContext
+			{
+				Id = request.Id,
+				Kind = request.Kind,
+				CancellationToken = _activeCancellation.Token
+			};
+
+			try
+			{
+				_activeShotExecutor = SceneShot.SceneShotTaskExecutor.Begin(payloadPath, _activeShotContext);
+			}
+			catch (Exception ex)
+			{
+				_activeShotContext = null;
+				FinishTask("rejected", null, new List<string> { ex.GetBaseException().Message }, false);
+			}
+		}
+
+		private static void PollShotExecutor()
+		{
+			if (_activeRecord == null)
+			{
+				return;
+			}
+
+			_activeShotExecutor.Tick();
+
+			if (!_activeShotExecutor.IsCompleted)
+			{
+				return;
+			}
+
+			TaskResultData result = _activeShotExecutor.GetResult();
+			foreach (string artifact in _activeShotContext.Artifacts)
+			{
+				_activeRecord.Artifacts.Add(artifact);
+			}
+
+			_activeShotExecutor = null;
+			_activeShotContext = null;
 			FinishTask(result.Status, result.ReturnValue, result.Logs, false);
 		}
 
@@ -551,6 +613,16 @@ namespace AgentBridge
 			_activeRecord = null;
 			_activeTaskId = null;
 			_activeCSharpExecutor = null;
+
+			// Timeout, cancel and domain reload drop the executor without ever
+			// ticking it again, so its temporary window has to be closed here.
+			if (_activeShotExecutor != null)
+			{
+				SceneShot.SceneShotTaskExecutor.CloseOrphanWindows();
+			}
+
+			_activeShotExecutor = null;
+			_activeShotContext = null;
 			EditorTickPump.HasActiveTask = false;
 			BridgeStatusWriter.Current.ActiveTaskId = null;
 			BridgeStatusWriter.Write();

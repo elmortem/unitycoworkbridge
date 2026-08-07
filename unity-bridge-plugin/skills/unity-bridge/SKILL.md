@@ -1,6 +1,6 @@
 ---
 name: unity-bridge
-description: "Use whenever the user wants Claude to execute anything inside the Unity Editor — listing or modifying assets, scenes, prefabs, components, materials, project settings; editor-side analysis, refactors, batch operations; querying the scene hierarchy; compiling the project; running tests; or any task needing C# code run in the Editor context. Works via Agent Bridge: Claude writes a C# script and hands it to the `agentbridge` CLI, which compiles it in memory with Roslyn and runs it on the main thread, returning logs plus a result string. Trigger even for casual phrasings like 'check what's in the scene', 'find all prefabs using shader X', 'rename these assets', 'what does this component reference', 'compile the project', 'run the tests'. Do NOT use for runtime gameplay code, build pipeline tasks unrelated to Editor scripting, or pure C# questions outside Unity. For uGUI prefab layout and UI screenshots prefer the unity-ui skill."
+description: "Use whenever the user wants Claude to execute anything inside the Unity Editor — listing or modifying assets, scenes, prefabs, components, materials, project settings; editor-side analysis, refactors, batch operations; querying the scene hierarchy; compiling the project; running tests; or any task needing C# code run in the Editor context. Works via Agent Bridge: Claude writes a C# script and hands it to the `agentbridge` CLI, which compiles it in memory with Roslyn and runs it on the main thread, returning logs plus a result string. Trigger even for casual phrasings like 'check what's in the scene', 'find all prefabs using shader X', 'rename these assets', 'what does this component reference', 'compile the project', 'run the tests'. Do NOT use for runtime gameplay code, build pipeline tasks unrelated to Editor scripting, or pure C# questions outside Unity. Also use for capturing Scene View screenshots of the open scene ('сфоткай сцену', 'скриншот сцены', 'покажи как выглядит уровень') via the declarative sceneshot command. For uGUI prefab layout and UI screenshots prefer the unity-ui skill."
 ---
 
 # Unity Bridge
@@ -106,6 +106,34 @@ agentbridge <команда> [аргументы] [--project <путь>] [--wait
 
 ```bash
 agentbridge csharp Temp/AgentBridge/Task_20260226_143052_871_a3f.cs
+```
+
+### `sceneshot <file.sceneshot.json>`
+
+Скриншоты текущей открытой сцены (Scene View) с заданных ракурсов. Декларативный JSON, без компиляции. Файл пиши в `Temp/AgentBridge/<TaskName>.sceneshot.json`.
+
+Формат:
+
+```json
+{
+  "shots": [
+    { "name": "hero", "width": 1280, "height": 720,
+      "frame": { "target": "Level/Hero", "margin": 1.1, "rotation": [30, 45, 0] } },
+    { "name": "top",
+      "pose": { "pivot": [0, 0, 0], "rotation": [90, 0, 0], "size": 40, "orthographic": true } }
+  ]
+}
+```
+
+- Ровно одно из `pose` (явная поза SceneView: pivot/rotation/size/orthographic) или `frame` (автокадрирование объекта по имени или пути `Root/Child`, как клавиша F).
+- `width`/`height` — дефолт 1280x720, потолок 1920x1080. Если экран меньше, размер пропорционально уменьшается — фактический указан в `ReturnValue`, факт уменьшения в `Logs`.
+- `gizmos` — дефолт `true` (иконки компонентов, гизмо). `grid` — дефолт `false`.
+- Снимок делается перерисовкой окна в текстуру, а не с экрана: перекрытие окна Unity, потеря фокуса и свёрнутый редактор на результат не влияют.
+- Пути готовых PNG приходят в поле `Artifacts` результата — читай их обычным просмотром изображений.
+- Снимается текущая открытая сцена. Нужна другая — сначала открой её отдельным `csharp`-таском.
+
+```bash
+agentbridge sceneshot Temp/AgentBridge/Task_20260226_143052_871_a3f.sceneshot.json
 ```
 
 ### `compile`

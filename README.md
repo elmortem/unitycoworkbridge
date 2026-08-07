@@ -17,10 +17,11 @@ The system consists of three parts:
 - `unity-bridge` — instructions for Claude on script generation, the client protocol, and error handling. It commands the Unity-side Bridge and auto-triggers on any Unity Editor task ("list all prefabs using shader X", "rename these assets", "compile the project", "run the tests"), or invoke it explicitly via `/unity-bridge`.
 - `unity-ui` — declarative uGUI layout: creating/editing UI prefabs, dumping layout geometry, and screenshotting screens through `.ui.json` tasks (no C# compilation, no domain reload — iterations take seconds). Auto-triggers on layout phrasing ("build this popup", "move/recolor this element", "screenshot the screen"), or `/unity-ui`. uGUI + TMP only; UI Toolkit is not supported. See [Declarative UI Tasks](#declarative-ui-tasks).
 
-There are four task kinds, all created via the CLI and processed sequentially, one at a time:
+There are five task kinds, all created via the CLI and processed sequentially, one at a time:
 
 - **`csharp`** — a `.cs` script; Bridge compiles it in memory with Roslyn and runs its `Run()` method on the main thread.
 - **`ui`** — a `.ui.json` file; Bridge applies it to a prefab directly, without compilation.
+- **`sceneshot`** — a `.sceneshot.json` file; Bridge screenshots the open scene from the requested Scene View angles, without compilation.
 - **`compile`** — forces Unity to compile the project and returns the resulting errors, surviving the domain reload this triggers.
 - **`tests`** — runs EditMode or PlayMode tests and returns pass/fail counts and failure details in the same result record, surviving Play Mode's domain reload.
 
@@ -165,6 +166,7 @@ One cross-platform command creates a task, waits for it, and prints the result t
 
 ```bash
 agentbridge csharp Temp/AgentBridge/Task_20260226_143052_871_a3f.cs
+agentbridge sceneshot Temp/AgentBridge/Task_20260226_143052_871_a3f.sceneshot.json
 agentbridge compile --format human
 agentbridge tests --mode EditMode --assembly MyGame.Tests --format human
 agentbridge status
@@ -273,7 +275,7 @@ One task targets one prefab and runs a list of actions:
                     "components": [ { "type": "Text", "text": "TITLE", "size": 42, "align": "Center" } ] }
             ]
         } },
-        { "action": "shot", "outline": ["Popup"] }
+        { "action": "uishot", "outline": ["Popup"] }
     ]
 }
 ```
@@ -281,9 +283,30 @@ One task targets one prefab and runs a list of actions:
 - `apply` — create/update a node by path; specified properties are set, unspecified are left alone, `null` clears; `children` are synced by name (extra children are never removed).
 - `delete` — remove a node by path.
 - `dump` — write `Library/AgentBridge/Artifacts/<id>/uidump.json`: the whole tree with anchors, sizes, `screenRect` in reference pixels, and object references of custom components.
-- `shot` — render the prefab offscreen to `Library/AgentBridge/Artifacts/<id>/shot.png` (1920×1080 by default) plus a `.rects.json` with every node's screen rect; `outline` draws colored frames for the listed paths. Optional `output` is a PNG file name only, never a path. Absolute paths and directory segments are rejected, so every transient UI artifact remains owned by its task.
+- `uishot` — render the prefab offscreen to `Library/AgentBridge/Artifacts/<id>/shot.png` (1920×1080 by default) plus a `.rects.json` with every node's screen rect; `outline` draws colored frames for the listed paths. Optional `output` is a PNG file name only, never a path. Absolute paths and directory segments are rejected, so every transient UI artifact remains owned by its task.
 
-Order within a task: all `apply`/`delete` run first over the loaded prefab contents, then a single save, then `dump`/`shot` over the saved asset. If the prefab does not exist and there is an `apply`, it is created (root `RectTransform` stretched 0..1). Any error (bad JSON, missing prefab/sprite/type/path) yields `runtime_error` and leaves the prefab unchanged.
+Order within a task: all `apply`/`delete` run first over the loaded prefab contents, then a single save, then `dump`/`uishot` over the saved asset. If the prefab does not exist and there is an `apply`, it is created (root `RectTransform` stretched 0..1). Any error (bad JSON, missing prefab/sprite/type/path) yields `runtime_error` and leaves the prefab unchanged.
+
+## Scene Screenshots
+
+`agentbridge sceneshot <path-to-sceneshot-json>` photographs the currently open scene from the angles listed in the file — no compilation, no domain reload. The task id is the file name without the `.sceneshot.json` suffix. Each shot opens a temporary Scene View window of the requested size, poses its camera and renders that view into a texture — not a screen grab, so an occluded, unfocused or fully minimized Editor produces the same image.
+
+```json
+{
+    "shots": [
+        { "name": "hero", "width": 1280, "height": 720,
+            "frame": { "target": "Level/Hero", "margin": 1.1, "rotation": [30, 45, 0] } },
+        { "name": "top", "gizmos": false,
+            "pose": { "pivot": [0, 0, 0], "rotation": [90, 0, 0], "size": 40, "orthographic": true } }
+    ]
+}
+```
+
+- Exactly one of `frame` or `pose` per shot. `frame` centers the view on a scene object found by name or by a `Root/Child` path, like pressing F on it; `pose` sets the Scene View camera explicitly.
+- `width`/`height` default to 1280×720 and top out at 1920×1080. The Scene View window is a real OS window, so a request larger than the desktop is scaled down by one factor on both axes to keep the framing; `Logs` notes the reduction and `ReturnValue` carries the real size.
+- `gizmos` defaults to `true` and `grid` to `false`; `name` becomes the PNG file name.
+- PNGs land in `Library/AgentBridge/Artifacts/<id>/` and their absolute paths come back in `Artifacts`.
+- Only the open scene is captured, unsaved state included — the task changes nothing. To photograph another scene, open it with a `csharp` task first. A failing shot ends the whole task with `runtime_error`; already captured PNGs stay in `Artifacts`.
 
 ### Layout conventions (`UNITYAGENT-UI.md`)
 
@@ -291,7 +314,7 @@ Before laying out UI, the `unity-ui` skill recursively searches the project for 
 
 ## Working Directory
 
-Claude writes its own task files (`Task_XXX.cs`, `Task_XXX.ui.json`) to `<project>/Temp/AgentBridge/` — the absolute path is reported as `ScratchDir` by `agentbridge status`, and the CLI creates the folder itself. Unity never imports `Temp/`, so tasks never trigger an asset import, a recompile, or stray `.meta` files, and the Editor wipes the folder on start and shutdown — nothing to clean up. Never keep task files under `Assets/`; `agentbridge csharp|ui` prints a warning to stderr when the payload lives there.
+Claude writes its own task files (`Task_XXX.cs`, `Task_XXX.ui.json`, `Task_XXX.sceneshot.json`) to `<project>/Temp/AgentBridge/` — the absolute path is reported as `ScratchDir` by `agentbridge status`, and the CLI creates the folder itself. Unity never imports `Temp/`, so tasks never trigger an asset import, a recompile, or stray `.meta` files, and the Editor wipes the folder on start and shutdown — nothing to clean up. Never keep task files under `Assets/`; `agentbridge csharp|ui|sceneshot` prints a warning to stderr when the payload lives there.
 
 Bridge's own transport lives separately:
 

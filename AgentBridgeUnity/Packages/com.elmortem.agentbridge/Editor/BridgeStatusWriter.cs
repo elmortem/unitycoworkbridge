@@ -45,7 +45,7 @@ namespace AgentBridge
 			Current.AssemblyBuildTimeUtc = File.GetLastWriteTimeUtc(typeof(BridgeStatusWriter).Assembly.Location).ToString("o");
 			Current.Enabled = AgentBridgeSettingsStore.IsEnabled();
 			Current.ActiveTaskId = null;
-			Current.Capabilities = new[] { "csharp", "ui", "compile", "tests" };
+			Current.Capabilities = new[] { "csharp", "ui", "sceneshot", "compile", "tests" };
 
 			RoslynLocation location = RoslynResolver.ResolveConfigured();
 			Current.RoslynReady = location.Available;

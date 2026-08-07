@@ -86,6 +86,15 @@ internal static class AgentBridgeApplication
 				WarnIfPayloadInsideAssets(paths, commandArguments[0]);
 				return await client.SubmitPayloadAsync("ui", commandArguments[0], options.WaitSeconds);
 
+			case "sceneshot":
+				if (commandArguments.Length != 1)
+				{
+					return WriteError("bad_usage", "usage: agentbridge sceneshot <file.sceneshot.json> [--project <path>] [--wait <seconds>] [--format json|human]", options.Format);
+				}
+
+				WarnIfPayloadInsideAssets(paths, commandArguments[0]);
+				return await client.SubmitPayloadAsync("sceneshot", commandArguments[0], options.WaitSeconds);
+
 			case "compile":
 				if (commandArguments.Length != 0)
 				{
@@ -277,6 +286,7 @@ internal static class AgentBridgeApplication
 			  doctor
 			  csharp <file.cs>          task files belong in <project>/Temp/AgentBridge, never in Assets
 			  ui <file.ui.json>
+			  sceneshot <file.sceneshot.json>
 			  compile
 			  tests [--mode EditMode|PlayMode] [--assembly A] [--test T] [--category C]
 			  wait <TaskId>

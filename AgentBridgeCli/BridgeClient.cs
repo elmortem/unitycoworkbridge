@@ -41,7 +41,12 @@ internal sealed class BridgeClient
 			return WriteError("invalid_task_id", "Payload file name is not a safe task id.");
 		}
 
-		var payloadName = kind == "ui" ? taskId + ".ui.json" : taskId + ".cs";
+		var payloadName = kind switch
+		{
+			"ui" => taskId + ".ui.json",
+			"sceneshot" => taskId + ".sceneshot.json",
+			_ => taskId + ".cs"
+		};
 		var request = new TaskRequest
 		{
 			Id = taskId,
@@ -260,6 +265,11 @@ internal sealed class BridgeClient
 		if (kind == "ui" && fileName.EndsWith(".ui.json", StringComparison.OrdinalIgnoreCase))
 		{
 			return fileName[..^8];
+		}
+
+		if (kind == "sceneshot" && fileName.EndsWith(".sceneshot.json", StringComparison.OrdinalIgnoreCase))
+		{
+			return fileName[..^15];
 		}
 
 		return Path.GetFileNameWithoutExtension(fileName);
