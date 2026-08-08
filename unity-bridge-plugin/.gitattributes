@@ -1,0 +1,4 @@
+# Plugin ZIP is byte-compared against these sources in CI (scripts/build-plugin.ps1).
+# Force LF in the working tree so the archive is reproducible on any machine.
+* text=auto eol=lf
+*.zip binary

@@ -4,15 +4,33 @@ Status: Выполнено
 
 ## Цель
 
-Новый вид таска `shot` в Agent Bridge: агент декларативным JSON заказывает один или несколько скриншотов текущей открытой сцены с заданного ракурса. Механика захвата портируется из тулы SceneViewShot (`pcg4u-addons/PCGAddons/Assets/Plugins/SceneViewShot`): временное окно `SceneView` нужного размера + `InternalEditorUtility.ReadScreenPixel`.
+Новый вид таска `shot` в Agent Bridge: агент декларативным JSON заказывает один или несколько скриншотов текущей открытой сцены с заданного ракурса и получает PNG в артефактах таска.
+
+Захват выполняется через принудительную перерисовку вью в `RenderTexture` (`UnityEditor.GUIView.GrabPixels`), а не чтением пикселей экрана. Это даёт полноценную картинку Scene View вместе с гизмо, иконками компонентов и сеткой, и при этом не зависит от того, что происходит на экране: перекрытие окна Unity другим приложением, потеря фокуса и полная минимизация редактора на результат не влияют (проверено — снимки побайтово идентичны).
 
 ## Обзор
 
 - CLI: новая команда `agentbridge shot <file.shot.json>`, работает как `ui` — payload копируется в Inbox, создаётся `.task.json` c `Kind = "shot"`.
-- Editor: `TaskCoordinator` диспатчит kind `shot` в новый `ShotTaskExecutor`, который асинхронно (через цепочку `EditorApplication.delayCall`, как в исходной туле) снимает каждый шот и завершается.
+- Editor: `TaskCoordinator` диспатчит kind `shot` в `ShotTaskExecutor` — конечный автомат, который координатор поллит из `OnUpdate`, по одному шоту за проход.
+- Каждый шот: создаётся временное окно `SceneView`, гасятся оверлеи, применяется поза, окно отстаивается 0.5 с редакторского времени, содержимое вью снимается в `RenderTexture`, пишется PNG, окно закрывается.
 - PNG кладутся в `TaskContext.ArtifactsDirectory`, пути попадают в `Artifacts` журнала — как у ui-скриншотов.
-- Сцена — только текущая открытая. Preflight сцен (`RequiresScenePreflight`) для `shot` НЕ выполняется: таск ничего не изменяет, снимает сцену как есть, включая несохранённое состояние.
+- Сцена — только текущая открытая. Preflight сцен (`RequiresScenePreflight`) для `shot` НЕ выполняется: таск ничего не изменяет и снимает сцену как есть, включая несохранённое состояние.
 - Ошибка на любом шоте — весь таск завершается `runtime_error` (fail fast); уже снятые PNG остаются в `Artifacts`.
+
+## Ограничения механики, влияющие на реализацию
+
+- Окно Scene View — настоящее окно ОС, поэтому его размер ограничен рабочей областью экрана. `RenderTexture` больше окна лишних пикселей не даёт: контент рисуется в углу в родном размере, остальное — мусор. Отсюда политика размера ниже.
+- `GrabPixels` возвращает изображение перевёрнутым по вертикали — строки разворачиваются перед кодированием в PNG.
+- Цветовое пространство `RenderTexture` обязано соответствовать проекту: при `ColorSpace.Linear` нужен `RenderTextureReadWrite.Linear`, иначе картинка выходит белёсой.
+- Смещения окна из старых экранных реализаций (заголовок, рамки) не нужны: снимается вью целиком.
+
+## Политика размера
+
+- Дефолт запроса: 1280×720.
+- Жёсткий потолок: 1920×1080. Запрос больше потолка обрезается до потолка.
+- Доступный размер в пикселях: `workArea * ppp` минус бордер 24 px с каждой стороны (48 px по каждой оси).
+- Если запрошенный (после потолка) размер не влезает в доступный — он уменьшается **пропорционально**, единым коэффициентом по обеим осям: соотношение сторон задаёт кадр камеры, покомпонентный кламп изменил бы ракурс, заказанный агентом.
+- Факт уменьшения — предупреждением в `Logs`; фактическое разрешение — в `ReturnValue`.
 
 ## Формат payload `<TaskId>.shot.json`
 
@@ -24,6 +42,7 @@ Status: Выполнено
 			"width": 1280,
 			"height": 720,
 			"gizmos": true,
+			"grid": false,
 			"frame": { "target": "Level/Hero", "margin": 1.1, "rotation": [30, 45, 0], "orthographic": false }
 		},
 		{
@@ -38,8 +57,9 @@ Status: Выполнено
 
 - `shots` — обязательный непустой массив.
 - `name` — обязательная непустая строка; имя PNG-файла (недопустимые символы заменяются на `_`, дубликаты внутри таска получают суффикс `_2`, `_3`, ...).
-- `width`/`height` — опционально, дефолт 1280x720, диапазон 16..8192. Фактический размер ограничен монитором (кламп с warning в `Logs`).
+- `width`/`height` — опционально, дефолт 1280×720, допустимый диапазон запроса 16..1920 и 16..1080 соответственно; фактический размер определяется политикой выше.
 - `gizmos` — опционально, дефолт `true`.
+- `grid` — опционально, дефолт `false`.
 - Ровно одно из `pose` / `frame`:
   - `pose` — явная поза SceneView: `pivot` `[x,y,z]` (обязателен), `rotation` `[x,y,z]` эйлеры в градусах (обязателен), `size` > 0 (обязателен), `orthographic` дефолт `false`.
   - `frame` — автокадрирование объекта: `target` (обязателен) — путь `Root/Child/Sub` от корня сцены или просто имя объекта (поиск в глубину по всем загруженным сценам, включая неактивные объекты); `margin` дефолт 1.1; `rotation` дефолт `[30, 45, 0]`; `orthographic` дефолт `false`.
@@ -49,7 +69,7 @@ Status: Выполнено
 - `Status`: `success` / `runtime_error` / `rejected` / `timeout` / `canceled` — стандартные.
 - `ReturnValue`: `"shot hero_closeup -> <abs path> (1280x720); shot overview -> ..."`.
 - `Artifacts`: абсолютные пути PNG.
-- `Logs`: варнинги клампа разрешения и сообщения об ошибках.
+- `Logs`: предупреждения об уменьшении размера, о недоступности API оверлеев и сообщения об ошибках.
 
 ## Unity-пакет: новые файлы
 
@@ -98,6 +118,7 @@ namespace AgentBridge.Shot
 		public int Width;
 		public int Height;
 		public bool Gizmos;
+		public bool Grid;
 		public SceneShotPoseMode Mode;
 		public SceneShotPose Pose;
 		public string FrameTarget;
@@ -122,6 +143,9 @@ namespace AgentBridge.Shot
 {
 	public static class ShotPayloadParser
 	{
+		public const int MaxWidth = 1920;
+		public const int MaxHeight = 1080;
+
 		public static List<SceneShotItem> Parse(string json)
 		{
 			object parsed = UiJson.Parse(json);
@@ -161,12 +185,13 @@ namespace AgentBridge.Shot
 			item.Name = name;
 			item.Width = shot.TryGetValue("width", out object w) ? UiValue.I(w) : 1280;
 			item.Height = shot.TryGetValue("height", out object h) ? UiValue.I(h) : 720;
-			if (item.Width < 16 || item.Width > 8192 || item.Height < 16 || item.Height > 8192)
+			if (item.Width < 16 || item.Width > MaxWidth || item.Height < 16 || item.Height > MaxHeight)
 			{
-				throw new Exception("shot '" + name + "': width/height must be within 16..8192");
+				throw new Exception("shot '" + name + "': width must be 16.." + MaxWidth + " and height 16.." + MaxHeight);
 			}
 
 			item.Gizmos = !shot.TryGetValue("gizmos", out object g) || UiValue.B(g);
+			item.Grid = shot.TryGetValue("grid", out object grid) && UiValue.B(grid);
 
 			bool hasPose = shot.TryGetValue("pose", out object poseObj);
 			bool hasFrame = shot.TryGetValue("frame", out object frameObj);
@@ -356,9 +381,209 @@ namespace AgentBridge.Shot
 }
 ```
 
+### SceneViewGrabber.cs
+
+Обёртка над внутренним API редактора. `MethodInfo` и `FieldInfo` резолвятся один раз и кэшируются.
+
+```csharp
+using System;
+using System.Reflection;
+using UnityEditor;
+using UnityEngine;
+
+namespace AgentBridge.Shot
+{
+	public static class SceneViewGrabber
+	{
+		private static FieldInfo _parentField;
+		private static MethodInfo _grabPixels;
+		private static PropertyInfo _overlayCanvas;
+		private static MethodInfo _setOverlaysEnabled;
+		private static bool _resolved;
+
+		public static void HideOverlays(EditorWindow window, Action<string> warn)
+		{
+			Resolve();
+
+			if (_overlayCanvas == null)
+			{
+				warn("scene shot: EditorWindow.overlayCanvas is not available, editor overlays will appear in the image");
+				return;
+			}
+
+			object canvas = _overlayCanvas.GetValue(window);
+			if (canvas == null)
+			{
+				warn("scene shot: overlayCanvas is null, editor overlays will appear in the image");
+				return;
+			}
+
+			if (_setOverlaysEnabled == null)
+			{
+				_setOverlaysEnabled = canvas.GetType().GetMethod(
+					"SetOverlaysEnabled",
+					BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+					null,
+					new[] { typeof(bool) },
+					null);
+			}
+
+			if (_setOverlaysEnabled == null)
+			{
+				warn("scene shot: OverlayCanvas.SetOverlaysEnabled is not available, editor overlays will appear in the image");
+				return;
+			}
+
+			_setOverlaysEnabled.Invoke(canvas, new object[] { false });
+		}
+
+		public static Texture2D Grab(EditorWindow window, int width, int height)
+		{
+			Resolve();
+
+			if (_parentField == null || _grabPixels == null)
+			{
+				throw new Exception("this Unity version does not expose GUIView.GrabPixels(RenderTexture, Rect)");
+			}
+
+			object host = _parentField.GetValue(window);
+			if (host == null)
+			{
+				throw new Exception("EditorWindow.m_Parent is null");
+			}
+
+			RenderTextureReadWrite readWrite = QualitySettings.activeColorSpace == ColorSpace.Linear
+				? RenderTextureReadWrite.Linear
+				: RenderTextureReadWrite.Default;
+
+			RenderTexture rt = new RenderTexture(width, height, 24, RenderTextureFormat.ARGB32, readWrite);
+			rt.Create();
+
+			Texture2D texture = null;
+
+			try
+			{
+				_grabPixels.Invoke(host, new object[] { rt, new Rect(0f, 0f, width, height) });
+
+				RenderTexture previous = RenderTexture.active;
+				RenderTexture.active = rt;
+				texture = new Texture2D(width, height, TextureFormat.RGB24, false);
+				texture.ReadPixels(new Rect(0f, 0f, width, height), 0, 0);
+				texture.Apply();
+				RenderTexture.active = previous;
+
+				FlipVertically(texture, width, height);
+				return texture;
+			}
+			catch
+			{
+				if (texture != null)
+				{
+					UnityEngine.Object.DestroyImmediate(texture);
+				}
+
+				throw;
+			}
+			finally
+			{
+				rt.Release();
+				UnityEngine.Object.DestroyImmediate(rt);
+			}
+		}
+
+		private static void FlipVertically(Texture2D texture, int width, int height)
+		{
+			Color[] pixels = texture.GetPixels();
+			Color[] flipped = new Color[pixels.Length];
+			for (int row = 0; row < height; row++)
+			{
+				Array.Copy(pixels, row * width, flipped, (height - 1 - row) * width, width);
+			}
+
+			texture.SetPixels(flipped);
+			texture.Apply();
+		}
+
+		private static void Resolve()
+		{
+			if (_resolved)
+			{
+				return;
+			}
+
+			_resolved = true;
+
+			_parentField = typeof(EditorWindow).GetField("m_Parent", BindingFlags.Instance | BindingFlags.NonPublic);
+			_overlayCanvas = typeof(EditorWindow).GetProperty(
+				"overlayCanvas",
+				BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+			if (_parentField == null)
+			{
+				return;
+			}
+
+			Type hostType = _parentField.FieldType;
+			while (hostType != null && _grabPixels == null)
+			{
+				_grabPixels = hostType.GetMethod(
+					"GrabPixels",
+					BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+					null,
+					new[] { typeof(RenderTexture), typeof(Rect) },
+					null);
+
+				hostType = hostType.BaseType;
+			}
+		}
+	}
+}
+```
+
+### SceneShotResolution.cs
+
+```csharp
+using UnityEditor;
+using UnityEngine;
+
+namespace AgentBridge.Shot
+{
+	public static class SceneShotResolution
+	{
+		public const int Border = 24;
+
+		public static Vector2Int Fit(int requestedWidth, int requestedHeight, int ppp, Rect workArea)
+		{
+			int availableWidth = Mathf.FloorToInt(workArea.width * ppp) - Border * 2;
+			int availableHeight = Mathf.FloorToInt(workArea.height * ppp) - Border * 2;
+
+			float scale = 1f;
+			if (requestedWidth > availableWidth)
+			{
+				scale = Mathf.Min(scale, availableWidth / (float)requestedWidth);
+			}
+
+			if (requestedHeight > availableHeight)
+			{
+				scale = Mathf.Min(scale, availableHeight / (float)requestedHeight);
+			}
+
+			if (scale >= 1f)
+			{
+				return new Vector2Int(requestedWidth, requestedHeight);
+			}
+
+			return new Vector2Int(
+				Mathf.Max(16, Mathf.FloorToInt(requestedWidth * scale)),
+				Mathf.Max(16, Mathf.FloorToInt(requestedHeight * scale)));
+		}
+	}
+}
+```
+
 ### ShotTaskExecutor.cs
 
-Порт `SceneViewCaptureService` из SceneViewShot, обёрнутый в исполнителя, которого поллит координатор. Офсеты окна — константы с дефолтами исходной тулы. Окно помечается заголовком `AgentBridge Shot`, чтобы после domain reload осиротевшие окна можно было закрыть.
+Конечный автомат: координатор вызывает `Tick()` из `OnUpdate`, пока `IsCompleted` не станет `true`. Окно живёт ровно один шот и всегда закрывается.
 
 ```csharp
 using System;
@@ -373,10 +598,7 @@ namespace AgentBridge.Shot
 	{
 		public const string WindowTitle = "AgentBridge Shot";
 
-		private const int OffsetTop = 46;
-		private const int OffsetBottom = 0;
-		private const int OffsetLeft = 2;
-		private const int OffsetRight = 2;
+		private const double SettleSeconds = 0.5d;
 
 		private readonly TaskContext _context;
 		private readonly List<SceneShotItem> _items;
@@ -386,6 +608,9 @@ namespace AgentBridge.Shot
 
 		private int _index;
 		private SceneView _window;
+		private Vector2Int _targetPx;
+		private double _settleUntil;
+		private bool _awaitingSettle;
 		private bool _completed;
 		private string _status = "success";
 
@@ -403,9 +628,7 @@ namespace AgentBridge.Shot
 		public static ShotTaskExecutor Begin(string payloadPath, TaskContext context)
 		{
 			List<SceneShotItem> items = ShotPayloadParser.Parse(File.ReadAllText(payloadPath));
-			ShotTaskExecutor executor = new ShotTaskExecutor(context, items);
-			executor.StartNext();
-			return executor;
+			return new ShotTaskExecutor(context, items);
 		}
 
 		public static void CloseOrphanWindows()
@@ -429,7 +652,41 @@ namespace AgentBridge.Shot
 			};
 		}
 
-		private void StartNext()
+		public void Tick()
+		{
+			if (_completed)
+			{
+				return;
+			}
+
+			if (_context.CancellationToken.IsCancellationRequested)
+			{
+				CloseWindow();
+				_completed = true;
+				return;
+			}
+
+			try
+			{
+				if (_awaitingSettle)
+				{
+					TickSettle();
+					return;
+				}
+
+				TickPrepare();
+			}
+			catch (Exception ex)
+			{
+				string name = _index < _items.Count ? _items[_index].Name : "<unknown>";
+				_logs.Add("shot '" + name + "': " + ex.GetBaseException().Message);
+				_status = "runtime_error";
+				CloseWindow();
+				_completed = true;
+			}
+		}
+
+		private void TickPrepare()
 		{
 			if (_index >= _items.Count)
 			{
@@ -438,117 +695,69 @@ namespace AgentBridge.Shot
 			}
 
 			SceneShotItem item = _items[_index];
+			SceneShotPose pose = item.Mode == SceneShotPoseMode.Frame
+				? SceneShotFramer.Frame(item.FrameTarget, item.FrameMargin, item.FrameRotation, item.Orthographic)
+				: item.Pose;
 
-			try
-			{
-				SceneShotPose pose = item.Mode == SceneShotPoseMode.Frame
-					? SceneShotFramer.Frame(item.FrameTarget, item.FrameMargin, item.FrameRotation, item.Orthographic)
-					: item.Pose;
-				Capture(item, pose);
-			}
-			catch (Exception ex)
-			{
-				Fail("shot '" + item.Name + "': " + ex.Message);
-			}
-		}
-
-		private void Capture(SceneShotItem item, SceneShotPose pose)
-		{
 			int ppp = Mathf.Max(1, Mathf.RoundToInt(EditorGUIUtility.pixelsPerPoint));
 			Rect workArea = EditorGUIUtility.GetMainWindowPosition();
-			Vector2Int targetPx = ClampToWorkArea(item, ppp, workArea);
+			_targetPx = SceneShotResolution.Fit(item.Width, item.Height, ppp, workArea);
 
-			int windowWidthPx = targetPx.x + OffsetLeft + OffsetRight;
-			int windowHeightPx = targetPx.y + OffsetTop + OffsetBottom;
+			if (_targetPx.x != item.Width || _targetPx.y != item.Height)
+			{
+				_logs.Add("shot '" + item.Name + "': requested " + item.Width + "x" + item.Height
+					+ " does not fit the screen, reduced to " + _targetPx.x + "x" + _targetPx.y);
+			}
 
 			_window = EditorWindow.CreateWindow<SceneView>();
 			_window.titleContent = new GUIContent(WindowTitle);
 			_window.drawGizmos = item.Gizmos;
+			_window.showGrid = item.Grid;
+			SceneViewGrabber.HideOverlays(_window, message => _logs.Add(message));
 			_window.LookAt(pose.Pivot, pose.Rotation, pose.Size, pose.Orthographic, true);
-			_window.position = new Rect(workArea.x, workArea.y, windowWidthPx / (float)ppp, windowHeightPx / (float)ppp);
-			_window.Focus();
+			_window.position = new Rect(
+				workArea.x + SceneShotResolution.Border / (float)ppp,
+				workArea.y + SceneShotResolution.Border / (float)ppp,
+				_targetPx.x / (float)ppp,
+				_targetPx.y / (float)ppp);
 			_window.Repaint();
 
-			EditorApplication.delayCall += () =>
-			{
-				if (IsCanceled())
-				{
-					return;
-				}
+			_settleUntil = EditorApplication.timeSinceStartup + SettleSeconds;
+			_awaitingSettle = true;
+		}
 
-				_window.Focus();
+		private void TickSettle()
+		{
+			if (EditorApplication.timeSinceStartup < _settleUntil)
+			{
 				_window.Repaint();
+				return;
+			}
 
-				EditorApplication.delayCall += () =>
-				{
-					if (IsCanceled())
-					{
-						return;
-					}
-
-					try
-					{
-						Write(item, targetPx, ppp);
-						CloseWindow();
-						_index++;
-						StartNext();
-					}
-					catch (Exception ex)
-					{
-						Fail("shot '" + item.Name + "': " + ex.Message);
-					}
-				};
-			};
+			_awaitingSettle = false;
+			SceneShotItem item = _items[_index];
+			Write(item);
+			CloseWindow();
+			_index++;
 		}
 
-		private Vector2Int ClampToWorkArea(SceneShotItem item, int ppp, Rect workArea)
+		private void Write(SceneShotItem item)
 		{
-			int maxWidthPx = Mathf.FloorToInt(workArea.width * ppp) - OffsetLeft - OffsetRight;
-			int maxHeightPx = Mathf.FloorToInt(workArea.height * ppp) - OffsetTop - OffsetBottom;
+			Texture2D texture = SceneViewGrabber.Grab(_window, _targetPx.x, _targetPx.y);
 
-			float scale = 1f;
-			if (item.Width > maxWidthPx)
+			try
 			{
-				scale = Mathf.Min(scale, maxWidthPx / (float)item.Width);
-			}
+				Directory.CreateDirectory(_context.ArtifactsDirectory);
+				string fullPath = Path.Combine(_context.ArtifactsDirectory, BuildFileName(item.Name));
+				File.WriteAllBytes(fullPath, texture.EncodeToPNG());
 
-			if (item.Height > maxHeightPx)
+				_context.AddArtifact(fullPath);
+				_summary.Add("shot " + item.Name + " -> " + fullPath + " (" + _targetPx.x + "x" + _targetPx.y + ")");
+			}
+			finally
 			{
-				scale = Mathf.Min(scale, maxHeightPx / (float)item.Height);
+				UnityEngine.Object.DestroyImmediate(texture);
 			}
-
-			if (scale < 1f)
-			{
-				int clampedWidth = Mathf.FloorToInt(item.Width * scale);
-				int clampedHeight = Mathf.FloorToInt(item.Height * scale);
-				_logs.Add("shot '" + item.Name + "': requested " + item.Width + "x" + item.Height
-					+ " does not fit the screen, clamped to " + clampedWidth + "x" + clampedHeight);
-				return new Vector2Int(clampedWidth, clampedHeight);
-			}
-
-			return new Vector2Int(item.Width, item.Height);
-		}
-
-		private void Write(SceneShotItem item, Vector2Int targetPx, int ppp)
-		{
-			int originX = Mathf.RoundToInt(_window.position.x * ppp) + OffsetLeft;
-			int originY = Mathf.RoundToInt(_window.position.y * ppp) + OffsetTop;
-
-			Color[] pixels = UnityEditorInternal.InternalEditorUtility.ReadScreenPixel(
-				new Vector2(originX, originY), targetPx.x, targetPx.y);
-
-			Texture2D tex = new Texture2D(targetPx.x, targetPx.y, TextureFormat.RGB24, false);
-			tex.SetPixels(pixels);
-			byte[] png = tex.EncodeToPNG();
-			UnityEngine.Object.DestroyImmediate(tex);
-
-			Directory.CreateDirectory(_context.ArtifactsDirectory);
-			string fileName = BuildFileName(item.Name);
-			string fullPath = Path.Combine(_context.ArtifactsDirectory, fileName);
-			File.WriteAllBytes(fullPath, png);
-
-			_context.AddArtifact(fullPath);
-			_summary.Add("shot " + item.Name + " -> " + fullPath + " (" + targetPx.x + "x" + targetPx.y + ")");
 		}
 
 		private string BuildFileName(string name)
@@ -569,26 +778,6 @@ namespace AgentBridge.Shot
 
 			_usedFileNames.Add(fileName);
 			return fileName;
-		}
-
-		private bool IsCanceled()
-		{
-			if (!_context.CancellationToken.IsCancellationRequested)
-			{
-				return false;
-			}
-
-			CloseWindow();
-			_completed = true;
-			return true;
-		}
-
-		private void Fail(string message)
-		{
-			_logs.Add(message);
-			_status = "runtime_error";
-			CloseWindow();
-			_completed = true;
 		}
 
 		private void CloseWindow()
@@ -653,12 +842,28 @@ private static void StartShotTask(TaskRequest request)
 		Kind = request.Kind,
 		CancellationToken = _activeCancellation.Token
 	};
-	_activeShotExecutor = Shot.ShotTaskExecutor.Begin(payloadPath, _activeShotContext);
+
+	try
+	{
+		_activeShotExecutor = Shot.ShotTaskExecutor.Begin(payloadPath, _activeShotContext);
+	}
+	catch (Exception ex)
+	{
+		_activeShotContext = null;
+		FinishTask("rejected", null, new List<string> { ex.GetBaseException().Message }, false);
+	}
 }
 
 private static void PollShotExecutor()
 {
-	if (_activeRecord == null || !_activeShotExecutor.IsCompleted)
+	if (_activeRecord == null)
+	{
+		return;
+	}
+
+	_activeShotExecutor.Tick();
+
+	if (!_activeShotExecutor.IsCompleted)
 	{
 		return;
 	}
@@ -682,9 +887,15 @@ _activeShotExecutor = null;
 _activeShotContext = null;
 ```
 
+- В `OnBeforeAssemblyReload()` перед записью `interrupted_by_domain_reload` добавить закрытие окна:
+
+```csharp
+Shot.ShotTaskExecutor.CloseOrphanWindows();
+```
+
 - `RequiresScenePreflight` не менять — `shot` в список не входит.
 
-Поведение при таймауте/отмене: `CheckTimeout`/`CancelActive` отменяют токен и завершают запись; висящий `delayCall` исполнителя увидит отменённый токен через `IsCanceled()` и закроет окно.
+При таймауте и отмене `CheckTimeout`/`CancelActive` отменяют токен и завершают запись; следующий `Tick()` увидит отменённый токен и закроет окно. Дополнительно окна подчищает `CloseOrphanWindows` при старте моста.
 
 ## CLI: изменения
 
@@ -761,27 +972,31 @@ if (kind == "shot" && fileName.EndsWith(".shot.json", StringComparison.OrdinalIg
     }
 
 - Ровно одно из `pose` (явная поза SceneView: pivot/rotation/size/orthographic) или `frame` (автокадрирование объекта по имени или пути `Root/Child`, как клавиша F).
-- `width`/`height` — дефолт 1280x720. Снимок делается с реального экрана: редактор должен быть виден и не свёрнут, разрешение больше монитора клампится (warning в `Logs`).
-- `gizmos` — дефолт `true`.
+- `width`/`height` — дефолт 1280x720, потолок 1920x1080. Если экран меньше, размер пропорционально уменьшается — фактический указан в `ReturnValue`, факт уменьшения в `Logs`.
+- `gizmos` — дефолт `true` (иконки компонентов, гизмо). `grid` — дефолт `false`.
+- Снимок делается перерисовкой окна в текстуру, а не с экрана: перекрытие окна Unity, потеря фокуса и свёрнутый редактор на результат не влияют.
 - Пути готовых PNG приходят в поле `Artifacts` результата — читай их обычным просмотром изображений.
 - Снимается текущая открытая сцена. Нужна другая — сначала открой её отдельным `csharp`-таском.
 ```
 
 ## Проверка
 
-- Пересобрать CLI (`dotnet build AgentBridgeCli -c Release`), убедиться что версия `agentbridge --version` = 1.8.0.
+- Пересобрать CLI (`dotnet build AgentBridgeCli -c Release`), убедиться что `agentbridge --version` печатает 1.8.0.
 - В открытом Unity-проекте выполнить `agentbridge compile` — пакет собирается без ошибок.
-- Смоук: создать `Temp/AgentBridge/Task_shot_smoke.shot.json` с одним `frame`-шотом на любой объект сцены и одним `pose`-шотом, выполнить `agentbridge shot`, убедиться: `Status == "success"`, PNG существуют по путям из `Artifacts`, содержимое соответствует ракурсам.
-- Кламп: запросить 8000x8000, убедиться что в `Logs` есть warning и PNG уменьшен.
+- Смоук: создать `Temp/AgentBridge/Task_shot_smoke.shot.json` с одним `frame`-шотом на объект сцены и одним `pose`-шотом, выполнить `agentbridge shot`, убедиться: `Status == "success"`, оба PNG существуют по путям из `Artifacts`, изображения не перевёрнуты, цвета совпадают с реальным Scene View, редакторских оверлеев нет, гизмо и иконки на месте.
+- Размер: запросить 1920×1080 на экране меньше этого — убедиться, что в `Logs` есть строка про уменьшение, PNG уменьшен пропорционально и соотношение сторон сохранено.
+- Фон: запустить смоук ещё раз, свернув Unity сразу после старта таска — результат должен совпасть с прогоном при видимом редакторе.
 - Ошибка: указать несуществующий `frame.target`, убедиться что `Status == "runtime_error"` и временное окно SceneView не осталось открытым.
-
-## Отклонения при реализации
-
-- Двойного `EditorApplication.delayCall` не хватает: свежесозданное окно успевает отрисоваться лишь частично, и PNG получался пустым (проверено на 935x935). Вместо цепочки `delayCall` исполнитель подписывается на `EditorApplication.update` и «отстаивает» окно: 0.4 c повторяет `Focus`/`Repaint` каждый тик, затем просит последнюю отрисовку и через 0.2 c читает экран.
-- Перед чтением экрана размер снимка дополнительно ограничивается фактическим `_window.position` (`ClampToWindow`) — если оконный менеджер выдал окно меньше запрошенного, в PNG не попадут пиксели рабочего стола; факт усечения пишется в `Logs`.
-- В `BridgeStatusWriter.Current.Capabilities` добавлен `"shot"`.
 
 ## После выполнения
 
 - Измени статус в начале документа на `Выполнено`.
 - Уточни у заказчика, нужно ли обновить документацию проекта (README, шаблоны UNITYAGENT) под новую команду.
+
+## Правки после реализации
+
+По итогам ревью имена разведены, чтобы `shot` сцены и `shot` UI-префаба не путались:
+
+- команда `shot` → `sceneshot`, payload `<TaskId>.shot.json` → `<TaskId>.sceneshot.json`, kind `"sceneshot"`;
+- Unity-сторона: `Editor/Shot/` → `Editor/SceneShot/`, namespace `AgentBridge.Shot` → `AgentBridge.SceneShot`, `ShotTaskExecutor` → `SceneShotTaskExecutor`, `ShotPayloadParser` → `SceneShotPayloadParser`;
+- действие `shot` в `.ui.json` → `uishot`, старое имя оставлено молчаливым алиасом в `UiTaskRunner`.
