@@ -64,11 +64,23 @@ public static class Task_XXX
 5. Не добавлять зависимости от пользовательских сборок проекта — только Unity API и кастомные API из `UNITYAGENT.md`. Скрипт компилируется изолированно от `Assets`, поэтому доступны только уже загруженные в домен сборки.
 6. Запрещены блокирующие конструкции: `.Wait()`, `.GetAwaiter().GetResult()`, `.Result` на task-подобных выражениях, `Thread.Sleep`, `while (true)`/`for (;;)` без `await` внутри. Мост отклоняет такой код до исполнения (`rejected`, причина в `Diagnostics`/`Logs`) — переписывай через `await`.
 7. Для смены Editor-сцен используй только `AgentBridge.AgentSceneManager`. Прямые вызовы `EditorSceneManager.OpenScene` / `NewScene` / `CloseScene` / `RestoreSceneManagerSetup` и `SceneManager.LoadScene*` отклоняются guardrail: безопасный API сначала разрешает dirty-состояние без модального save-диалога.
-8. **Упавший таск чини, а не удаляй.** Битый `.cs` в `Temp/AgentBridge/` ничего не блокирует (задачи не участвуют в компиляции проекта) — просто исправь файл и запусти `csharp` заново с тем же или новым именем.
+8. Запрещены модальные и интерактивные Editor API — guardrail отклоняет таск до исполнения: `EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo`, `EditorSceneManager.SaveModifiedScenesIfUserWantsTo`, `EditorApplication.EnterPlaymode`, `EditorApplication.ExitPlaymode`, `EditorApplication.Exit`, присваивание `EditorApplication.isPlaying` и `EditorApplication.isPaused`, `EditorUtility.DisplayDialog`, `EditorUtility.DisplayDialogComplex`, `EditorUtility.OpenFilePanel`, `EditorUtility.OpenFolderPanel`, `EditorUtility.SaveFilePanel`, `EditorUtility.SaveFilePanelInProject`, `PrefabStageUtility.OpenPrefab`, `AssetDatabase.OpenAsset`, `TestRunnerApi.Execute`. Тесты запускай командой `agentbridge tests`, а не из кода таска.
+9. **Упавший таск чини, а не удаляй.** Битый `.cs` в `Temp/AgentBridge/` ничего не блокирует (задачи не участвуют в компиляции проекта) — просто исправь файл и запусти `csharp` заново с тем же или новым именем.
 
-### Политика dirty untitled-сцен
+### Политика сцен
 
-`ProjectSettings/AgentBridge.json` содержит `DirtyUntitledScenePolicy`. Значение `Discard` используется по умолчанию и закрывает dirty untitled-сцены без сохранения перед задачей. `Block` оставляет сцену открытой и завершает задачу как `runtime_error`, не показывая диалог. Настройка доступна в Unity через **Tools → Agent Bridge → Setup...**.
+Префлайт scene safety выполняется перед задачей любого типа: `csharp`, `ui`, `tests`, `compile`, `sceneshot`. Он проверяет все открытые сцены (включая выгруженные) и открытый Prefab Stage; модального save-диалога мост не показывает никогда.
+
+`ProjectSettings/AgentBridge.json`:
+
+- `DirtyScenePolicy` — `Save` по умолчанию: dirty-сцена с путём и dirty Prefab Stage тихо сохраняются перед задачей. `Block` — задача завершается как `runtime_error` до исполнения, сцена и стейдж остаются как были.
+- `DirtyUntitledScenePolicy` — `Discard` по умолчанию: dirty untitled-сцены закрываются без сохранения. `Block` оставляет сцену открытой и завершает задачу как `runtime_error`.
+
+Открытая, но выгруженная dirty-сцена всегда блокирует задачу отдельным сообщением — её нельзя ни сохранить, ни закрыть от имени моста; попроси пользователя разобраться с ней.
+
+Если сцену пачкает что-то уже после префлайта (работа человека в редакторе, доменный релоад, editor-callback проекта), watcher моста приводит редактор в чистое состояние на ближайшем тике и пишет в `Logs` задачи путь сцены, действие и источник загрязнения. Внутри уже стартовавшего тестового прогона сцена с путём сохраняется даже при `DirtyScenePolicy = Block`.
+
+Обе настройки доступны в Unity через **Tools → Agent Bridge → Setup...**.
 
 ## Кастомные API проекта
 
@@ -131,6 +143,7 @@ agentbridge csharp Temp/AgentBridge/Task_20260226_143052_871_a3f.cs
 - Снимок делается перерисовкой окна в текстуру, а не с экрана: перекрытие окна Unity, потеря фокуса и свёрнутый редактор на результат не влияют.
 - Пути готовых PNG приходят в поле `Artifacts` результата — читай их обычным просмотром изображений.
 - Снимается текущая открытая сцена. Нужна другая — сначала открой её отдельным `csharp`-таском.
+- Сам таск сцену не меняет, но перед ним отрабатывает общий префлайт сцен: при `DirtyScenePolicy = Save` несохранённая сцена будет тихо сохранена, при `Block` таск завершится `runtime_error`.
 
 ```bash
 agentbridge sceneshot Temp/AgentBridge/Task_20260226_143052_871_a3f.sceneshot.json

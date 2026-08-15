@@ -48,13 +48,24 @@ PlayMode-прогон надёжен при любой настройке Enter 
 
 Не вызывай `EditorSceneManager.OpenScene`, `NewScene`, `CloseScene`, `RestoreSceneManagerSetup` и runtime `SceneManager.LoadScene*` напрямую: guardrail отклонит задачу. Используй `AgentBridge.AgentSceneManager` с теми же основными операциями. Перед переходом он сохраняет dirty-сцены с путём, удаляет тестовые сцены и применяет политику dirty untitled-сцен без модального окна.
 
-Политика задаётся в `ProjectSettings/AgentBridge.json` полем `DirtyUntitledScenePolicy`: `Discard` (по умолчанию) закрывает dirty untitled-сцену без сохранения; `Block` оставляет её открытой и завершает задачу как `runtime_error`. Настройка доступна в **Tools → Agent Bridge → Setup...**.
+Guardrail также отклоняет модальные и интерактивные Editor API: `EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo` / `SaveModifiedScenesIfUserWantsTo`, `EditorApplication.EnterPlaymode` / `ExitPlaymode` / `Exit`, присваивание `EditorApplication.isPlaying` и `isPaused`, `EditorUtility.DisplayDialog` / `DisplayDialogComplex` / `OpenFilePanel` / `OpenFolderPanel` / `SaveFilePanel` / `SaveFilePanelInProject`, `PrefabStageUtility.OpenPrefab`, `AssetDatabase.OpenAsset`, `TestRunnerApi.Execute`.
+
+## Политика сцен
+
+Префлайт scene safety выполняется перед задачей любого типа: `csharp`, `ui`, `tests`, `compile`, `sceneshot`. Он смотрит на все открытые сцены (включая выгруженные) и на открытый Prefab Stage.
+
+- `DirtyScenePolicy` в `ProjectSettings/AgentBridge.json`: `Save` (по умолчанию) — dirty-сцена с путём и dirty Prefab Stage тихо сохраняются перед задачей; `Block` — задача завершается как `runtime_error` до исполнения payload, сцена и стейдж не трогаются, диалог не появляется.
+- `DirtyUntitledScenePolicy`: `Discard` (по умолчанию) закрывает dirty untitled-сцену без сохранения; `Block` оставляет её открытой и завершает задачу как `runtime_error`.
+- Открытая, но выгруженная dirty-сцена всегда блокирует задачу: сохранить её нельзя, а закрывать её мост не имеет права. Загрузи и сохрани её сам либо закрой.
+- На время задачи и на всё окно тестового прогона взведён watcher: если сцену пачкает что-то уже после префлайта, он приводит редактор в чистое состояние на ближайшем тике и пишет в логи задачи путь сцены, применённое действие и источник загрязнения. Внутри уже стартовавшего прогона сцена с путём сохраняется даже при `DirtyScenePolicy = Block` — отменить прогон в этот момент нельзя.
+
+Обе настройки доступны в **Tools → Agent Bridge → Setup...**.
 
 ## Скриншоты сцены
 
 Чтобы посмотреть на открытую сцену, не пиши C#-таск со `SceneView` и захватом пикселей — есть отдельный тип задачи: `agentbridge sceneshot <файл>.sceneshot.json`. Декларативный JSON перечисляет ракурсы (`frame` — автокадрирование объекта, `pose` — явная поза камеры), мост снимает каждый в PNG и возвращает пути в `Artifacts`. Снимок делается перерисовкой вью в текстуру, поэтому не зависит от того, виден ли редактор на экране. Формат и ограничения — в скилле `unity-bridge`.
 
-Снимается текущая открытая сцена как есть, включая несохранённые изменения; таск ничего не меняет. Нужна другая сцена — сначала открой её C#-таском через `AgentBridge.AgentSceneManager`.
+Снимается текущая открытая сцена; сам таск её не меняет, но перед ним отрабатывает общий префлайт сцен — при `DirtyScenePolicy = Save` несохранённая сцена будет тихо сохранена, при `Block` таск завершится `runtime_error`. Нужна другая сцена — сначала открой её C#-таском через `AgentBridge.AgentSceneManager`.
 
 ## Примечания
 

@@ -24,6 +24,8 @@ namespace AgentBridge
 			allNodes.Add((object)root);
 			CollectDescendants(root, allNodes);
 
+			HashSet<string> testRunnerApiVariables = CollectTestRunnerApiVariables(allNodes);
+
 			foreach (object nodeObj in allNodes)
 			{
 				dynamic node = nodeObj;
@@ -33,11 +35,15 @@ namespace AgentBridge
 					CheckWaitCall(node, violations);
 					CheckGetAwaiterGetResult(node, violations);
 					CheckThreadSleep(node, violations);
-					CheckSceneTransitionCall(node, violations);
+					CheckForbiddenCall(node, testRunnerApiVariables, violations);
 				}
 				else if (IsKind(node, "SimpleMemberAccessExpression"))
 				{
 					CheckResultAccess(node, violations);
+				}
+				else if (IsKind(node, "SimpleAssignmentExpression"))
+				{
+					CheckPlayModeAssignment(node, violations);
 				}
 				else if (IsKind(node, "WhileStatement"))
 				{
@@ -52,7 +58,10 @@ namespace AgentBridge
 			return violations.Count == 0;
 		}
 
-		private static void CheckSceneTransitionCall(dynamic invocation, List<GuardrailViolation> violations)
+		private const string ModalApiReason = "modal or interactive editor API is not allowed in agent tasks";
+
+		private static void CheckForbiddenCall(dynamic invocation, HashSet<string> testRunnerApiVariables,
+			List<GuardrailViolation> violations)
 		{
 			dynamic expr = invocation.Expression;
 			if (!IsKind(expr, "SimpleMemberAccessExpression"))
@@ -61,14 +70,9 @@ namespace AgentBridge
 			}
 
 			string target = expr.Expression.ToString();
-			string typeName = target;
-			int lastDot = typeName.LastIndexOf('.');
-			if (lastDot >= 0)
-			{
-				typeName = typeName.Substring(lastDot + 1);
-			}
-
+			string typeName = LastSegment(target);
 			string methodName = (string)expr.Name.Identifier.Text;
+
 			bool editorTransition = typeName == "EditorSceneManager"
 				&& (methodName == "OpenScene"
 					|| methodName == "NewScene"
@@ -82,7 +86,103 @@ namespace AgentBridge
 			if (editorTransition || runtimeTransition)
 			{
 				AddViolation(violations, invocation, "direct scene transition is not allowed; use AgentBridge.AgentSceneManager");
+				return;
 			}
+
+			if (IsModalCall(typeName, methodName) || IsTestRunnerExecute(target, methodName, testRunnerApiVariables))
+			{
+				AddViolation(violations, invocation, ModalApiReason);
+			}
+		}
+
+		private static bool IsModalCall(string typeName, string methodName)
+		{
+			switch (typeName)
+			{
+				case "EditorSceneManager":
+					return methodName == "SaveCurrentModifiedScenesIfUserWantsTo"
+						|| methodName == "SaveModifiedScenesIfUserWantsTo";
+				case "EditorApplication":
+					return methodName == "EnterPlaymode"
+						|| methodName == "ExitPlaymode"
+						|| methodName == "Exit";
+				case "EditorUtility":
+					return methodName == "DisplayDialog"
+						|| methodName == "DisplayDialogComplex"
+						|| methodName == "OpenFilePanel"
+						|| methodName == "OpenFolderPanel"
+						|| methodName == "SaveFilePanel"
+						|| methodName == "SaveFilePanelInProject";
+				case "PrefabStageUtility":
+					return methodName == "OpenPrefab";
+				case "AssetDatabase":
+					return methodName == "OpenAsset";
+				default:
+					return false;
+			}
+		}
+
+		private static bool IsTestRunnerExecute(string target, string methodName, HashSet<string> testRunnerApiVariables)
+		{
+			if (methodName != "Execute")
+			{
+				return false;
+			}
+
+			// TestRunnerApi.Execute is an instance method, so the receiver is usually a local.
+			// Without a semantic model the declaration text is what ties the local to the type.
+			return target.IndexOf("TestRunnerApi", StringComparison.Ordinal) >= 0
+				|| testRunnerApiVariables.Contains(target);
+		}
+
+		private static HashSet<string> CollectTestRunnerApiVariables(List<object> allNodes)
+		{
+			var names = new HashSet<string>(StringComparer.Ordinal);
+
+			foreach (object nodeObj in allNodes)
+			{
+				dynamic node = nodeObj;
+				if (!IsKind(node, "VariableDeclaration"))
+				{
+					continue;
+				}
+
+				string declaration = node.ToString();
+				if (declaration.IndexOf("TestRunnerApi", StringComparison.Ordinal) < 0)
+				{
+					continue;
+				}
+
+				foreach (dynamic variable in node.Variables)
+				{
+					names.Add((string)variable.Identifier.Text);
+				}
+			}
+
+			return names;
+		}
+
+		private static void CheckPlayModeAssignment(dynamic assignment, List<GuardrailViolation> violations)
+		{
+			dynamic left = assignment.Left;
+			if (!IsKind(left, "SimpleMemberAccessExpression"))
+			{
+				return;
+			}
+
+			string typeName = LastSegment(left.Expression.ToString());
+			string memberName = (string)left.Name.Identifier.Text;
+
+			if (typeName == "EditorApplication" && (memberName == "isPlaying" || memberName == "isPaused"))
+			{
+				AddViolation(violations, assignment, ModalApiReason);
+			}
+		}
+
+		private static string LastSegment(string expression)
+		{
+			int lastDot = expression.LastIndexOf('.');
+			return lastDot >= 0 ? expression.Substring(lastDot + 1) : expression;
 		}
 
 		private static void CollectDescendants(dynamic node, List<object> result)

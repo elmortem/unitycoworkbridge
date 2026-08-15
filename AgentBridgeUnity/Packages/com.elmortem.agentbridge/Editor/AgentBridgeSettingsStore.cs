@@ -146,6 +146,21 @@ namespace AgentBridge
 			Save(settings);
 		}
 
+		public static bool GetSaveDirtyScenes()
+		{
+			AgentBridgeSettings settings = Load();
+			// Missing, empty and unknown values mean Save: silent saving is the safe default,
+			// blocking every task is not.
+			return !string.Equals(settings.DirtyScenePolicy, "Block", StringComparison.OrdinalIgnoreCase);
+		}
+
+		public static void SetSaveDirtyScenes(bool value)
+		{
+			AgentBridgeSettings settings = Load();
+			settings.DirtyScenePolicy = value ? "Save" : "Block";
+			Save(settings);
+		}
+
 		private static AgentBridgeSettings Load()
 		{
 			double now = CurrentTime();

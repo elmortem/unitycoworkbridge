@@ -150,6 +150,8 @@ namespace AgentBridge
 
 		public static void Cancel()
 		{
+			PlayModeSceneState state = Read();
+			SceneDirtyWatcher.Disarm(state != null ? state.TaskId : "");
 			DeleteStateFile();
 		}
 
@@ -274,6 +276,14 @@ namespace AgentBridge
 			catch (Exception ex)
 			{
 				recoveryError = AppendError(recoveryError, ex.GetBaseException().Message);
+			}
+
+			// Restoring the setup can leave the editor dirty again; normalize before the task
+			// is finalized so the next task never inherits a scene that opens a save dialog.
+			string tailError;
+			if (!SceneSafetyGuard.TryPrepareForTask(out tailError) && !string.IsNullOrEmpty(tailError))
+			{
+				recoveryError = AppendError(recoveryError, tailError);
 			}
 
 			try

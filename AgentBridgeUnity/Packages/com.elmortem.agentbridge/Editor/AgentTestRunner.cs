@@ -34,6 +34,20 @@ namespace AgentBridge
 			}
 
 			TestMode mode = ParseMode(testMode);
+
+			// Test Framework 1.1.33 puts SaveModiedSceneTask first in both the EditMode and
+			// the PlayMode task list, so the preflight has to cover both modes.
+			string preflightError;
+			if (!SceneSafetyGuard.TryPrepareForTask(out preflightError))
+			{
+				abortedResult = new TestRunResult
+				{
+					aborted = true,
+					message = preflightError
+				};
+				return false;
+			}
+
 			if (mode == TestMode.PlayMode)
 			{
 				string recoveryError;
@@ -53,6 +67,29 @@ namespace AgentBridge
 			SessionState.SetString(CoordinatorTestTaskKey, taskId);
 			SessionState.SetString(CoordinatorTestModeKey, mode.ToString());
 
+			// The job runner ticks asynchronously after Execute returns, so anything can dirty
+			// a scene between the preflight and SaveModiedSceneTask. Verify once more, then
+			// arm the watcher before Execute: its update subscription precedes the runner's.
+			string verifyError;
+			if (!SceneSafetyGuard.TryVerifyClean(out verifyError))
+			{
+				SessionState.EraseString(CoordinatorTestTaskKey);
+				SessionState.EraseString(CoordinatorTestModeKey);
+				if (mode == TestMode.PlayMode)
+				{
+					PlayModeSceneRecovery.Cancel();
+				}
+
+				abortedResult = new TestRunResult
+				{
+					aborted = true,
+					message = verifyError
+				};
+				return false;
+			}
+
+			SceneDirtyWatcher.Arm(taskId);
+
 			try
 			{
 				TestRunnerApi api = ScriptableObject.CreateInstance<TestRunnerApi>();
@@ -62,6 +99,7 @@ namespace AgentBridge
 			{
 				SessionState.EraseString(CoordinatorTestTaskKey);
 				SessionState.EraseString(CoordinatorTestModeKey);
+				SceneDirtyWatcher.Disarm(taskId);
 				if (mode == TestMode.PlayMode)
 				{
 					PlayModeSceneRecovery.Cancel();
@@ -109,6 +147,14 @@ namespace AgentBridge
 			{
 				return;
 			}
+
+			if (record.Logs == null)
+			{
+				record.Logs = new List<string>();
+			}
+
+			record.Logs.AddRange(SceneDirtyWatcher.DrainLogs());
+			SceneDirtyWatcher.Disarm(taskId);
 
 			record.Tests = run;
 			if (run == null || run.aborted || !string.IsNullOrEmpty(recoveryError))

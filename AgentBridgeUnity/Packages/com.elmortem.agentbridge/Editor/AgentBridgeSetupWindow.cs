@@ -25,6 +25,21 @@ namespace AgentBridge
 		private void OnGUI()
 		{
 			EditorGUILayout.LabelField("Scene safety", EditorStyles.boldLabel);
+
+			bool saveDirtyScenes = AgentBridgeSettingsStore.GetSaveDirtyScenes();
+			bool nextSaveDirtyScenes = EditorGUILayout.ToggleLeft("Save dirty scenes before agent tasks", saveDirtyScenes);
+			if (nextSaveDirtyScenes != saveDirtyScenes)
+			{
+				AgentBridgeSettingsStore.SetSaveDirtyScenes(nextSaveDirtyScenes);
+			}
+
+			EditorGUILayout.HelpBox(
+				nextSaveDirtyScenes
+					? "Dirty scenes and prefab stages are saved silently before an agent task changes scenes."
+					: "Agent tasks stop without opening a save dialog while a dirty scene or prefab stage is open.",
+				MessageType.Info);
+			EditorGUILayout.Space();
+
 			bool discardUntitledScenes = AgentBridgeSettingsStore.GetDiscardDirtyUntitledScenes();
 			bool nextDiscardUntitledScenes = EditorGUILayout.ToggleLeft("Discard dirty untitled scenes", discardUntitledScenes);
 			if (nextDiscardUntitledScenes != discardUntitledScenes)

@@ -15,5 +15,6 @@ namespace AgentBridge
 		public bool EmitPdb = true;
 		public int ClientWaitSeconds = 110;
 		public string DirtyUntitledScenePolicy = "Discard";
+		public string DirtyScenePolicy = "Save";
 	}
 }

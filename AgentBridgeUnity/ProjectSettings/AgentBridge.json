@@ -8,5 +8,6 @@
     "RoslynLocalPath": "",
     "EmitPdb": true,
     "ClientWaitSeconds": 110,
-    "DirtyUntitledScenePolicy": "Discard"
+    "DirtyUntitledScenePolicy": "Discard",
+    "DirtyScenePolicy": "Save"
 }

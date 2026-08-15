@@ -99,11 +99,23 @@ namespace AgentBridge
 
 			TaskRecordOutcome outcome = CompileTaskExecutor.ConsumePending(taskId);
 
+			// A compile task finalizes after its domain reload, past any CleanupActive call,
+			// so the watcher it armed is released here.
+			SceneDirtyWatcher.Disarm(taskId);
+			List<string> watcherLogs = SceneDirtyWatcher.DrainLogs();
+
 			TaskRecord record;
 			if (!TaskJournal.TryRead(taskId, out record))
 			{
 				return;
 			}
+
+			if (record.Logs == null)
+			{
+				record.Logs = new List<string>();
+			}
+
+			record.Logs.AddRange(watcherLogs);
 
 			record.Status = outcome.Status;
 			record.Diagnostics = outcome.Diagnostics;
@@ -326,15 +338,16 @@ namespace AgentBridge
 			};
 			TaskJournal.Write(_activeRecord);
 
-			if (RequiresScenePreflight(request.Kind))
+			// Every kind runs the preflight: compile forces a domain reload and sceneshot
+			// ticks the editor, and both can reach Unity code that opens the save dialog.
+			string sceneError;
+			if (!SceneSafetyGuard.TryPrepareForTask(out sceneError))
 			{
-				string sceneError;
-				if (!SceneSafetyGuard.TryPrepareForTask(out sceneError))
-				{
-					FinishTask("runtime_error", null, new List<string> { sceneError }, false);
-					return;
-				}
+				FinishTask("runtime_error", null, new List<string> { sceneError }, false);
+				return;
 			}
+
+			SceneDirtyWatcher.Arm(_activeRecord.Id);
 
 			try
 			{
@@ -344,11 +357,6 @@ namespace AgentBridge
 			{
 				FinishTask("runtime_error", null, new List<string> { ex.Message }, false);
 			}
-		}
-
-		private static bool RequiresScenePreflight(string kind)
-		{
-			return kind == "csharp" || kind == "ui" || kind == "tests";
 		}
 
 		private static void RunTask(TaskRequest request)
@@ -478,6 +486,8 @@ namespace AgentBridge
 
 			if (!started)
 			{
+				// No run was handed to Test Framework, so nothing will disarm the watcher later.
+				SceneDirtyWatcher.Disarm(request.Id);
 				_activeRecord.Tests = abortedResult;
 				FinishTask("runtime_error", null, new List<string> { abortedResult.message }, false);
 			}
@@ -589,6 +599,8 @@ namespace AgentBridge
 				logs.AddRange(extraLogs);
 			}
 
+			logs.AddRange(SceneDirtyWatcher.DrainLogs());
+
 			_activeRecord.Status = status;
 			_activeRecord.ReturnValue = returnValue;
 			_activeRecord.Logs = logs;
@@ -603,6 +615,13 @@ namespace AgentBridge
 
 		private static void CleanupActive()
 		{
+			// A tests task keeps the watcher armed across the whole Test Framework run,
+			// including its domain reloads; AgentTestRunner disarms it on finalization.
+			if (_activeRecord == null || _activeRecord.Kind != "tests")
+			{
+				SceneDirtyWatcher.Disarm(_activeTaskId ?? "");
+			}
+
 			if (_activeLogScope != null)
 			{
 				_activeLogScope.Dispose();

@@ -223,6 +223,25 @@ The class name must match the file name — that name becomes the `TaskId`. `Run
 
 Bridge cleans up on its own: while idle, it keeps only the last N tasks per `KeepCompletedCount` (default 10, configurable in `ProjectSettings/AgentBridge.json`), removing older journal entries together with their inbox files and `Artifacts/<id>/` directory. Nothing to clean up by hand.
 
+## Scene Safety
+
+No bridge path ever opens Unity's modal save dialog. A blocked Editor is a hung agent, so every task kind — `csharp`, `ui`, `compile`, `tests`, `sceneshot` — runs a scene preflight first. It inspects every open scene, including scenes that are open but unloaded, plus the current prefab stage.
+
+Two settings in `ProjectSettings/AgentBridge.json`, both exposed in **Tools → Agent Bridge → Setup...**:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `DirtyScenePolicy` | `Save` | `Save` silently saves a dirty scene that has a path, and a dirty prefab stage, before the task runs. `Block` ends the task as `runtime_error` before its payload executes and leaves the scene and the stage untouched. |
+| `DirtyUntitledScenePolicy` | `Discard` | `Discard` closes a dirty untitled scene without saving. `Block` leaves it open and ends the task as `runtime_error`. |
+
+A missing, empty or unknown policy value is read as the default.
+
+An open-but-unloaded dirty scene always blocks the task regardless of policy: it cannot be saved, and closing someone's scene is not the bridge's call. Load and save it, or close it.
+
+The preflight is a snapshot, and the Unity Test Framework runs its task list asynchronously — arbitrary Editor ticks pass between the preflight and its `SaveModiedSceneTask`. So the bridge also arms a watcher for the duration of the task and of the whole test run: whatever dirties a scene afterwards (a person working in the Editor, a domain reload, a project editor callback) is normalized on the next tick, and the task `Logs` record the scene path, the action taken and a trimmed call stack of the source. Inside an already started test run a scene with a path is saved even under `DirtyScenePolicy = Block` — Test Framework 1.1.33 has no way to cancel a run at that point, so the only alternative left would be the dialog.
+
+`csharp` tasks are additionally denied the interactive Editor API at compile time: `EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo` / `SaveModifiedScenesIfUserWantsTo`, `EditorApplication.EnterPlaymode` / `ExitPlaymode` / `Exit`, assignments to `EditorApplication.isPlaying` and `isPaused`, `EditorUtility.DisplayDialog` / `DisplayDialogComplex` / `OpenFilePanel` / `OpenFolderPanel` / `SaveFilePanel` / `SaveFilePanelInProject`, `PrefabStageUtility.OpenPrefab`, `AssetDatabase.OpenAsset` and `TestRunnerApi.Execute`. Scene transitions go through `AgentBridge.AgentSceneManager`, tests through `agentbridge tests`.
+
 ## Custom Project APIs
 
 If the project has custom APIs (libraries, tools, builders), you can describe them for Bridge so that Claude uses them when generating scripts. Create a `UNITYAGENT.md` file next to the library code.
@@ -306,7 +325,7 @@ Order within a task: all `apply`/`delete` run first over the loaded prefab conte
 - `width`/`height` default to 1280×720 and top out at 1920×1080. The Scene View window is a real OS window, so a request larger than the desktop is scaled down by one factor on both axes to keep the framing; `Logs` notes the reduction and `ReturnValue` carries the real size.
 - `gizmos` defaults to `true` and `grid` to `false`; `name` becomes the PNG file name.
 - PNGs land in `Library/AgentBridge/Artifacts/<id>/` and their absolute paths come back in `Artifacts`.
-- Only the open scene is captured, unsaved state included — the task changes nothing. To photograph another scene, open it with a `csharp` task first. A failing shot ends the whole task with `runtime_error`; already captured PNGs stay in `Artifacts`.
+- Only the open scene is captured and the shot task itself changes nothing, but the common scene preflight runs before it: under `DirtyScenePolicy = Save` an unsaved scene is silently saved first, under `Block` the task ends as `runtime_error`. To photograph another scene, open it with a `csharp` task first. A failing shot ends the whole task with `runtime_error`; already captured PNGs stay in `Artifacts`.
 
 ### Layout conventions (`UNITYAGENT-UI.md`)
 
