@@ -13,10 +13,13 @@ namespace AgentBridge
 	{
 		private const float ScanIntervalSeconds = 0.25f;
 		private const float TrimIntervalSeconds = 30f;
+		private const float QueueRefreshIntervalSeconds = 2f;
 
 		private static double _lastScanTime;
 		private static double _lastTrimTime;
+		private static double _lastQueueRefreshTime;
 		private static readonly Dictionary<string, CachedHash> _hashCache = new Dictionary<string, CachedHash>();
+		private static readonly Dictionary<string, string> _rejectedTaskHashes = new Dictionary<string, string>();
 		private static bool _pendingTimeoutReload;
 
 		private static string _activeTaskId;
@@ -27,6 +30,8 @@ namespace AgentBridge
 		private static CSharpTaskExecutor _activeCSharpExecutor;
 		private static SceneShot.SceneShotTaskExecutor _activeShotExecutor;
 		private static TaskContext _activeShotContext;
+		private static List<string> _activeRestoreLogs;
+		private static string _queueSignature = "";
 
 		public static void Start()
 		{
@@ -122,6 +127,7 @@ namespace AgentBridge
 			record.ForeignErrors = outcome.ForeignErrors;
 			record.FinishedAtUtc = DateTime.UtcNow.ToString("o");
 			TaskJournal.Write(record);
+			AgentSessionScheduler.OnTaskFinished(record.AgentSessionId, DateTime.UtcNow);
 		}
 
 		public static void Stop()
@@ -167,6 +173,7 @@ namespace AgentBridge
 			if (_activeTaskId != null)
 			{
 				CheckTimeout(now);
+				RefreshQueueStatus(now);
 
 				if (_activeCSharpExecutor != null)
 				{
@@ -232,23 +239,50 @@ namespace AgentBridge
 
 		private static void TryStartNextTask()
 		{
+			List<PendingTaskInfo> pending = BuildPendingList(null);
+
+			DateTime nowUtc = DateTime.UtcNow;
+			string idleHolder = SchedulerStateStore.State.HolderAgentSessionId;
+			AgentSessionScheduler.TickIdle(nowUtc, pending.Count > 0);
+			if (!string.IsNullOrEmpty(idleHolder) && string.IsNullOrEmpty(SchedulerStateStore.State.HolderAgentSessionId))
+			{
+				// The lease expired with an empty queue, so the editor is idle and the scenes on
+				// screen still belong to the session that just lost it.
+				string idleError;
+				if (!SessionContextSwitcher.TrySaveContext(idleHolder, out idleError))
+				{
+					Debug.LogWarning("[AgentBridge] Failed to save the scene context of an idle agent session: " + idleError);
+				}
+			}
+
+			UpdateQueueStatus(pending);
+
+			PendingTaskInfo next;
+			bool holderChanged;
+			string previousHolder;
+			if (!AgentSessionScheduler.TryPick(pending, nowUtc, out next, out holderChanged, out previousHolder))
+			{
+				return;
+			}
+
+			StartTask(next, holderChanged, previousHolder);
+		}
+
+		private static List<PendingTaskInfo> BuildPendingList(string excludeTaskId)
+		{
+			var pending = new List<PendingTaskInfo>();
 			if (!Directory.Exists(BridgePaths.Inbox))
 			{
-				return;
+				return pending;
 			}
 
-			string[] taskFiles = Directory.GetFiles(BridgePaths.Inbox, "*.task.json");
-			if (taskFiles.Length == 0)
-			{
-				return;
-			}
-
-			string oldest = null;
-			DateTime oldestTime = DateTime.MaxValue;
-
-			foreach (string file in taskFiles)
+			foreach (string file in Directory.GetFiles(BridgePaths.Inbox, "*.task.json"))
 			{
 				string id = IdOf(file);
+				if (id == excludeTaskId)
+				{
+					continue;
+				}
 
 				TaskRecord existing;
 				if (TaskJournal.TryRead(id, out existing) && IsTerminal(existing.Status))
@@ -260,25 +294,88 @@ namespace AgentBridge
 					}
 				}
 
-				DateTime created = File.GetCreationTimeUtc(file);
-				if (created < oldestTime)
+				// A task file that StartTask already refused cannot become runnable on its own.
+				// Keeping it in the queue would hand it the lease again on every scan and starve
+				// every other session behind it.
+				string rejectedHash;
+				if (_rejectedTaskHashes.TryGetValue(file, out rejectedHash)
+					&& rejectedHash == HashOf(file, PayloadPathOf(file)))
 				{
-					oldestTime = created;
-					oldest = file;
+					continue;
 				}
+
+				var info = new PendingTaskInfo
+				{
+					Id = id,
+					TaskFilePath = file,
+					CreatedUtc = File.GetCreationTimeUtc(file),
+					EffectiveSessionId = AgentSessionScheduler.EffectiveSessionId("", id),
+					Note = "",
+					Kind = ""
+				};
+
+				try
+				{
+					TaskRequest request = JsonUtility.FromJson<TaskRequest>(File.ReadAllText(file));
+					if (request != null)
+					{
+						info.EffectiveSessionId = AgentSessionScheduler.EffectiveSessionId(request.AgentSessionId, id);
+						info.Note = request.Note ?? "";
+						info.Kind = request.Kind ?? "";
+					}
+				}
+				catch
+				{
+					// An unreadable request stays in the queue as its own anonymous session;
+					// StartTask rejects it with the same message as before.
+				}
+
+				pending.Add(info);
 			}
 
-			if (oldest == null)
+			return pending;
+		}
+
+		private static void RefreshQueueStatus(double now)
+		{
+			// The scan loop is asleep while a task runs, and that is exactly when other sessions
+			// pile up behind it: without this refresh a queued client never learns its position.
+			if (now - _lastQueueRefreshTime < QueueRefreshIntervalSeconds)
 			{
 				return;
 			}
 
-			StartTask(oldest);
+			_lastQueueRefreshTime = now;
+			UpdateQueueStatus(BuildPendingList(null));
 		}
 
-		private static void StartTask(string taskFilePath)
+		private static void UpdateQueueStatus(List<PendingTaskInfo> pending)
 		{
-			string id = IdOf(taskFilePath);
+			string holder = SchedulerStateStore.State.HolderAgentSessionId;
+			QueuedTaskStatus[] queue = AgentSessionScheduler.BuildQueue(pending);
+
+			var signature = new StringBuilder(holder ?? "");
+			foreach (QueuedTaskStatus item in queue)
+			{
+				signature.Append('|').Append(item.Id).Append(':').Append(item.Position);
+			}
+
+			string current = signature.ToString();
+			if (current == _queueSignature)
+			{
+				return;
+			}
+
+			_queueSignature = current;
+			BridgeStatusWriter.Current.HolderAgentSessionId = string.IsNullOrEmpty(holder) ? null : holder;
+			BridgeStatusWriter.Current.QueuedTasks = queue;
+			BridgeStatusWriter.Write();
+		}
+
+		private static void StartTask(PendingTaskInfo task, bool holderChanged, string previousHolder)
+		{
+			string taskFilePath = task.TaskFilePath;
+			string id = task.Id;
 			TaskRequest request;
 
 			try
@@ -288,13 +385,13 @@ namespace AgentBridge
 			}
 			catch (Exception ex)
 			{
-				WriteTerminal(id, "unknown", "rejected", "invalid task.json: " + ex.Message);
+				RejectTaskFile(taskFilePath, id, "unknown", "invalid task.json: " + ex.Message);
 				return;
 			}
 
 			if (request == null || string.IsNullOrEmpty(request.Id))
 			{
-				WriteTerminal(id, "unknown", "rejected", "invalid task.json");
+				RejectTaskFile(taskFilePath, id, "unknown", "invalid task.json");
 				return;
 			}
 
@@ -313,6 +410,7 @@ namespace AgentBridge
 			{
 				if (existing.Hash != hash)
 				{
+					_rejectedTaskHashes[taskFilePath] = hash;
 					WriteTerminal(id, request.Kind, "rejected", "id_conflict");
 				}
 
@@ -334,17 +432,43 @@ namespace AgentBridge
 				Status = "queued",
 				Hash = hash,
 				SessionId = BridgeStatusWriter.Current.SessionId,
+				AgentSessionId = task.EffectiveSessionId,
 				StartedAtUtc = DateTime.UtcNow.ToString("o")
 			};
 			TaskJournal.Write(_activeRecord);
 
-			// Every kind runs the preflight: compile forces a domain reload and sceneshot
-			// ticks the editor, and both can reach Unity code that opens the save dialog.
-			string sceneError;
-			if (!SceneSafetyGuard.TryPrepareForTask(out sceneError))
+			if (holderChanged && !string.IsNullOrEmpty(previousHolder) && !AgentSessionScheduler.IsAnonymous(previousHolder))
 			{
-				FinishTask("runtime_error", null, new List<string> { sceneError }, false);
-				return;
+				// The scheduler was not mutated yet: a failed save leaves the old holder in place
+				// and the next scan retries the rotation instead of losing its scenes.
+				string contextError;
+				if (!SessionContextSwitcher.TrySaveContext(previousHolder, out contextError))
+				{
+					FinishTask("runtime_error", null, new List<string> { contextError }, false);
+					return;
+				}
+			}
+
+			AgentSessionScheduler.CommitStart(task, holderChanged);
+
+			// Every kind but release runs the preflight: compile forces a domain reload and
+			// sceneshot ticks the editor, and both can reach Unity code that opens the save dialog.
+			if (request.Kind != "release")
+			{
+				string sceneError;
+				if (!SceneSafetyGuard.TryPrepareForTask(out sceneError))
+				{
+					FinishTask("runtime_error", null, new List<string> { sceneError }, false);
+					return;
+				}
+			}
+
+			if (NeedsScenes(request.Kind) && !SchedulerStateStore.State.HolderContextRestored)
+			{
+				_activeRestoreLogs = new List<string>();
+				SessionContextSwitcher.RestoreContext(task.EffectiveSessionId, _activeRestoreLogs);
+				SchedulerStateStore.State.HolderContextRestored = true;
+				SchedulerStateStore.Save();
 			}
 
 			SceneDirtyWatcher.Arm(_activeRecord.Id);
@@ -381,9 +505,48 @@ namespace AgentBridge
 				case "sceneshot":
 					StartShotTask(request);
 					break;
+				case "release":
+					RunReleaseTask(request);
+					break;
 				default:
 					FinishTask("rejected", null, new List<string> { "unknown kind" }, false);
 					break;
+			}
+		}
+
+		private static void RunReleaseTask(TaskRequest request)
+		{
+			string effective = AgentSessionScheduler.EffectiveSessionId(request.AgentSessionId, request.Id);
+			string holder = SchedulerStateStore.State.HolderAgentSessionId ?? "";
+
+			if (!string.Equals(holder, effective, StringComparison.Ordinal))
+			{
+				FinishTask("success", "not_holder", null, false);
+				return;
+			}
+
+			var logs = new List<string>();
+			string error;
+			if (!SessionContextSwitcher.TrySaveContext(effective, out error))
+			{
+				logs.Add(error);
+			}
+
+			AgentSessionScheduler.Release(effective);
+			FinishTask("success", "released", logs, false);
+		}
+
+		private static bool NeedsScenes(string kind)
+		{
+			switch (kind)
+			{
+				case "csharp":
+				case "ui":
+				case "tests":
+				case "sceneshot":
+					return true;
+				default:
+					return false;
 			}
 		}
 
@@ -506,6 +669,7 @@ namespace AgentBridge
 				return;
 			}
 
+			AgentSessionScheduler.OnTaskFinished(_activeRecord.AgentSessionId, DateTime.UtcNow);
 			CleanupActive();
 		}
 
@@ -601,14 +765,22 @@ namespace AgentBridge
 
 			logs.AddRange(SceneDirtyWatcher.DrainLogs());
 
+			if (_activeRestoreLogs != null && _activeRestoreLogs.Count > 0)
+			{
+				logs.InsertRange(0, _activeRestoreLogs);
+			}
+
+			DateTime finishedUtc = DateTime.UtcNow;
 			_activeRecord.Status = status;
 			_activeRecord.ReturnValue = returnValue;
 			_activeRecord.Logs = logs;
 			_activeRecord.ForeignErrors = foreignErrors;
-			_activeRecord.FinishedAtUtc = DateTime.UtcNow.ToString("o");
+			_activeRecord.FinishedAtUtc = finishedUtc.ToString("o");
 			_activeRecord.Timing.TotalMs = (int)((EditorApplication.timeSinceStartup - _activeStartTime) * 1000);
+			_activeRecord.Contention = AgentSessionScheduler.BuildContention(BuildPendingList(_activeRecord.Id), finishedUtc);
 
 			TaskJournal.Write(_activeRecord);
+			AgentSessionScheduler.OnTaskFinished(_activeRecord.AgentSessionId, DateTime.UtcNow);
 
 			CleanupActive();
 		}
@@ -632,6 +804,7 @@ namespace AgentBridge
 			_activeRecord = null;
 			_activeTaskId = null;
 			_activeCSharpExecutor = null;
+			_activeRestoreLogs = null;
 
 			// Timeout, cancel and domain reload drop the executor without ever
 			// ticking it again, so its temporary window has to be closed here.
@@ -694,8 +867,15 @@ namespace AgentBridge
 			_activeRecord.Status = "interrupted_by_domain_reload";
 			_activeRecord.FinishedAtUtc = DateTime.UtcNow.ToString("o");
 			TaskJournal.Write(_activeRecord);
+			AgentSessionScheduler.OnTaskFinished(_activeRecord.AgentSessionId, DateTime.UtcNow);
 
 			CleanupActive();
+		}
+
+		private static void RejectTaskFile(string taskFilePath, string id, string kind, string logLine)
+		{
+			_rejectedTaskHashes[taskFilePath] = HashOf(taskFilePath, PayloadPathOf(taskFilePath));
+			WriteTerminal(id, kind, "rejected", logLine);
 		}
 
 		private static void WriteTerminal(string id, string kind, string status, string logLine)

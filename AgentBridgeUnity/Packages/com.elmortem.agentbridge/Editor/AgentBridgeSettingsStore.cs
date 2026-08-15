@@ -133,6 +133,42 @@ namespace AgentBridge
 			return settings.ClientWaitSeconds;
 		}
 
+		public static int GetLeaseIdleTimeoutSeconds()
+		{
+			AgentBridgeSettings settings = Load();
+			if (settings.LeaseIdleTimeoutSeconds <= 0)
+			{
+				return 120;
+			}
+
+			return settings.LeaseIdleTimeoutSeconds;
+		}
+
+		public static void SetLeaseIdleTimeoutSeconds(int value)
+		{
+			AgentBridgeSettings settings = Load();
+			settings.LeaseIdleTimeoutSeconds = value;
+			Save(settings);
+		}
+
+		public static int GetContentionSliceSeconds()
+		{
+			AgentBridgeSettings settings = Load();
+			if (settings.ContentionSliceSeconds <= 0)
+			{
+				return 90;
+			}
+
+			return settings.ContentionSliceSeconds;
+		}
+
+		public static void SetContentionSliceSeconds(int value)
+		{
+			AgentBridgeSettings settings = Load();
+			settings.ContentionSliceSeconds = value;
+			Save(settings);
+		}
+
 		public static bool GetDiscardDirtyUntitledScenes()
 		{
 			AgentBridgeSettings settings = Load();

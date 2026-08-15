@@ -194,6 +194,14 @@ namespace AgentBridge
 			}
 
 			FinalizeCoordinatorRun(taskId, run, recoveryError);
+
+			// This path finalizes a PlayMode task after a domain reload, past any FinishTask call,
+			// so the scheduler learns about the finished task here.
+			TaskRecord record;
+			if (TaskJournal.TryRead(taskId, out record))
+			{
+				AgentSessionScheduler.OnTaskFinished(record.AgentSessionId, System.DateTime.UtcNow);
+			}
 		}
 
 		private static TestRunResult BuildResult(ITestResultAdaptor result)

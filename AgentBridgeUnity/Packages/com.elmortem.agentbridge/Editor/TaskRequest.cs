@@ -12,5 +12,7 @@ namespace AgentBridge
 		public string[] AssemblyNames;
 		public string[] TestNames;
 		public string[] CategoryNames;
+		public string AgentSessionId;
+		public string Note;
 	}
 }

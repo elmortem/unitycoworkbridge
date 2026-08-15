@@ -9,5 +9,7 @@
     "EmitPdb": true,
     "ClientWaitSeconds": 110,
     "DirtyUntitledScenePolicy": "Discard",
-    "DirtyScenePolicy": "Save"
+    "DirtyScenePolicy": "Save",
+    "LeaseIdleTimeoutSeconds": 120,
+    "ContentionSliceSeconds": 90
 }

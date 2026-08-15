@@ -18,6 +18,8 @@ namespace AgentBridge
 		public TestRunResult Tests;
 		public TaskTiming Timing = new TaskTiming();
 		public string SessionId;
+		public string AgentSessionId;
+		public ContentionInfo Contention = new ContentionInfo();
 		public string StartedAtUtc;
 		public string FinishedAtUtc;
 	}

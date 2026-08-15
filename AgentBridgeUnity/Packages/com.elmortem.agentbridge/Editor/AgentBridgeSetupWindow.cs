@@ -54,6 +54,28 @@ namespace AgentBridge
 				MessageType.Info);
 			EditorGUILayout.Space();
 
+			EditorGUILayout.LabelField("Multi-agent", EditorStyles.boldLabel);
+
+			int leaseIdleTimeout = AgentBridgeSettingsStore.GetLeaseIdleTimeoutSeconds();
+			int nextLeaseIdleTimeout = EditorGUILayout.DelayedIntField("Lease idle timeout (s)", leaseIdleTimeout);
+			if (nextLeaseIdleTimeout != leaseIdleTimeout)
+			{
+				AgentBridgeSettingsStore.SetLeaseIdleTimeoutSeconds(nextLeaseIdleTimeout);
+			}
+
+			int contentionSlice = AgentBridgeSettingsStore.GetContentionSliceSeconds();
+			int nextContentionSlice = EditorGUILayout.DelayedIntField("Contention slice (s)", contentionSlice);
+			if (nextContentionSlice != contentionSlice)
+			{
+				AgentBridgeSettingsStore.SetContentionSliceSeconds(nextContentionSlice);
+			}
+
+			EditorGUILayout.HelpBox(
+				"An idle agent session keeps the editor for the lease timeout. While another session waits, "
+				+ "the holder keeps working for at most the contention slice, then the queue rotates on a task boundary.",
+				MessageType.Info);
+			EditorGUILayout.Space();
+
 			EditorGUILayout.LabelField("Roslyn source", EditorStyles.boldLabel);
 			EditorGUILayout.Space();
 

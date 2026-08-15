@@ -16,5 +16,7 @@ namespace AgentBridge
 		public int ClientWaitSeconds = 110;
 		public string DirtyUntitledScenePolicy = "Discard";
 		public string DirtyScenePolicy = "Save";
+		public int LeaseIdleTimeoutSeconds = 120;
+		public int ContentionSliceSeconds = 90;
 	}
 }

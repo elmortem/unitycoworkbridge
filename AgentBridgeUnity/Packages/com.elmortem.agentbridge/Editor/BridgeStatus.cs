@@ -21,6 +21,8 @@ namespace AgentBridge
 		public int LoadedTaskAssemblies;
 		public int ExecutedTasks;
 		public string ActiveTaskId;
+		public string HolderAgentSessionId;
+		public QueuedTaskStatus[] QueuedTasks;
 		public string[] Capabilities;
 	}
 }

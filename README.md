@@ -171,7 +171,10 @@ agentbridge compile --format human
 agentbridge tests --mode EditMode --assembly MyGame.Tests --format human
 agentbridge status
 agentbridge doctor --format human
+agentbridge release --session AB_20260813_1500_a1f
 ```
+
+Every command also accepts `--session <id>` and `--note <text>`, which identify the agent session behind the task; see [Multi-Agent Sessions](#multi-agent-sessions).
 
 Exit codes: `0` success, `1` a terminal task failure including `test_failure`, `2` client wait exhausted (the task is still running — retry with `agentbridge wait <TaskId>`), `3` project/bridge unavailable, protocol mismatch, or bad usage.
 
@@ -241,6 +244,28 @@ An open-but-unloaded dirty scene always blocks the task regardless of policy: it
 The preflight is a snapshot, and the Unity Test Framework runs its task list asynchronously — arbitrary Editor ticks pass between the preflight and its `SaveModiedSceneTask`. So the bridge also arms a watcher for the duration of the task and of the whole test run: whatever dirties a scene afterwards (a person working in the Editor, a domain reload, a project editor callback) is normalized on the next tick, and the task `Logs` record the scene path, the action taken and a trimmed call stack of the source. Inside an already started test run a scene with a path is saved even under `DirtyScenePolicy = Block` — Test Framework 1.1.33 has no way to cancel a run at that point, so the only alternative left would be the dialog.
 
 `csharp` tasks are additionally denied the interactive Editor API at compile time: `EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo` / `SaveModifiedScenesIfUserWantsTo`, `EditorApplication.EnterPlaymode` / `ExitPlaymode` / `Exit`, assignments to `EditorApplication.isPlaying` and `isPaused`, `EditorUtility.DisplayDialog` / `DisplayDialogComplex` / `OpenFilePanel` / `OpenFolderPanel` / `SaveFilePanel` / `SaveFilePanelInProject`, `PrefabStageUtility.OpenPrefab`, `AssetDatabase.OpenAsset` and `TestRunnerApi.Execute`. Scene transitions go through `AgentBridge.AgentSceneManager`, tests through `agentbridge tests`.
+
+## Multi-Agent Sessions
+
+Several agents can drive the same Editor. Tasks still run strictly one at a time; what the scheduler decides is whose task runs next.
+
+Pass `--session <id>` (1–64 characters of `A-Za-z0-9_-`) with every command to identify the session. A task without `--session` is its own one-shot session and behaves exactly as before. Optionally add `--note "<text>"` to explain what the session is doing.
+
+- The session holding the lease runs its tasks back to back while nobody else is waiting.
+- Once another session queues work, the holder keeps the editor for at most `ContentionSliceSeconds` and then the queue rotates — always on a task boundary, never mid-task. A holder with nothing queued rotates immediately, and a holder idle for longer than `LeaseIdleTimeoutSeconds` loses the lease on its own.
+- A rotation carries the scene context: the outgoing session's scene setup and open prefab stage are saved, and the incoming session's are restored, so a session that comes back finds the scenes it left.
+- Every result carries a `Contention` block — how many foreign sessions are waiting, for how long, and their `--note` texts. `--format human` prints it as `Contention: 2 waiting, oldest 47s`.
+- `agentbridge release --session <id>` hands the editor back early instead of waiting for the idle timeout. It answers `released` when the session held the lease, `not_holder` otherwise, and never interrupts another session's slice.
+- While a task waits behind another session, the client waits in the queue and reports `queued <n>s, position <p>/<total>, holder <id>` on stderr; `--wait` starts counting only when the task actually starts in Unity, with a hard queue ceiling of 3600 seconds. If the bridge dies while the task is queued, the client exits 3 with `bridge_unavailable`.
+
+Two settings in `ProjectSettings/AgentBridge.json`, both exposed in **Tools → Agent Bridge → Setup...**:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `LeaseIdleTimeoutSeconds` | `120` | An idle holder with an empty queue loses the lease after this long. |
+| `ContentionSliceSeconds` | `90` | How long a holder may keep working after another session starts waiting. |
+
+Restarting the Editor drops the lease but keeps the saved session contexts; a domain reload changes nothing.
 
 ## Custom Project APIs
 
@@ -360,7 +385,7 @@ Library/AgentBridge/
 ## Limitations
 
 - Works only in Unity Editor, not in Play Mode (except `tests --mode PlayMode`, which enters Play Mode itself)
-- Tasks are processed strictly one at a time, oldest first — Bridge does not start a new task while one is in flight
+- Tasks are processed strictly one at a time — Bridge does not start a new task while one is in flight. Order is oldest first within an agent session; between sessions the scheduler rotates the editor on task boundaries (see [Multi-Agent Sessions](#multi-agent-sessions))
 - `Run()` is invoked on Unity's main thread; awaited continuations resume there too, so heavy synchronous work still blocks the Editor — offload it via `await Task.Run(...)`. Bridge caps a task at `TaskTimeoutSeconds` (default 300, configurable in `ProjectSettings/AgentBridge.json`); on timeout it writes `Status: "timeout"` and unblocks the queue
 - A running task can be aborted via **Tools → Agent Bridge → Cancel Running Task**
 - `csharp` tasks compile against whatever assemblies are already loaded in the domain — they cannot reference project code that has compilation errors, since the broken assembly itself would never have loaded. Use a `compile` task first to confirm the project builds.
