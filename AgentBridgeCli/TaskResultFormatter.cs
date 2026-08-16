@@ -85,6 +85,7 @@ internal static class TaskResultFormatter
 		AppendStringArray(output, root, "Logs", "Logs");
 		AppendDiagnostics(output, root);
 		AppendStringArray(output, root, "Artifacts", "Artifacts");
+		AppendContention(output, root);
 
 		return output.ToString();
 	}
@@ -182,6 +183,40 @@ internal static class TaskResultFormatter
 			}
 
 			output.Append(message);
+		}
+	}
+
+	private static void AppendContention(StringBuilder output, JsonElement root)
+	{
+		if (!root.TryGetProperty("Contention", out var contention) || contention.ValueKind != JsonValueKind.Object)
+		{
+			return;
+		}
+
+		var waiting = GetInt(contention, "WaitingSessions");
+		if (waiting <= 0)
+		{
+			return;
+		}
+
+		output.AppendLine()
+			.Append("Contention: ")
+			.Append(waiting)
+			.Append(" waiting, oldest ")
+			.Append(GetInt(contention, "OldestWaitSeconds"))
+			.Append('s');
+
+		if (!contention.TryGetProperty("Notes", out var notes) || notes.ValueKind != JsonValueKind.Array)
+		{
+			return;
+		}
+
+		foreach (var note in notes.EnumerateArray())
+		{
+			if (note.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(note.GetString()))
+			{
+				output.AppendLine().Append("- ").Append(note.GetString());
+			}
 		}
 	}
 

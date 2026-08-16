@@ -9,4 +9,6 @@ internal sealed class TaskRequest
 	public string[] AssemblyNames { get; set; } = Array.Empty<string>();
 	public string[] TestNames { get; set; } = Array.Empty<string>();
 	public string[] CategoryNames { get; set; } = Array.Empty<string>();
+	public string AgentSessionId { get; set; } = "";
+	public string Note { get; set; } = "";
 }

@@ -60,7 +60,7 @@ internal static class AgentBridgeApplication
 			return 3;
 		}
 
-		var client = new BridgeClient(projectRoot, options.Format);
+		var client = new BridgeClient(projectRoot, options.Format, options.Session, options.Note);
 		switch (command)
 		{
 			case "csharp":
@@ -110,6 +110,14 @@ internal static class AgentBridgeApplication
 				}
 
 				return await client.SubmitTestsAsync(mode, assemblies, tests, categories, options.WaitSeconds);
+
+			case "release":
+				if (commandArguments.Length != 0 || options.Session == null)
+				{
+					return WriteError("bad_usage", "usage: agentbridge release --session <id> [--project <path>] [--wait <seconds>]", options.Format);
+				}
+
+				return await client.SubmitReleaseAsync(options.WaitSeconds);
 
 			case "wait":
 				if (commandArguments.Length != 1)
@@ -289,12 +297,15 @@ internal static class AgentBridgeApplication
 			  sceneshot <file.sceneshot.json>
 			  compile
 			  tests [--mode EditMode|PlayMode] [--assembly A] [--test T] [--category C]
+			  release --session <id>     give the editor back to the other agent sessions
 			  wait <TaskId>
 
 			global options:
 			  --project <path>   Unity project root; otherwise discovered from cwd
 			  --wait <seconds>   client wait timeout, default 110
 			  --format <value>   json (default, machine-readable) or human for every command
+			  --session <id>     agent session for fair scheduling
+			  --note <text>      intent shown to the session holding the editor
 			  --version
 			""");
 	}

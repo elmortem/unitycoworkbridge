@@ -13,6 +13,8 @@ try
 	RunHealthTests(root);
 	RunForeignHostTests(root);
 	RunScratchTests(root);
+	RunSessionOptionTests();
+	RunContentionFormattingTests();
 	Console.WriteLine("AgentBridgeCli.Tests: PASS");
 	return 0;
 }
@@ -212,6 +214,39 @@ static void RunScratchTests(string temporaryRoot)
 	Expect(!paths.IsInsideAssets(Path.Combine(project, "AssetsExtra", "Task_1.cs")), "sibling folder must not be flagged");
 	Expect(!paths.IsInsideAssets(Path.Combine(Path.GetTempPath(), "Task_1.cs")), "payload outside the project must not be flagged");
 	Expect(!paths.IsInsideAssets("\0"), "malformed payload path must not crash the check");
+}
+
+static void RunSessionOptionTests()
+{
+	var parsed = CliOptions.Parse(new[] { "csharp", "Task.cs", "--session", "AB_20260813_1500_a1", "--note", "verifying the loot table" });
+	Expect(parsed.Error == null, "valid session and note must parse");
+	Expect(parsed.Session == "AB_20260813_1500_a1", "session value must be kept verbatim");
+	Expect(parsed.Note == "verifying the loot table", "note value must be kept verbatim");
+	Expect(parsed.Arguments.Count == 2, "session and note must not leak into positional arguments");
+
+	var inline = CliOptions.Parse(new[] { "release", "--session=AB-1", "--note=short" });
+	Expect(inline.Session == "AB-1" && inline.Note == "short", "inline --session=/--note= form must parse");
+
+	Expect(CliOptions.Parse(new[] { "csharp", "--session", "bad id" }).Error != null, "session with a space must be rejected");
+	Expect(CliOptions.Parse(new[] { "csharp", "--session", new string('a', 65) }).Error != null, "session over 64 characters must be rejected");
+	Expect(CliOptions.Parse(new[] { "csharp", "--session", new string('a', 64) }).Error == null, "session of exactly 64 characters must be accepted");
+	Expect(CliOptions.Parse(new[] { "csharp", "--note", new string('n', 201) }).Error != null, "note over 200 characters must be rejected");
+	Expect(CliOptions.Parse(new[] { "csharp", "--session" }).Error != null, "session without a value must be rejected");
+
+	var none = CliOptions.Parse(new[] { "csharp", "Task.cs" });
+	Expect(none.Session == null && none.Note == null, "omitted session and note must stay unset");
+}
+
+static void RunContentionFormattingTests()
+{
+	var contended = TaskResultFormatter.FormatHuman(
+		"""{"Id":"Task_a","Kind":"csharp","Status":"success","Contention":{"WaitingSessions":2,"OldestWaitSeconds":47,"Notes":["porting the shop screen"]}}""");
+	Expect(contended.Contains("Contention: 2 waiting, oldest 47s", StringComparison.Ordinal), "human output must report waiting sessions");
+	Expect(contended.Contains("- porting the shop screen", StringComparison.Ordinal), "human output must include contention notes");
+
+	var quiet = TaskResultFormatter.FormatHuman(
+		"""{"Id":"Task_b","Kind":"csharp","Status":"success","Contention":{"WaitingSessions":0,"OldestWaitSeconds":0,"Notes":[]}}""");
+	Expect(!quiet.Contains("Contention", StringComparison.Ordinal), "an uncontended task must not mention contention");
 }
 
 static void CreateProject(string path)

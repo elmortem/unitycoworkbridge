@@ -18,5 +18,7 @@ internal sealed class BridgeStatus
 	public int LoadedTaskAssemblies { get; set; }
 	public int ExecutedTasks { get; set; }
 	public string? ActiveTaskId { get; set; }
+	public string? HolderAgentSessionId { get; set; }
+	public QueuedTaskStatus[] QueuedTasks { get; set; } = Array.Empty<QueuedTaskStatus>();
 	public string[] Capabilities { get; set; } = Array.Empty<string>();
 }

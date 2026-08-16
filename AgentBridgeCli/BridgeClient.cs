@@ -18,13 +18,21 @@ internal sealed class BridgeClient
 		"rejected"
 	};
 
+	private const int QueueWaitCapSeconds = 3600;
+
 	private readonly BridgePaths _paths;
 	private readonly string _format;
+	private readonly string _projectRoot;
+	private readonly string? _session;
+	private readonly string? _note;
 
-	public BridgeClient(string projectRoot, string format)
+	public BridgeClient(string projectRoot, string format, string? session, string? note)
 	{
 		_paths = new BridgePaths(projectRoot);
 		_format = format;
+		_projectRoot = projectRoot;
+		_session = session;
+		_note = note;
 	}
 
 	public async Task<int> SubmitPayloadAsync(string kind, string sourcePath, int waitSeconds)
@@ -51,7 +59,9 @@ internal sealed class BridgeClient
 		{
 			Id = taskId,
 			Kind = kind,
-			PayloadFile = payloadName
+			PayloadFile = payloadName,
+			AgentSessionId = _session ?? "",
+			Note = _note ?? ""
 		};
 		var requestBytes = JsonSerializer.SerializeToUtf8Bytes(request, JsonSupport.Task);
 		var payloadBytes = await File.ReadAllBytesAsync(fullSourcePath);
@@ -76,7 +86,21 @@ internal sealed class BridgeClient
 		var request = new TaskRequest
 		{
 			Id = TaskIdGenerator.NewId(),
-			Kind = "compile"
+			Kind = "compile",
+			AgentSessionId = _session ?? "",
+			Note = _note ?? ""
+		};
+		return await SubmitRequestAsync(request, waitSeconds);
+	}
+
+	public async Task<int> SubmitReleaseAsync(int waitSeconds)
+	{
+		var request = new TaskRequest
+		{
+			Id = TaskIdGenerator.NewId(),
+			Kind = "release",
+			AgentSessionId = _session ?? "",
+			Note = _note ?? ""
 		};
 		return await SubmitRequestAsync(request, waitSeconds);
 	}
@@ -95,7 +119,9 @@ internal sealed class BridgeClient
 			TestMode = mode,
 			AssemblyNames = assemblies,
 			TestNames = tests,
-			CategoryNames = categories
+			CategoryNames = categories,
+			AgentSessionId = _session ?? "",
+			Note = _note ?? ""
 		};
 		return await SubmitRequestAsync(request, waitSeconds);
 	}
@@ -108,46 +134,97 @@ internal sealed class BridgeClient
 		}
 
 		var journalFile = Path.Combine(_paths.Journal, taskId + ".json");
-		var started = DateTime.UtcNow;
+		DateTime? runningSince = null;
+		var queuedSince = DateTime.UtcNow;
 		var nextProgress = TimeSpan.Zero;
+		var nextHealthCheck = TimeSpan.Zero;
 
 		while (true)
 		{
-			if (TryReadFile(journalFile, out var json) && TryGetTerminalStatus(json, out _))
+			var hasRecord = TryReadFile(journalFile, out var json);
+			if (hasRecord && TryGetTerminalStatus(json, out _))
 			{
 				WriteResult(json);
 				return ClassifyResult(json);
 			}
 
-			var elapsed = DateTime.UtcNow - started;
-			if (elapsed.TotalSeconds >= waitSeconds)
+			var now = DateTime.UtcNow;
+
+			// The client budget covers the task itself. Time spent behind another agent session
+			// in the editor queue is waited out separately, against the queue cap.
+			if (hasRecord)
 			{
-				if (TryReadFile(journalFile, out json))
+				runningSince ??= now;
+				var running = now - runningSince.Value;
+				if (running.TotalSeconds >= waitSeconds)
 				{
 					WriteResult(json);
-				}
-				else
-				{
-					WriteResult(JsonSerializer.Serialize(
-						new Dictionary<string, object?>
-						{
-							["Id"] = taskId,
-							["Status"] = "running"
-						},
-						JsonSupport.Task));
+					return 2;
 				}
 
+				if (running >= nextProgress)
+				{
+					Console.Error.WriteLine("[agentbridge] " + taskId + " running " + (int)running.TotalSeconds + "s");
+					nextProgress += TimeSpan.FromSeconds(5);
+				}
+
+				await Task.Delay(250);
+				continue;
+			}
+
+			// No journal record and no task file means there is nothing in the editor queue to
+			// wait for: an unknown id must not consume the whole queue budget.
+			if (!File.Exists(Path.Combine(_paths.Inbox, taskId + ".task.json")))
+			{
+				return WriteError("task_not_found", "No queued or recorded task with id " + taskId + ".");
+			}
+
+			var queued = now - queuedSince;
+			if (queued.TotalSeconds >= QueueWaitCapSeconds)
+			{
+				WriteResult(JsonSerializer.Serialize(
+					new Dictionary<string, object?>
+					{
+						["Id"] = taskId,
+						["Status"] = "queued"
+					},
+					JsonSupport.Task));
 				return 2;
 			}
 
-			if (elapsed >= nextProgress)
+			if (queued >= nextHealthCheck)
 			{
-				Console.Error.WriteLine("[agentbridge] " + taskId + " " + (int)elapsed.TotalSeconds + "s");
-				nextProgress += TimeSpan.FromSeconds(5);
+				nextHealthCheck = queued + TimeSpan.FromSeconds(5);
+				var health = BridgeInspector.Inspect(_projectRoot);
+				if (!health.BridgeReady)
+				{
+					return WriteError("bridge_unavailable", "Bridge became unavailable while the task was queued: " + health.Code);
+				}
+
+				Console.Error.WriteLine("[agentbridge] " + taskId + " " + DescribeQueuePosition(health, taskId, (int)queued.TotalSeconds));
 			}
 
 			await Task.Delay(250);
 		}
+	}
+
+	private static string DescribeQueuePosition(BridgeHealth health, string taskId, int queuedSeconds)
+	{
+		var queue = health.Bridge?.QueuedTasks ?? Array.Empty<QueuedTaskStatus>();
+		foreach (var entry in queue)
+		{
+			if (!string.Equals(entry.Id, taskId, StringComparison.Ordinal))
+			{
+				continue;
+			}
+
+			var holder = string.IsNullOrEmpty(health.Bridge?.HolderAgentSessionId)
+				? "none"
+				: health.Bridge!.HolderAgentSessionId;
+			return "queued " + queuedSeconds + "s, position " + entry.Position + "/" + queue.Length + ", holder " + holder;
+		}
+
+		return "queued " + queuedSeconds + "s";
 	}
 
 	internal static int ClassifyResult(string json)

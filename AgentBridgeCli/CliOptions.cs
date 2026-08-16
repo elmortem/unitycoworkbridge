@@ -5,8 +5,13 @@ internal sealed class CliOptions
 	public string? ProjectPath { get; private set; }
 	public int WaitSeconds { get; private set; } = 110;
 	public string Format { get; private set; } = "json";
+	public string? Session { get; private set; }
+	public string? Note { get; private set; }
 	public List<string> Arguments { get; } = new();
 	public string? Error { get; private set; }
+
+	private const string SessionError = "--session must be 1-64 characters of A-Za-z0-9_-";
+	private const string NoteError = "--note must be 1 to 200 characters";
 
 	public static CliOptions Parse(string[] args)
 	{
@@ -77,6 +82,50 @@ internal sealed class CliOptions
 				continue;
 			}
 
+			if (argument == "--session")
+			{
+				if (!TryTakeValue(args, ref index, out var value) || !TrySetSession(options, value))
+				{
+					options.Error = SessionError;
+					return options;
+				}
+
+				continue;
+			}
+
+			if (argument.StartsWith("--session=", StringComparison.Ordinal))
+			{
+				if (!TrySetSession(options, argument[10..]))
+				{
+					options.Error = SessionError;
+					return options;
+				}
+
+				continue;
+			}
+
+			if (argument == "--note")
+			{
+				if (!TryTakeValue(args, ref index, out var value) || !TrySetNote(options, value))
+				{
+					options.Error = NoteError;
+					return options;
+				}
+
+				continue;
+			}
+
+			if (argument.StartsWith("--note=", StringComparison.Ordinal))
+			{
+				if (!TrySetNote(options, argument[7..]))
+				{
+					options.Error = NoteError;
+					return options;
+				}
+
+				continue;
+			}
+
 			options.Arguments.Add(argument);
 		}
 
@@ -104,6 +153,41 @@ internal sealed class CliOptions
 		}
 
 		options.WaitSeconds = seconds;
+		return true;
+	}
+
+	private static bool TrySetSession(CliOptions options, string value)
+	{
+		if (value.Length is < 1 or > 64)
+		{
+			return false;
+		}
+
+		foreach (var character in value)
+		{
+			var allowed = character is >= 'A' and <= 'Z'
+				or >= 'a' and <= 'z'
+				or >= '0' and <= '9'
+				or '_'
+				or '-';
+			if (!allowed)
+			{
+				return false;
+			}
+		}
+
+		options.Session = value;
+		return true;
+	}
+
+	private static bool TrySetNote(CliOptions options, string value)
+	{
+		if (value.Length is < 1 or > 200)
+		{
+			return false;
+		}
+
+		options.Note = value;
 		return true;
 	}
 
