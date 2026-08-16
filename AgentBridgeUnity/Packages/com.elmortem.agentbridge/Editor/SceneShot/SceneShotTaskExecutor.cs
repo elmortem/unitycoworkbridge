@@ -16,6 +16,7 @@ namespace AgentBridge.SceneShot
 		public const string WindowTitle = "AgentBridge Scene Shot";
 
 		private const double SettleSeconds = 0.5d;
+		private const double GameShotTimeoutSeconds = 5d;
 
 		private readonly TaskContext _context;
 		private readonly List<SceneShotItem> _items;
@@ -28,6 +29,10 @@ namespace AgentBridge.SceneShot
 		private Vector2Int _targetPx;
 		private double _settleUntil;
 		private bool _awaitingSettle;
+		private bool _awaitingGameFile;
+		private string _gameFilePath;
+		private double _gameDeadline;
+		private long _gameLastLength;
 		private bool _completed;
 		private string _status = "success";
 
@@ -87,6 +92,12 @@ namespace AgentBridge.SceneShot
 
 			try
 			{
+				if (_awaitingGameFile)
+				{
+					TickGameFile();
+					return;
+				}
+
 				if (_awaitingSettle)
 				{
 					TickSettle();
@@ -114,6 +125,12 @@ namespace AgentBridge.SceneShot
 			}
 
 			SceneShotItem item = _items[_index];
+			if (item.View == "game")
+			{
+				PrepareGameShot(item);
+				return;
+			}
+
 			SceneShotPose pose = item.Mode == SceneShotPoseMode.Frame
 				? SceneShotFramer.Frame(item.FrameTarget, item.FrameMargin, item.FrameRotation, item.Orthographic)
 				: item.Pose;
@@ -143,6 +160,79 @@ namespace AgentBridge.SceneShot
 
 			_settleUntil = EditorApplication.timeSinceStartup + SettleSeconds;
 			_awaitingSettle = true;
+		}
+
+		// A game view shot is whatever the player actually sees, overlay UI included, so it is
+		// taken by the runtime capture API instead of a posed scene view. That API writes the
+		// file on a later frame, hence the wait state below.
+		private void PrepareGameShot(SceneShotItem item)
+		{
+			if (!EditorApplication.isPlaying)
+			{
+				_logs.Add("shot '" + item.Name + "': game view shot requires play mode (use agentbridge play)");
+				_status = "runtime_error";
+				_completed = true;
+				return;
+			}
+
+			try
+			{
+				Type gameViewType = Type.GetType("UnityEditor.GameView,UnityEditor");
+				if (gameViewType != null)
+				{
+					EditorWindow.GetWindow(gameViewType, false, null, true);
+				}
+			}
+			catch (Exception ex)
+			{
+				_logs.Add("shot '" + item.Name + "': could not focus the Game View: " + ex.GetBaseException().Message);
+			}
+
+			_logs.Add("shot '" + item.Name + "': game view shots use the Game View resolution, requested size ignored");
+
+			Directory.CreateDirectory(_context.ArtifactsDirectory);
+			_gameFilePath = Path.Combine(_context.ArtifactsDirectory, BuildFileName(item.Name));
+			if (File.Exists(_gameFilePath))
+			{
+				File.Delete(_gameFilePath);
+			}
+
+			ScreenCapture.CaptureScreenshot(_gameFilePath, 1);
+			_gameDeadline = EditorApplication.timeSinceStartup + GameShotTimeoutSeconds;
+			_gameLastLength = -1;
+			_awaitingGameFile = true;
+		}
+
+		// CaptureScreenshot returns immediately and the PNG appears a frame or more later, so
+		// the file is only accepted once its size stopped growing between two ticks.
+		private void TickGameFile()
+		{
+			SceneShotItem item = _items[_index];
+
+			if (File.Exists(_gameFilePath))
+			{
+				long length = new FileInfo(_gameFilePath).Length;
+				if (length > 0 && length == _gameLastLength)
+				{
+					_awaitingGameFile = false;
+					_context.AddArtifact(_gameFilePath);
+					_summary.Add("gameshot " + item.Name + " -> " + _gameFilePath);
+					_index++;
+					return;
+				}
+
+				_gameLastLength = length;
+			}
+
+			if (EditorApplication.timeSinceStartup < _gameDeadline)
+			{
+				return;
+			}
+
+			_awaitingGameFile = false;
+			_logs.Add("shot '" + item.Name + "': game view capture timed out (is a Game View rendering?)");
+			_status = "runtime_error";
+			_completed = true;
 		}
 
 		// A freshly created window needs several paints before its layout and the

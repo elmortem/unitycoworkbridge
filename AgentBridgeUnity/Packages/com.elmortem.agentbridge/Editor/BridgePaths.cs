@@ -55,6 +55,11 @@ namespace AgentBridge
 			get { return Path.Combine(WorkingRoot, "pending-playmode-scene.json"); }
 		}
 
+		public static string PlaySessionFile
+		{
+			get { return Path.Combine(WorkingRoot, "play-session.json"); }
+		}
+
 		public static string SchedulerStateFile
 		{
 			get { return Path.Combine(WorkingRoot, "scheduler-state.json"); }

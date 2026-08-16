@@ -4,6 +4,7 @@ internal sealed class CliOptions
 {
 	public string? ProjectPath { get; private set; }
 	public int WaitSeconds { get; private set; } = 110;
+	public int Seconds { get; private set; }
 	public string Format { get; private set; } = "json";
 	public string? Session { get; private set; }
 	public string? Note { get; private set; }
@@ -12,6 +13,7 @@ internal sealed class CliOptions
 
 	private const string SessionError = "--session must be 1-64 characters of A-Za-z0-9_-";
 	private const string NoteError = "--note must be 1 to 200 characters";
+	private const string SecondsError = "--seconds requires an integer from 1 to 86400";
 
 	public static CliOptions Parse(string[] args)
 	{
@@ -54,6 +56,28 @@ internal sealed class CliOptions
 				if (!TrySetWait(options, argument[7..]))
 				{
 					options.Error = "--wait requires an integer from 1 to 86400";
+					return options;
+				}
+
+				continue;
+			}
+
+			if (argument == "--seconds")
+			{
+				if (!TryTakeValue(args, ref index, out var value) || !TrySetSeconds(options, value))
+				{
+					options.Error = SecondsError;
+					return options;
+				}
+
+				continue;
+			}
+
+			if (argument.StartsWith("--seconds=", StringComparison.Ordinal))
+			{
+				if (!TrySetSeconds(options, argument[10..]))
+				{
+					options.Error = SecondsError;
 					return options;
 				}
 
@@ -188,6 +212,17 @@ internal sealed class CliOptions
 		}
 
 		options.Note = value;
+		return true;
+	}
+
+	private static bool TrySetSeconds(CliOptions options, string value)
+	{
+		if (!int.TryParse(value, out var seconds) || seconds < 1 || seconds > 86400)
+		{
+			return false;
+		}
+
+		options.Seconds = seconds;
 		return true;
 	}
 

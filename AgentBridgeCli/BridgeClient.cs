@@ -105,6 +105,31 @@ internal sealed class BridgeClient
 		return await SubmitRequestAsync(request, waitSeconds);
 	}
 
+	public async Task<int> SubmitPlayAsync(int seconds, int waitSeconds)
+	{
+		var request = new TaskRequest
+		{
+			Id = TaskIdGenerator.NewId(),
+			Kind = "play",
+			PlaySeconds = seconds,
+			AgentSessionId = _session ?? "",
+			Note = _note ?? ""
+		};
+		return await SubmitRequestAsync(request, waitSeconds);
+	}
+
+	public async Task<int> SubmitStopplayAsync(int waitSeconds)
+	{
+		var request = new TaskRequest
+		{
+			Id = TaskIdGenerator.NewId(),
+			Kind = "stopplay",
+			AgentSessionId = _session ?? "",
+			Note = _note ?? ""
+		};
+		return await SubmitRequestAsync(request, waitSeconds);
+	}
+
 	public async Task<int> SubmitTestsAsync(
 		string mode,
 		string[] assemblies,

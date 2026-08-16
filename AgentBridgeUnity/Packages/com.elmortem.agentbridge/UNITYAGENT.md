@@ -48,7 +48,28 @@ PlayMode-прогон надёжен при любой настройке Enter 
 
 Не вызывай `EditorSceneManager.OpenScene`, `NewScene`, `CloseScene`, `RestoreSceneManagerSetup` и runtime `SceneManager.LoadScene*` напрямую: guardrail отклонит задачу. Используй `AgentBridge.AgentSceneManager` с теми же основными операциями. Перед переходом он сохраняет dirty-сцены с путём, удаляет тестовые сцены и применяет политику dirty untitled-сцен без модального окна.
 
-Guardrail также отклоняет модальные и интерактивные Editor API: `EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo` / `SaveModifiedScenesIfUserWantsTo`, `EditorApplication.EnterPlaymode` / `ExitPlaymode` / `Exit`, присваивание `EditorApplication.isPlaying` и `isPaused`, `EditorUtility.DisplayDialog` / `DisplayDialogComplex` / `OpenFilePanel` / `OpenFolderPanel` / `SaveFilePanel` / `SaveFilePanelInProject`, `PrefabStageUtility.OpenPrefab`, `AssetDatabase.OpenAsset`, `TestRunnerApi.Execute`.
+Guardrail также отклоняет модальные и интерактивные Editor API: `EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo` / `SaveModifiedScenesIfUserWantsTo`, `EditorApplication.EnterPlaymode` / `ExitPlaymode` / `Exit` / `ExecuteMenuItem`, присваивание `EditorApplication.isPlaying` и `isPaused`, `EditorUtility.DisplayDialog` / `DisplayDialogComplex` / `OpenFilePanel` / `OpenFolderPanel` / `SaveFilePanel` / `SaveFilePanelInProject`, `PrefabStageUtility.OpenPrefab`, `AssetDatabase.OpenAsset`, `TestRunnerApi.Execute`.
+
+## Плей мод
+
+Никогда не входи в плей мод из `csharp`-таска — ни напрямую, ни через `ExecuteMenuItem`, ни рефлексией: guardrail режет и вызовы, и строковые литералы `"EnterPlaymode"`, `"ExitPlaymode"`, `"isPlaying"`, `"Edit/Play"`. Читать `EditorApplication.isPlaying` можно.
+
+Законный канал — отдельные команды CLI:
+
+```bash
+agentbridge play [--seconds N] --session <id>
+agentbridge stopplay [--session <id>]
+```
+
+- `play` требует `--session`: сессия становится владельцем плей мода. `ReturnValue` — `playing_until:<UTC>`. Без `--seconds` берётся `PlaySessionDefaultSeconds` (120), сверху обрезается `PlaySessionMaxSeconds` (600); обе настройки — в `ProjectSettings/AgentBridge.json` и в **Tools → Agent Bridge → Setup...**.
+- Во время своей play-сессии выполняются только `csharp` и `sceneshot` (включая `"view": "game"` — снимок настоящего Game View с overlay-UI). Остальные kind'ы отклоняются с `kind not allowed during play session`.
+- Чужую play-сессию остановить нельзя: `stopplay` вернёт `rejected` с `play_session_held_by:<id>`.
+- Плей мод без сессии (застрявший таск, ручной запуск) гасит `stopplay` от любого агента. Вне плей мода `stopplay` — no-op со `success` и `ReturnValue: "not_playing"`.
+- Сессия завершается сама по дедлайну. Если человек нажал Stop, сессия закрывается сама с `stopped:external`.
+- Пока идут тесты, `play`/`stopplay` отклоняются с `tests are running` — семантика PlayMode-прогонов не меняется.
+- Агентский плей мод в обход guardrail мост гасит автоматически и дописывает в журнальную запись виновника строку `this task entered play mode; the bridge exited it automatically`. Плей мод, запущенный человеком, мост не трогает.
+
+Состояние видно в `agentbridge status`: `IsPlaying`, `PlaySessionAgentId`, `PlaySessionDeadlineUtc`.
 
 ## Политика сцен
 

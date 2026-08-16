@@ -119,6 +119,22 @@ internal static class AgentBridgeApplication
 
 				return await client.SubmitReleaseAsync(options.WaitSeconds);
 
+			case "play":
+				if (commandArguments.Length != 0 || options.Session == null)
+				{
+					return WriteError("bad_usage", "usage: agentbridge play [--seconds N] --session <id> [--project <path>] [--wait <seconds>]", options.Format);
+				}
+
+				return await client.SubmitPlayAsync(options.Seconds, options.WaitSeconds);
+
+			case "stopplay":
+				if (commandArguments.Length != 0)
+				{
+					return WriteError("bad_usage", "usage: agentbridge stopplay [--session <id>] [--project <path>] [--wait <seconds>]", options.Format);
+				}
+
+				return await client.SubmitStopplayAsync(options.WaitSeconds);
+
 			case "wait":
 				if (commandArguments.Length != 1)
 				{
@@ -225,6 +241,15 @@ internal static class AgentBridgeApplication
 				Console.Out.WriteLine("Unity: " + health.Bridge.UnityVersion);
 				Console.Out.WriteLine("Roslyn: " + (health.Bridge.RoslynReady ? "ready" : "not ready"));
 				Console.Out.WriteLine("Active task: " + (health.Bridge.ActiveTaskId ?? "none"));
+
+				var playing = health.Bridge.IsPlaying ? "yes" : "no";
+				if (!string.IsNullOrEmpty(health.Bridge.PlaySessionAgentId))
+				{
+					playing += " (session " + health.Bridge.PlaySessionAgentId
+						+ ", until " + (health.Bridge.PlaySessionDeadlineUtc ?? "unknown") + ")";
+				}
+
+				Console.Out.WriteLine("Playing: " + playing);
 			}
 
 			return;
@@ -298,11 +323,14 @@ internal static class AgentBridgeApplication
 			  compile
 			  tests [--mode EditMode|PlayMode] [--assembly A] [--test T] [--category C]
 			  release --session <id>     give the editor back to the other agent sessions
+			  play [--seconds N] --session <id>   open a play session; only csharp and sceneshot run inside it
+			  stopplay [--session <id>]  end your play session, or an unsanctioned one anybody left behind
 			  wait <TaskId>
 
 			global options:
 			  --project <path>   Unity project root; otherwise discovered from cwd
 			  --wait <seconds>   client wait timeout, default 110
+			  --seconds <n>      play session length; defaults to the editor setting
 			  --format <value>   json (default, machine-readable) or human for every command
 			  --session <id>     agent session for fair scheduling
 			  --note <text>      intent shown to the session holding the editor

@@ -11,4 +11,5 @@ internal sealed class TaskRequest
 	public string[] CategoryNames { get; set; } = Array.Empty<string>();
 	public string AgentSessionId { get; set; } = "";
 	public string Note { get; set; } = "";
+	public int PlaySeconds { get; set; }
 }

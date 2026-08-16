@@ -17,13 +17,16 @@ The system consists of three parts:
 - `unity-bridge` — instructions for Claude on script generation, the client protocol, and error handling. It commands the Unity-side Bridge and auto-triggers on any Unity Editor task ("list all prefabs using shader X", "rename these assets", "compile the project", "run the tests"), or invoke it explicitly via `/unity-bridge`.
 - `unity-ui` — declarative uGUI layout: creating/editing UI prefabs, dumping layout geometry, and screenshotting screens through `.ui.json` tasks (no C# compilation, no domain reload — iterations take seconds). Auto-triggers on layout phrasing ("build this popup", "move/recolor this element", "screenshot the screen"), or `/unity-ui`. uGUI + TMP only; UI Toolkit is not supported. See [Declarative UI Tasks](#declarative-ui-tasks).
 
-There are five task kinds, all created via the CLI and processed sequentially, one at a time:
+There are eight task kinds, all created via the CLI and processed sequentially, one at a time:
 
 - **`csharp`** — a `.cs` script; Bridge compiles it in memory with Roslyn and runs its `Run()` method on the main thread.
 - **`ui`** — a `.ui.json` file; Bridge applies it to a prefab directly, without compilation.
-- **`sceneshot`** — a `.sceneshot.json` file; Bridge screenshots the open scene from the requested Scene View angles, without compilation.
+- **`sceneshot`** — a `.sceneshot.json` file; Bridge screenshots the open scene from the requested Scene View angles, or the running Game View, without compilation.
 - **`compile`** — forces Unity to compile the project and returns the resulting errors, surviving the domain reload this triggers.
 - **`tests`** — runs EditMode or PlayMode tests and returns pass/fail counts and failure details in the same result record, surviving Play Mode's domain reload.
+- **`play`** / **`stopplay`** — open and close an owned play session, the only sanctioned way for an agent to reach Play Mode; both survive the domain reloads that entering and leaving it trigger. See [Play Mode](#play-mode).
+
+- **`release`** — hands the editor back to the other agent sessions; it changes nothing in the project. See [Multi-Agent Sessions](#multi-agent-sessions).
 
 ## Installing AgentBridge CLI
 
@@ -172,6 +175,8 @@ agentbridge tests --mode EditMode --assembly MyGame.Tests --format human
 agentbridge status
 agentbridge doctor --format human
 agentbridge release --session AB_20260813_1500_a1f
+agentbridge play --seconds 90 --session AB_20260813_1500_a1f
+agentbridge stopplay --session AB_20260813_1500_a1f
 ```
 
 Every command also accepts `--session <id>` and `--note <text>`, which identify the agent session behind the task; see [Multi-Agent Sessions](#multi-agent-sessions).
@@ -243,7 +248,31 @@ An open-but-unloaded dirty scene always blocks the task regardless of policy: it
 
 The preflight is a snapshot, and the Unity Test Framework runs its task list asynchronously — arbitrary Editor ticks pass between the preflight and its `SaveModiedSceneTask`. So the bridge also arms a watcher for the duration of the task and of the whole test run: whatever dirties a scene afterwards (a person working in the Editor, a domain reload, a project editor callback) is normalized on the next tick, and the task `Logs` record the scene path, the action taken and a trimmed call stack of the source. Inside an already started test run a scene with a path is saved even under `DirtyScenePolicy = Block` — Test Framework 1.1.33 has no way to cancel a run at that point, so the only alternative left would be the dialog.
 
-`csharp` tasks are additionally denied the interactive Editor API at compile time: `EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo` / `SaveModifiedScenesIfUserWantsTo`, `EditorApplication.EnterPlaymode` / `ExitPlaymode` / `Exit`, assignments to `EditorApplication.isPlaying` and `isPaused`, `EditorUtility.DisplayDialog` / `DisplayDialogComplex` / `OpenFilePanel` / `OpenFolderPanel` / `SaveFilePanel` / `SaveFilePanelInProject`, `PrefabStageUtility.OpenPrefab`, `AssetDatabase.OpenAsset` and `TestRunnerApi.Execute`. Scene transitions go through `AgentBridge.AgentSceneManager`, tests through `agentbridge tests`.
+`csharp` tasks are additionally denied the interactive Editor API at compile time: `EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo` / `SaveModifiedScenesIfUserWantsTo`, `EditorApplication.EnterPlaymode` / `ExitPlaymode` / `Exit` / `ExecuteMenuItem`, assignments to `EditorApplication.isPlaying` and `isPaused`, `EditorUtility.DisplayDialog` / `DisplayDialogComplex` / `OpenFilePanel` / `OpenFolderPanel` / `SaveFilePanel` / `SaveFilePanelInProject`, `PrefabStageUtility.OpenPrefab`, `AssetDatabase.OpenAsset` and `TestRunnerApi.Execute`. Scene transitions go through `AgentBridge.AgentSceneManager`, tests through `agentbridge tests`, play mode through `agentbridge play`.
+
+## Play Mode
+
+An agent task that reaches play mode on its own hangs the bridge: the coordinator stops taking work while the Editor plays, and the task that started it is already gone. So the guardrail also rejects the cheap workarounds — `ExecuteMenuItem` and the string literals `"EnterPlaymode"`, `"ExitPlaymode"`, `"isPlaying"`, `"Edit/Play"` that reflection and menu paths need — and play mode gets its own commands instead. Reading `EditorApplication.isPlaying` stays allowed.
+
+```bash
+agentbridge play [--seconds N] --session <id>
+agentbridge stopplay [--session <id>]
+```
+
+- `play` requires `--session`; that session owns the play mode. The result is `success` with `ReturnValue: "playing_until:<UTC>"`.
+- Inside its own play session an agent may run only `csharp` and `sceneshot` — including `"view": "game"`, which captures the real Game View with its overlay UI. Every other kind is rejected with `kind not allowed during play session`.
+- A foreign play session cannot be stopped: `stopplay` answers `rejected` with `play_session_held_by:<id>`. Play mode left behind without a session — a stuck task or a manual start — can be stopped by any agent. Outside play mode `stopplay` is a no-op returning `not_playing`.
+- The session ends on its own at the deadline, and a human pressing Stop ends it too (`stopped:external`). Play mode a human started is never exited automatically; play mode an agent slipped into without a session is, and the culprit's journal record says so.
+- While a test run is in flight both commands are rejected with `tests are running`: PlayMode test semantics are untouched.
+- `agentbridge status` reports `IsPlaying`, `PlaySessionAgentId` and `PlaySessionDeadlineUtc`.
+
+Three settings in `ProjectSettings/AgentBridge.json`, all exposed in **Tools → Agent Bridge → Setup...**:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `PlaySessionDefaultSeconds` | `120` | Session length when `--seconds` is omitted. |
+| `PlaySessionMaxSeconds` | `600` | Upper bound `--seconds` is clamped to. |
+| `AgentPlayGraceSeconds` | `5` | How long after a task finishes play mode still counts as agent-caused. |
 
 ## Multi-Agent Sessions
 
@@ -346,7 +375,8 @@ Order within a task: all `apply`/`delete` run first over the loaded prefab conte
 }
 ```
 
-- Exactly one of `frame` or `pose` per shot. `frame` centers the view on a scene object found by name or by a `Root/Child` path, like pressing F on it; `pose` sets the Scene View camera explicitly.
+- `view` is `"scene"` by default. `"game"` captures the real Game View instead, overlay UI included; it works only during an `agentbridge play` session and ignores `width`/`height`, `pose` and `frame` — the game's own camera and the Game View resolution decide the frame. Outside play mode the task ends as `runtime_error`.
+- Exactly one of `frame` or `pose` per scene shot. `frame` centers the view on a scene object found by name or by a `Root/Child` path, like pressing F on it; `pose` sets the Scene View camera explicitly.
 - `width`/`height` default to 1280×720 and top out at 1920×1080. The Scene View window is a real OS window, so a request larger than the desktop is scaled down by one factor on both axes to keep the framing; `Logs` notes the reduction and `ReturnValue` carries the real size.
 - `gizmos` defaults to `true` and `grid` to `false`; `name` becomes the PNG file name.
 - PNGs land in `Library/AgentBridge/Artifacts/<id>/` and their absolute paths come back in `Artifacts`.
@@ -384,7 +414,7 @@ Library/AgentBridge/
 
 ## Limitations
 
-- Works only in Unity Editor, not in Play Mode (except `tests --mode PlayMode`, which enters Play Mode itself)
+- Works in Unity Editor. Play Mode is reachable only through an owned play session (`agentbridge play`), and only `csharp` and `sceneshot` run inside one; `tests --mode PlayMode` enters Play Mode on its own and is unaffected. See [Play Mode](#play-mode).
 - Tasks are processed strictly one at a time — Bridge does not start a new task while one is in flight. Order is oldest first within an agent session; between sessions the scheduler rotates the editor on task boundaries (see [Multi-Agent Sessions](#multi-agent-sessions))
 - `Run()` is invoked on Unity's main thread; awaited continuations resume there too, so heavy synchronous work still blocks the Editor — offload it via `await Task.Run(...)`. Bridge caps a task at `TaskTimeoutSeconds` (default 300, configurable in `ProjectSettings/AgentBridge.json`); on timeout it writes `Status: "timeout"` and unblocks the queue
 - A running task can be aborted via **Tools → Agent Bridge → Cancel Running Task**

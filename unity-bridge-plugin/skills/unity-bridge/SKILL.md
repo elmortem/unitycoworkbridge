@@ -1,6 +1,6 @@
 ---
 name: unity-bridge
-description: "Use whenever the user wants Claude to execute anything inside the Unity Editor — listing or modifying assets, scenes, prefabs, components, materials, project settings; editor-side analysis, refactors, batch operations; querying the scene hierarchy; compiling the project; running tests; or any task needing C# code run in the Editor context. Works via Agent Bridge: Claude writes a C# script and hands it to the `agentbridge` CLI, which compiles it in memory with Roslyn and runs it on the main thread. Trigger even for casual phrasings like 'check what's in the scene', 'find all prefabs using shader X', 'rename these assets', 'compile the project', 'run the tests'. Also use for Scene View screenshots of the open scene ('сфоткай сцену', 'скриншот сцены') via the sceneshot command. Do NOT use for runtime gameplay code, build pipeline tasks unrelated to Editor scripting, or pure C# questions outside Unity. For uGUI prefab layout and UI screenshots prefer the unity-ui skill."
+description: "Use whenever the user wants Claude to execute anything inside the Unity Editor — listing or modifying assets, scenes, prefabs, components, materials, project settings; editor-side analysis, refactors, batch operations; querying the scene hierarchy; compiling the project; running tests; or any task needing C# code run in the Editor context. Works via Agent Bridge: Claude writes a C# script and hands it to the `agentbridge` CLI, which compiles it in memory with Roslyn and runs it on the main thread. Trigger even for casual phrasings like 'check what's in the scene', 'find all prefabs using shader X', 'rename these assets', 'compile the project', 'run the tests'. Also use for Scene View screenshots of the open scene ('сфоткай сцену', 'скриншот сцены') via the sceneshot command, and for anything involving Play Mode ('запусти игру', 'войди в плей мод', 'выйди из плей мода', 'посмотри как это работает в игре', 'скриншот геймплея', 'редактор завис в плей моде') via the play/stopplay commands — never enter Play Mode from a csharp task. Do NOT use for runtime gameplay code, build pipeline tasks unrelated to Editor scripting, or pure C# questions outside Unity. For uGUI prefab layout and UI screenshots prefer the unity-ui skill."
 ---
 
 # Unity Bridge
@@ -64,8 +64,9 @@ public static class Task_XXX
 5. Не добавлять зависимости от пользовательских сборок проекта — только Unity API и кастомные API из `UNITYAGENT.md`. Скрипт компилируется изолированно от `Assets`, поэтому доступны только уже загруженные в домен сборки.
 6. Запрещены блокирующие конструкции: `.Wait()`, `.GetAwaiter().GetResult()`, `.Result` на task-подобных выражениях, `Thread.Sleep`, `while (true)`/`for (;;)` без `await` внутри. Мост отклоняет такой код до исполнения (`rejected`, причина в `Diagnostics`/`Logs`) — переписывай через `await`.
 7. Для смены Editor-сцен используй только `AgentBridge.AgentSceneManager`. Прямые вызовы `EditorSceneManager.OpenScene` / `NewScene` / `CloseScene` / `RestoreSceneManagerSetup` и `SceneManager.LoadScene*` отклоняются guardrail: безопасный API сначала разрешает dirty-состояние без модального save-диалога.
-8. Запрещены модальные и интерактивные Editor API — guardrail отклоняет таск до исполнения: `EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo`, `EditorSceneManager.SaveModifiedScenesIfUserWantsTo`, `EditorApplication.EnterPlaymode`, `EditorApplication.ExitPlaymode`, `EditorApplication.Exit`, присваивание `EditorApplication.isPlaying` и `EditorApplication.isPaused`, `EditorUtility.DisplayDialog`, `EditorUtility.DisplayDialogComplex`, `EditorUtility.OpenFilePanel`, `EditorUtility.OpenFolderPanel`, `EditorUtility.SaveFilePanel`, `EditorUtility.SaveFilePanelInProject`, `PrefabStageUtility.OpenPrefab`, `AssetDatabase.OpenAsset`, `TestRunnerApi.Execute`. Тесты запускай командой `agentbridge tests`, а не из кода таска.
-9. **Упавший таск чини, а не удаляй.** Битый `.cs` в `Temp/AgentBridge/` ничего не блокирует (задачи не участвуют в компиляции проекта) — просто исправь файл и запусти `csharp` заново с тем же или новым именем.
+8. Запрещены модальные и интерактивные Editor API — guardrail отклоняет таск до исполнения: `EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo`, `EditorSceneManager.SaveModifiedScenesIfUserWantsTo`, `EditorApplication.EnterPlaymode`, `EditorApplication.ExitPlaymode`, `EditorApplication.Exit`, `EditorApplication.ExecuteMenuItem`, присваивание `EditorApplication.isPlaying` и `EditorApplication.isPaused`, `EditorUtility.DisplayDialog`, `EditorUtility.DisplayDialogComplex`, `EditorUtility.OpenFilePanel`, `EditorUtility.OpenFolderPanel`, `EditorUtility.SaveFilePanel`, `EditorUtility.SaveFilePanelInProject`, `PrefabStageUtility.OpenPrefab`, `AssetDatabase.OpenAsset`, `TestRunnerApi.Execute`. Тесты запускай командой `agentbridge tests`, а не из кода таска.
+9. **Никогда не входи в плей мод из `csharp`-таска** — ни напрямую, ни через меню, ни рефлексией. Guardrail режет и вызовы, и строковые литералы `"EnterPlaymode"`, `"ExitPlaymode"`, `"isPlaying"`, `"Edit/Play"`. Плей мод — это `agentbridge play` (см. «Плей мод»). Читать `EditorApplication.isPlaying` можно.
+10. **Упавший таск чини, а не удаляй.** Битый `.cs` в `Temp/AgentBridge/` ничего не блокирует (задачи не участвуют в компиляции проекта) — просто исправь файл и запусти `csharp` заново с тем же или новым именем.
 
 ### Политика сцен
 
@@ -132,12 +133,14 @@ agentbridge csharp Temp/AgentBridge/Task_20260226_143052_871_a3f.cs
     { "name": "hero", "width": 1280, "height": 720,
       "frame": { "target": "Level/Hero", "margin": 1.1, "rotation": [30, 45, 0] } },
     { "name": "top",
-      "pose": { "pivot": [0, 0, 0], "rotation": [90, 0, 0], "size": 40, "orthographic": true } }
+      "pose": { "pivot": [0, 0, 0], "rotation": [90, 0, 0], "size": 40, "orthographic": true } },
+    { "name": "hud", "view": "game" }
   ]
 }
 ```
 
-- Ровно одно из `pose` (явная поза SceneView: pivot/rotation/size/orthographic) или `frame` (автокадрирование объекта по имени или пути `Root/Child`, как клавиша F).
+- `view` — `"scene"` по умолчанию (Scene View) или `"game"` (настоящий Game View со всем overlay-UI). Game-шот работает **только в плей моде**: вне его таск завершается `runtime_error` с подсказкой запустить `agentbridge play`. Для `"game"` ни `pose`, ни `frame` не нужны (кадр задаёт камера игры), а `width`/`height` игнорируются — снимок идёт в разрешении Game View.
+- Ровно одно из `pose` (явная поза SceneView: pivot/rotation/size/orthographic) или `frame` (автокадрирование объекта по имени или пути `Root/Child`, как клавиша F). Для `view: "game"` не задаётся ни то, ни другое.
 - `width`/`height` — дефолт 1280x720, потолок 1920x1080. Если экран меньше, размер пропорционально уменьшается — фактический указан в `ReturnValue`, факт уменьшения в `Logs`.
 - `gizmos` — дефолт `true` (иконки компонентов, гизмо). `grid` — дефолт `false`.
 - Снимок делается перерисовкой окна в текстуру, а не с экрана: перекрытие окна Unity, потеря фокуса и свёрнутый редактор на результат не влияют.
@@ -182,6 +185,26 @@ agentbridge release --session AB_20260813_1500_a1f
 ```
 
 `ReturnValue` — `released`, если сессия держала редактор, и `not_holder`, если он и так был чужим или свободным.
+
+### `play [--seconds N] --session <id>` и `stopplay [--session <id>]`
+
+Единственный законный способ запустить плей мод. `play` открывает play-сессию, владельцем которой становится твоя `--session` (она обязательна), и возвращает `success` с `ReturnValue` вида `playing_until:<UTC>`. Без `--seconds` длина берётся из настроек редактора (по умолчанию 120 с) и в любом случае обрезается сверху максимумом (по умолчанию 600 с).
+
+```bash
+agentbridge play --seconds 90 --session AB_20260813_1500_a1f
+agentbridge stopplay --session AB_20260813_1500_a1f
+```
+
+- Внутри **своей** play-сессии тебе доступны только `csharp` и `sceneshot` (включая `"view": "game"`). Любой другой kind отклоняется с `kind not allowed during play session`.
+- Чужую play-сессию остановить нельзя: `stopplay` вернёт `rejected` с `play_session_held_by:<id>`. Дождись, пока владелец закончит или истечёт дедлайн.
+- Плей мод, оставшийся без сессии (застрявший таск, ручной запуск), может погасить **любой** агент: `stopplay` вернёт `success` с `stopped:manual`.
+- `stopplay` вне плей мода — безобидный no-op: `success`, `ReturnValue: "not_playing"`.
+- Сессия завершается сама по дедлайну; отдельный `stopplay` для этого не нужен, но и не вреден.
+- Пока идут тесты (`tests --mode PlayMode`), `play` и `stopplay` отклоняются с `tests are running`.
+- Если человек нажал Stop в редакторе, сессия закрывается сама, а в логах появляется `play session ended externally`.
+- Если агентский таск всё же прорвался в плей мод в обход guardrail, мост выходит из него автоматически и дописывает в журнальную запись виновника строку `this task entered play mode; the bridge exited it automatically`. Человеческий плей мод мост не трогает никогда.
+
+`agentbridge status` показывает состояние: `IsPlaying`, `PlaySessionAgentId`, `PlaySessionDeadlineUtc` (в `--format human` — строка `Playing:`).
 
 ### `wait <TaskId>`
 

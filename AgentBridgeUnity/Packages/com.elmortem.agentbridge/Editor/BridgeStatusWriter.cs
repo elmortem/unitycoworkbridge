@@ -46,8 +46,11 @@ namespace AgentBridge
 			Current.Enabled = AgentBridgeSettingsStore.IsEnabled();
 			Current.ActiveTaskId = null;
 			Current.HolderAgentSessionId = null;
+			Current.IsPlaying = EditorApplication.isPlayingOrWillChangePlaymode;
+			Current.PlaySessionAgentId = null;
+			Current.PlaySessionDeadlineUtc = null;
 			Current.QueuedTasks = new QueuedTaskStatus[0];
-			Current.Capabilities = new[] { "csharp", "ui", "sceneshot", "compile", "tests", "release" };
+			Current.Capabilities = new[] { "csharp", "ui", "sceneshot", "compile", "tests", "release", "play", "stopplay" };
 
 			RoslynLocation location = RoslynResolver.ResolveConfigured();
 			Current.RoslynReady = location.Available;

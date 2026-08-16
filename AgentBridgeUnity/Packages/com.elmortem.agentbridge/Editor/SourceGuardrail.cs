@@ -53,12 +53,31 @@ namespace AgentBridge
 				{
 					CheckForEver(node, violations);
 				}
+				else if (IsKind(node, "StringLiteralExpression"))
+				{
+					CheckPlayModeLiteral(node, violations);
+				}
 			}
 
 			return violations.Count == 0;
 		}
 
 		private const string ModalApiReason = "modal or interactive editor API is not allowed in agent tasks";
+
+		private const string PlayModeReason =
+			"play mode control is not allowed in agent tasks; use agentbridge play/stopplay";
+
+		// Reflection and the menu are the two cheap ways around the direct EnterPlaymode call,
+		// and both need one of these names spelled out as a string.
+		private static readonly HashSet<string> PlayModeLiterals = new HashSet<string>(StringComparer.Ordinal)
+		{
+			"EnterPlaymode",
+			"ExitPlaymode",
+			"EnterPlayMode",
+			"ExitPlayMode",
+			"isPlaying",
+			"Edit/Play"
+		};
 
 		private static void CheckForbiddenCall(dynamic invocation, HashSet<string> testRunnerApiVariables,
 			List<GuardrailViolation> violations)
@@ -89,10 +108,27 @@ namespace AgentBridge
 				return;
 			}
 
+			if (typeName == "EditorApplication" && methodName == "ExecuteMenuItem")
+			{
+				AddViolation(violations, invocation, "ExecuteMenuItem is not allowed in agent tasks");
+				return;
+			}
+
 			if (IsModalCall(typeName, methodName) || IsTestRunnerExecute(target, methodName, testRunnerApiVariables))
 			{
 				AddViolation(violations, invocation, ModalApiReason);
 			}
+		}
+
+		private static void CheckPlayModeLiteral(dynamic literal, List<GuardrailViolation> violations)
+		{
+			var value = (string)literal.Token.ValueText;
+			if (value == null || !PlayModeLiterals.Contains(value))
+			{
+				return;
+			}
+
+			AddViolation(violations, literal, PlayModeReason);
 		}
 
 		private static bool IsModalCall(string typeName, string methodName)

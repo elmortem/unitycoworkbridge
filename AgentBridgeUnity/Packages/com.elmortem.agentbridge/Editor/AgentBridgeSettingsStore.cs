@@ -169,6 +169,60 @@ namespace AgentBridge
 			Save(settings);
 		}
 
+		public static int GetPlaySessionDefaultSeconds()
+		{
+			AgentBridgeSettings settings = Load();
+			if (settings.PlaySessionDefaultSeconds <= 0)
+			{
+				return 120;
+			}
+
+			return settings.PlaySessionDefaultSeconds;
+		}
+
+		public static void SetPlaySessionDefaultSeconds(int value)
+		{
+			AgentBridgeSettings settings = Load();
+			settings.PlaySessionDefaultSeconds = value;
+			Save(settings);
+		}
+
+		public static int GetPlaySessionMaxSeconds()
+		{
+			AgentBridgeSettings settings = Load();
+			if (settings.PlaySessionMaxSeconds <= 0)
+			{
+				return 600;
+			}
+
+			return settings.PlaySessionMaxSeconds;
+		}
+
+		public static void SetPlaySessionMaxSeconds(int value)
+		{
+			AgentBridgeSettings settings = Load();
+			settings.PlaySessionMaxSeconds = value;
+			Save(settings);
+		}
+
+		public static int GetAgentPlayGraceSeconds()
+		{
+			AgentBridgeSettings settings = Load();
+			if (settings.AgentPlayGraceSeconds <= 0)
+			{
+				return 5;
+			}
+
+			return settings.AgentPlayGraceSeconds;
+		}
+
+		public static void SetAgentPlayGraceSeconds(int value)
+		{
+			AgentBridgeSettings settings = Load();
+			settings.AgentPlayGraceSeconds = value;
+			Save(settings);
+		}
+
 		public static bool GetDiscardDirtyUntitledScenes()
 		{
 			AgentBridgeSettings settings = Load();

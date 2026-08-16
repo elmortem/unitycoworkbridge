@@ -42,6 +42,7 @@ namespace AgentBridge
 			AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
 
 			PlayModeSceneRecovery.Start();
+			UnsanctionedPlayGuard.Start();
 			TryFinalizePendingCompileTask();
 			FinalizeOrphanRecords();
 			SceneShot.SceneShotTaskExecutor.CloseOrphanWindows();
@@ -58,6 +59,12 @@ namespace AgentBridge
 			string testTaskId = SessionState.GetString(AgentTestRunner.CoordinatorTestTaskKey, "");
 			string sessionId = BridgeStatusWriter.Current.SessionId;
 
+			// A play session survives the domain reload it caused, so the task that opened it
+			// and the stopplay task waiting for it are still legitimately running.
+			PlaySessionState playSession = PlaySessionStore.Read();
+			string playTaskId = playSession != null ? playSession.TaskId ?? "" : "";
+			string stopTaskId = playSession != null ? playSession.PendingStopTaskId ?? "" : "";
+
 			foreach (string file in Directory.GetFiles(BridgePaths.Journal, "*.json"))
 			{
 				TaskRecord record;
@@ -73,6 +80,12 @@ namespace AgentBridge
 				}
 
 				if (record.Id == compileTaskId || record.Id == testTaskId)
+				{
+					continue;
+				}
+
+				if ((!string.IsNullOrEmpty(playTaskId) && record.Id == playTaskId)
+					|| (!string.IsNullOrEmpty(stopTaskId) && record.Id == stopTaskId))
 				{
 					continue;
 				}
@@ -135,11 +148,17 @@ namespace AgentBridge
 			EditorApplication.update -= OnUpdate;
 			AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
 			PlayModeSceneRecovery.Stop();
+			UnsanctionedPlayGuard.Stop();
 		}
 
 		public static bool HasActiveTask
 		{
 			get { return _activeTaskId != null; }
+		}
+
+		public static string ActiveTaskId
+		{
+			get { return _activeTaskId; }
 		}
 
 		public static void CancelActive()
@@ -154,12 +173,21 @@ namespace AgentBridge
 				_activeCancellation.Cancel();
 			}
 
+			// Cancelling the task that owns the play mode must not leave the editor playing with
+			// nothing left to stop it.
+			if (_activeRecord.Kind == "play" || _activeRecord.Kind == "stopplay")
+			{
+				PlaySessionManager.BeginStop("", "manual");
+			}
+
 			FinishTask("canceled", null, new List<string> { "Canceled by user" }, false);
 		}
 
 		private static void OnUpdate()
 		{
 			PlayModeSceneRecovery.Tick();
+			UnsanctionedPlayGuard.Tick();
+			PlaySessionManager.Reconcile();
 
 			if (_pendingTimeoutReload && _activeTaskId == null)
 			{
@@ -187,7 +215,8 @@ namespace AgentBridge
 				{
 					PollCompileTask();
 				}
-				else if (_activeRecord != null && _activeRecord.Kind == "tests")
+				else if (_activeRecord != null
+					&& (_activeRecord.Kind == "tests" || _activeRecord.Kind == "play" || _activeRecord.Kind == "stopplay"))
 				{
 					PollExternallyFinalizedTask();
 				}
@@ -212,8 +241,22 @@ namespace AgentBridge
 				return;
 			}
 
-			if (EditorApplication.isPlayingOrWillChangePlaymode || PlayModeSceneRecovery.IsPending)
+			if (PlayModeSceneRecovery.IsPending)
 			{
+				return;
+			}
+
+			if (EditorApplication.isPlayingOrWillChangePlaymode)
+			{
+				if (PlaySessionManager.IsSessionActive)
+				{
+					TryStartPlaySessionTask();
+				}
+				else
+				{
+					TryStartStopplayTask();
+				}
+
 				return;
 			}
 
@@ -266,6 +309,95 @@ namespace AgentBridge
 			}
 
 			StartTask(next, holderChanged, previousHolder);
+		}
+
+		// The regular scheduler is off while the editor plays, so the session that owns the play
+		// mode gets its own narrow pick: only the kinds that make sense inside play mode, and
+		// only from the owner. Everything else is answered here or left in the queue.
+		private static void TryStartPlaySessionTask()
+		{
+			PlaySessionState state = PlaySessionStore.Read();
+			if (state == null)
+			{
+				return;
+			}
+
+			string owner = state.OwnerAgentSessionId ?? "";
+			List<PendingTaskInfo> pending = BuildPendingList(null);
+			PendingTaskInfo next = null;
+
+			foreach (PendingTaskInfo task in pending)
+			{
+				bool isOwner = string.Equals(task.EffectiveSessionId, owner, StringComparison.Ordinal);
+
+				if (!isOwner)
+				{
+					if (task.Kind == "stopplay")
+					{
+						RejectTaskFile(task.TaskFilePath, task.Id, "stopplay", "play_session_held_by:" + owner);
+					}
+					else if (task.Kind == "release")
+					{
+						// The ordinary release path is unreachable with the scheduler asleep, and a
+						// foreign session must not wait out the whole play session for an answer.
+						_rejectedTaskHashes[task.TaskFilePath] = HashOf(task.TaskFilePath, PayloadPathOf(task.TaskFilePath));
+						WriteTerminal(task.Id, "release", "success", "not_holder");
+					}
+
+					continue;
+				}
+
+				if (task.Kind != "csharp" && task.Kind != "sceneshot" && task.Kind != "stopplay")
+				{
+					RejectTaskFile(task.TaskFilePath, task.Id, task.Kind, "kind not allowed during play session");
+					continue;
+				}
+
+				if (next == null || task.CreatedUtc < next.CreatedUtc)
+				{
+					next = task;
+				}
+			}
+
+			// The owner is working even though the scheduler never sees these picks, so the lease
+			// has to be kept warm by hand or it expires in the middle of the session.
+			SchedulerStateStore.State.HolderLastActivityUtc = DateTime.UtcNow.ToString("o");
+			SchedulerStateStore.Save();
+
+			if (next == null)
+			{
+				return;
+			}
+
+			StartTask(next, false, "");
+		}
+
+		// Play mode without a session is a stuck editor: nothing but stopplay may run, and it
+		// may come from any session.
+		private static void TryStartStopplayTask()
+		{
+			List<PendingTaskInfo> pending = BuildPendingList(null);
+			PendingTaskInfo next = null;
+
+			foreach (PendingTaskInfo task in pending)
+			{
+				if (task.Kind != "stopplay")
+				{
+					continue;
+				}
+
+				if (next == null || task.CreatedUtc < next.CreatedUtc)
+				{
+					next = task;
+				}
+			}
+
+			if (next == null)
+			{
+				return;
+			}
+
+			StartTask(next, false, "");
 		}
 
 		private static List<PendingTaskInfo> BuildPendingList(string excludeTaskId)
@@ -453,7 +585,10 @@ namespace AgentBridge
 
 			// Every kind but release runs the preflight: compile forces a domain reload and
 			// sceneshot ticks the editor, and both can reach Unity code that opens the save dialog.
-			if (request.Kind != "release")
+			// Inside a play session the scenes on screen are the running game, and touching their
+			// dirtiness there neither protects anything nor survives the exit.
+			bool playSessionActive = PlaySessionManager.IsSessionActive;
+			if (request.Kind != "release" && request.Kind != "stopplay" && !playSessionActive)
 			{
 				string sceneError;
 				if (!SceneSafetyGuard.TryPrepareForTask(out sceneError))
@@ -463,7 +598,7 @@ namespace AgentBridge
 				}
 			}
 
-			if (NeedsScenes(request.Kind) && !SchedulerStateStore.State.HolderContextRestored)
+			if (NeedsScenes(request.Kind) && !SchedulerStateStore.State.HolderContextRestored && !playSessionActive)
 			{
 				_activeRestoreLogs = new List<string>();
 				SessionContextSwitcher.RestoreContext(task.EffectiveSessionId, _activeRestoreLogs);
@@ -508,6 +643,12 @@ namespace AgentBridge
 				case "release":
 					RunReleaseTask(request);
 					break;
+				case "play":
+					RunPlayTask(request);
+					break;
+				case "stopplay":
+					RunStopplayTask(request);
+					break;
 				default:
 					FinishTask("rejected", null, new List<string> { "unknown kind" }, false);
 					break;
@@ -536,6 +677,43 @@ namespace AgentBridge
 			FinishTask("success", "released", logs, false);
 		}
 
+		// A play task opens the session on whatever scenes its own agent session was working on,
+		// so the record stays running until PlaySessionManager finalizes it from the other side
+		// of the domain reload that entering play mode triggers.
+		private static void RunPlayTask(TaskRequest request)
+		{
+			string error;
+			if (!PlaySessionManager.BeginPlay(request, _activeRecord, out error))
+			{
+				FinishTask("rejected", null, new List<string> { error }, false);
+			}
+		}
+
+		private static void RunStopplayTask(TaskRequest request)
+		{
+			string effective = AgentSessionScheduler.EffectiveSessionId(request.AgentSessionId, request.Id);
+			PlaySessionState state = PlaySessionStore.Read();
+			StopVerdict verdict = PlaySessionArbiter.Judge(
+				state, effective, EditorApplication.isPlaying, PlayModeSceneRecovery.IsPending);
+
+			switch (verdict)
+			{
+				case StopVerdict.NotPlaying:
+					FinishTask("success", "not_playing", null, false);
+					return;
+				case StopVerdict.RejectTests:
+					FinishTask("rejected", null, new List<string> { "tests are running" }, false);
+					return;
+				case StopVerdict.RejectForeign:
+					FinishTask("rejected", null,
+						new List<string> { "play_session_held_by:" + (state.OwnerAgentSessionId ?? "") }, false);
+					return;
+			}
+
+			UnsanctionedPlayGuard.ClearMark();
+			PlaySessionManager.BeginStop(request.Id, verdict == StopVerdict.StopOwn ? "stopplay" : "manual");
+		}
+
 		private static bool NeedsScenes(string kind)
 		{
 			switch (kind)
@@ -544,6 +722,7 @@ namespace AgentBridge
 				case "ui":
 				case "tests":
 				case "sceneshot":
+				case "play":
 					return true;
 				default:
 					return false;
@@ -669,7 +848,13 @@ namespace AgentBridge
 				return;
 			}
 
-			AgentSessionScheduler.OnTaskFinished(_activeRecord.AgentSessionId, DateTime.UtcNow);
+			// PlaySessionManager already told the scheduler when it finalized the record;
+			// a second call would refresh the lease of a session that is no longer working.
+			if (_activeRecord.Kind == "tests")
+			{
+				AgentSessionScheduler.OnTaskFinished(_activeRecord.AgentSessionId, DateTime.UtcNow);
+			}
+
 			CleanupActive();
 		}
 
@@ -780,6 +965,7 @@ namespace AgentBridge
 			_activeRecord.Contention = AgentSessionScheduler.BuildContention(BuildPendingList(_activeRecord.Id), finishedUtc);
 
 			TaskJournal.Write(_activeRecord);
+			UnsanctionedPlayGuard.RecordTaskFinish(_activeRecord.Id);
 			AgentSessionScheduler.OnTaskFinished(_activeRecord.AgentSessionId, DateTime.UtcNow);
 
 			CleanupActive();
@@ -827,6 +1013,13 @@ namespace AgentBridge
 				return;
 			}
 
+			// A play session has its own deadline and a stopplay task waits for the editor to
+			// finish leaving play mode; the task timeout would cut both short.
+			if (_activeRecord.Kind == "play" || _activeRecord.Kind == "stopplay")
+			{
+				return;
+			}
+
 			int timeoutSeconds = AgentBridgeSettingsStore.GetTaskTimeoutSeconds();
 			if (now - _activeStartTime <= timeoutSeconds)
 			{
@@ -858,7 +1051,9 @@ namespace AgentBridge
 				return;
 			}
 
-			if (_activeRecord.Kind == "tests")
+			// Entering and leaving play mode both reload the domain while the record is still
+			// running; PlaySessionManager finalizes it on the other side, exactly like tests.
+			if (_activeRecord.Kind == "tests" || _activeRecord.Kind == "play" || _activeRecord.Kind == "stopplay")
 			{
 				CleanupActive();
 				return;

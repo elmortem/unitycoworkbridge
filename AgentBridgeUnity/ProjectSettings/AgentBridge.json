@@ -11,5 +11,8 @@
     "DirtyUntitledScenePolicy": "Discard",
     "DirtyScenePolicy": "Save",
     "LeaseIdleTimeoutSeconds": 120,
-    "ContentionSliceSeconds": 90
+    "ContentionSliceSeconds": 90,
+    "PlaySessionDefaultSeconds": 120,
+    "PlaySessionMaxSeconds": 600,
+    "AgentPlayGraceSeconds": 5
 }

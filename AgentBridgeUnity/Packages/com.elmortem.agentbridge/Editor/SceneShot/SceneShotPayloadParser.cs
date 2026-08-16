@@ -48,6 +48,17 @@ namespace AgentBridge.SceneShot
 			}
 
 			item.Name = name;
+
+			if (shot.TryGetValue("view", out object viewObj))
+			{
+				if (!(viewObj is string view) || (view != "scene" && view != "game"))
+				{
+					throw new Exception("shot '" + name + "': 'view' must be \"scene\" or \"game\"");
+				}
+
+				item.View = view;
+			}
+
 			item.Width = shot.TryGetValue("width", out object w) ? UiValue.I(w) : 1280;
 			item.Height = shot.TryGetValue("height", out object h) ? UiValue.I(h) : 720;
 			if (item.Width < 16 || item.Width > MaxWidth || item.Height < 16 || item.Height > MaxHeight)
@@ -57,6 +68,13 @@ namespace AgentBridge.SceneShot
 
 			item.Gizmos = !shot.TryGetValue("gizmos", out object g) || UiValue.B(g);
 			item.Grid = shot.TryGetValue("grid", out object grid) && UiValue.B(grid);
+
+			// A game view shot is framed by the running game's own camera, so there is no scene
+			// view pose to author and demanding one would make the shot impossible to request.
+			if (item.View == "game")
+			{
+				return item;
+			}
 
 			bool hasPose = shot.TryGetValue("pose", out object poseObj);
 			bool hasFrame = shot.TryGetValue("frame", out object frameObj);

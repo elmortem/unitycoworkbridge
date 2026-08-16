@@ -76,6 +76,35 @@ namespace AgentBridge
 				MessageType.Info);
 			EditorGUILayout.Space();
 
+			EditorGUILayout.LabelField("Play mode", EditorStyles.boldLabel);
+
+			int playSessionDefault = AgentBridgeSettingsStore.GetPlaySessionDefaultSeconds();
+			int nextPlaySessionDefault = EditorGUILayout.DelayedIntField("Play session default (s)", playSessionDefault);
+			if (nextPlaySessionDefault != playSessionDefault)
+			{
+				AgentBridgeSettingsStore.SetPlaySessionDefaultSeconds(nextPlaySessionDefault);
+			}
+
+			int playSessionMax = AgentBridgeSettingsStore.GetPlaySessionMaxSeconds();
+			int nextPlaySessionMax = EditorGUILayout.DelayedIntField("Play session max (s)", playSessionMax);
+			if (nextPlaySessionMax != playSessionMax)
+			{
+				AgentBridgeSettingsStore.SetPlaySessionMaxSeconds(nextPlaySessionMax);
+			}
+
+			int agentPlayGrace = AgentBridgeSettingsStore.GetAgentPlayGraceSeconds();
+			int nextAgentPlayGrace = EditorGUILayout.DelayedIntField("Agent play grace (s)", agentPlayGrace);
+			if (nextAgentPlayGrace != agentPlayGrace)
+			{
+				AgentBridgeSettingsStore.SetAgentPlayGraceSeconds(nextAgentPlayGrace);
+			}
+
+			EditorGUILayout.HelpBox(
+				"An agent play session runs for the requested seconds, defaulting to the first value and capped by the second. "
+				+ "Play mode entered by an agent task within the grace window and without a session is exited automatically.",
+				MessageType.Info);
+			EditorGUILayout.Space();
+
 			EditorGUILayout.LabelField("Roslyn source", EditorStyles.boldLabel);
 			EditorGUILayout.Space();
 

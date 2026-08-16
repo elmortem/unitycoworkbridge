@@ -5,6 +5,7 @@ namespace AgentBridge.SceneShot
 	public class SceneShotItem
 	{
 		public string Name;
+		public string View = "scene";
 		public int Width;
 		public int Height;
 		public bool Gizmos;

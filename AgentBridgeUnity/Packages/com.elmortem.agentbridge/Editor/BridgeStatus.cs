@@ -22,6 +22,9 @@ namespace AgentBridge
 		public int ExecutedTasks;
 		public string ActiveTaskId;
 		public string HolderAgentSessionId;
+		public bool IsPlaying;
+		public string PlaySessionAgentId;
+		public string PlaySessionDeadlineUtc;
 		public QueuedTaskStatus[] QueuedTasks;
 		public string[] Capabilities;
 	}
