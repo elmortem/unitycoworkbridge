@@ -51,6 +51,7 @@ namespace AgentBridge
 		{
 			if (EditorApplication.isPlaying)
 			{
+				Application.runInBackground = true;
 				state.Phase = PlaySessionPhases.Active;
 				PlaySessionStore.Write(state);
 				FinalizeRecord(state.TaskId, "success", "playing_until:" + state.DeadlineUtc, null);
@@ -206,6 +207,7 @@ namespace AgentBridge
 
 			PlaySessionStore.Write(state);
 			WriteStatus(state);
+			FocusGuard.BeginPlayEntryGuard();
 			EditorApplication.EnterPlaymode();
 			error = null;
 			return true;

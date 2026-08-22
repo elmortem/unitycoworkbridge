@@ -145,17 +145,21 @@ namespace AgentBridge.SceneShot
 					+ " does not fit the screen, reduced to " + _targetPx.x + "x" + _targetPx.y);
 			}
 
-			_window = EditorWindow.CreateWindow<SceneView>();
+			_window = ScriptableObject.CreateInstance<SceneView>();
 			_window.titleContent = new GUIContent(WindowTitle);
 			_window.drawGizmos = item.Gizmos;
 			_window.showGrid = item.Grid;
 			SceneViewGrabber.HideOverlays(_window, message => _logs.Add(message));
 			_window.LookAt(pose.Pivot, pose.Rotation, pose.Size, pose.Orthographic, true);
-			_window.position = new Rect(
-				workArea.x + SceneShotResolution.Border / (float)ppp,
-				workArea.y + SceneShotResolution.Border / (float)ppp,
-				_targetPx.x / (float)ppp,
-				_targetPx.y / (float)ppp);
+			UnfocusedWindowShower.TryShow(
+				_window,
+				new Rect(
+					workArea.x + SceneShotResolution.Border / (float)ppp,
+					workArea.y + SceneShotResolution.Border / (float)ppp,
+					_targetPx.x / (float)ppp,
+					_targetPx.y / (float)ppp),
+				message => _logs.Add(message));
+			FocusGuard.BeginWindowGuard();
 			_window.Repaint();
 
 			_settleUntil = EditorApplication.timeSinceStartup + SettleSeconds;
@@ -178,15 +182,26 @@ namespace AgentBridge.SceneShot
 			try
 			{
 				Type gameViewType = Type.GetType("UnityEditor.GameView,UnityEditor");
-				if (gameViewType != null)
+				if (gameViewType == null)
 				{
-					EditorWindow.GetWindow(gameViewType, false, null, true);
+					_logs.Add("shot '" + item.Name + "': could not open the Game View: UnityEditor.GameView is not available");
+				}
+				else if (Resources.FindObjectsOfTypeAll(gameViewType).Length == 0)
+				{
+					Rect workArea = EditorGUIUtility.GetMainWindowPosition();
+					EditorWindow gameView = (EditorWindow)ScriptableObject.CreateInstance(gameViewType);
+					UnfocusedWindowShower.TryShow(
+						gameView,
+						new Rect(workArea.x, workArea.y, 480f, 854f),
+						message => _logs.Add(message));
 				}
 			}
 			catch (Exception ex)
 			{
-				_logs.Add("shot '" + item.Name + "': could not focus the Game View: " + ex.GetBaseException().Message);
+				_logs.Add("shot '" + item.Name + "': could not open the Game View: " + ex.GetBaseException().Message);
 			}
+
+			FocusGuard.BeginWindowGuard();
 
 			_logs.Add("shot '" + item.Name + "': game view shots use the Game View resolution, requested size ignored");
 

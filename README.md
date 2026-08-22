@@ -264,6 +264,7 @@ agentbridge stopplay [--session <id>]
 - A foreign play session cannot be stopped: `stopplay` answers `rejected` with `play_session_held_by:<id>`. Play mode left behind without a session — a stuck task or a manual start — can be stopped by any agent. Outside play mode `stopplay` is a no-op returning `not_playing`.
 - The session ends on its own at the deadline, and a human pressing Stop ends it too (`stopped:external`). Play mode a human started is never exited automatically; play mode an agent slipped into without a session is, and the culprit's journal record says so.
 - While a test run is in flight both commands are rejected with `tests are running`: PlayMode test semantics are untouched.
+- Entering play mode does not steal your focus. Both bridge entries — `play` and `tests --mode PlayMode` — suppress the Editor's habit of activating the Game View, and the session runs with `Application.runInBackground`, so the game keeps ticking while Unity sits in the background. If the Editor still jumps to the front, the bridge hands focus back to the window that had it, at most twice per entry — click into Unity yourself and it stays yours. Windows only; elsewhere the suppression applies and the hand-back is a no-op.
 - `agentbridge status` reports `IsPlaying`, `PlaySessionAgentId` and `PlaySessionDeadlineUtc`.
 
 Three settings in `ProjectSettings/AgentBridge.json`, all exposed in **Tools → Agent Bridge → Setup...**:
@@ -362,7 +363,7 @@ Order within a task: all `apply`/`delete` run first over the loaded prefab conte
 
 ## Scene Screenshots
 
-`agentbridge sceneshot <path-to-sceneshot-json>` photographs the currently open scene from the angles listed in the file — no compilation, no domain reload. The task id is the file name without the `.sceneshot.json` suffix. Each shot opens a temporary Scene View window of the requested size, poses its camera and renders that view into a texture — not a screen grab, so an occluded, unfocused or fully minimized Editor produces the same image.
+`agentbridge sceneshot <path-to-sceneshot-json>` photographs the currently open scene from the angles listed in the file — no compilation, no domain reload. The task id is the file name without the `.sceneshot.json` suffix. Each shot opens a temporary Scene View window of the requested size, poses its camera and renders that view into a texture — not a screen grab, so an occluded, unfocused or fully minimized Editor produces the same image. That temporary window is shown without activation, so taking a screenshot does not pull Unity in front of whatever you are working in; `"view": "game"` reuses an existing Game View as-is and only creates an unfocused one when the project has none.
 
 ```json
 {

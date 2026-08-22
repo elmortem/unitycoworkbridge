@@ -93,6 +93,11 @@ namespace AgentBridge
 			try
 			{
 				TestRunnerApi api = ScriptableObject.CreateInstance<TestRunnerApi>();
+				if (mode == TestMode.PlayMode)
+				{
+					FocusGuard.BeginPlayEntryGuard();
+				}
+
 				api.Execute(new ExecutionSettings(filter));
 			}
 			catch
