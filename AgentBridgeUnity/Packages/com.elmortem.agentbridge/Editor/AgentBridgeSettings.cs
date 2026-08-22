@@ -18,7 +18,7 @@ namespace AgentBridge
 		public string DirtyScenePolicy = "Save";
 		public int LeaseIdleTimeoutSeconds = 120;
 		public int ContentionSliceSeconds = 90;
-		public int PlaySessionDefaultSeconds = 120;
+		public int PlaySessionDefaultSeconds = 30;
 		public int PlaySessionMaxSeconds = 600;
 		public int AgentPlayGraceSeconds = 5;
 	}

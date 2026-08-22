@@ -122,7 +122,12 @@ internal static class AgentBridgeApplication
 			case "play":
 				if (commandArguments.Length != 0 || options.Session == null)
 				{
-					return WriteError("bad_usage", "usage: agentbridge play [--seconds N] --session <id> [--project <path>] [--wait <seconds>]", options.Format);
+					return WriteError("bad_usage", "usage: agentbridge play [--seconds N] --note <intent> --session <id> [--project <path>] [--wait <seconds>]", options.Format);
+				}
+
+				if (string.IsNullOrWhiteSpace(options.Note))
+				{
+					return WriteError("bad_usage", "play requires --note with the intent of the session (what to check and why)", options.Format);
 				}
 
 				return await client.SubmitPlayAsync(options.Seconds, options.WaitSeconds);
@@ -323,14 +328,14 @@ internal static class AgentBridgeApplication
 			  compile
 			  tests [--mode EditMode|PlayMode] [--assembly A] [--test T] [--category C]
 			  release --session <id>     give the editor back to the other agent sessions
-			  play [--seconds N] --session <id>   open a play session; only csharp and sceneshot run inside it
+			  play [--seconds N] --note <intent> --session <id>   open a play session; only csharp and sceneshot run inside it
 			  stopplay [--session <id>]  end your play session, or an unsanctioned one anybody left behind
 			  wait <TaskId>
 
 			global options:
 			  --project <path>   Unity project root; otherwise discovered from cwd
 			  --wait <seconds>   client wait timeout, default 110
-			  --seconds <n>      play session length; defaults to the editor setting
+			  --seconds <n>      play session length; defaults to the editor setting (30)
 			  --format <value>   json (default, machine-readable) or human for every command
 			  --session <id>     agent session for fair scheduling
 			  --note <text>      intent shown to the session holding the editor

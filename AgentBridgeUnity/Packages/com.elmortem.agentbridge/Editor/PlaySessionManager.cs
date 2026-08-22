@@ -163,6 +163,12 @@ namespace AgentBridge
 				return false;
 			}
 
+			if (string.IsNullOrWhiteSpace(request.Note))
+			{
+				error = "play requires --note with the intent of the session";
+				return false;
+			}
+
 			if (PlayModeSceneRecovery.IsPending)
 			{
 				error = "tests are running";

@@ -175,7 +175,7 @@ agentbridge tests --mode EditMode --assembly MyGame.Tests --format human
 agentbridge status
 agentbridge doctor --format human
 agentbridge release --session AB_20260813_1500_a1f
-agentbridge play --seconds 90 --session AB_20260813_1500_a1f
+agentbridge play --seconds 30 --note "game shot of the main menu" --session AB_20260813_1500_a1f
 agentbridge stopplay --session AB_20260813_1500_a1f
 ```
 
@@ -255,11 +255,12 @@ The preflight is a snapshot, and the Unity Test Framework runs its task list asy
 An agent task that reaches play mode on its own hangs the bridge: the coordinator stops taking work while the Editor plays, and the task that started it is already gone. So the guardrail also rejects the cheap workarounds — `ExecuteMenuItem` and the string literals `"EnterPlaymode"`, `"ExitPlaymode"`, `"isPlaying"`, `"Edit/Play"` that reflection and menu paths need — and play mode gets its own commands instead. Reading `EditorApplication.isPlaying` stays allowed.
 
 ```bash
-agentbridge play [--seconds N] --session <id>
+agentbridge play [--seconds N] --note <intent> --session <id>
 agentbridge stopplay [--session <id>]
 ```
 
 - `play` requires `--session`; that session owns the play mode. The result is `success` with `ReturnValue: "playing_until:<UTC>"`.
+- `play` also requires `--note` — a short statement of what the session is for. A play session locks the Editor away from every other agent, so the neighbours get to see why it is busy, and an agent with nothing to write there has no reason to be in play mode. Both the CLI and the bridge reject a `play` without it. `--seconds` defaults to the editor setting, which is deliberately short (30 s); `compile`, `tests`, `sceneshot` with `"view": "scene"` and `uishot` answer most questions without play mode at all.
 - Inside its own play session an agent may run only `csharp` and `sceneshot` — including `"view": "game"`, which captures the real Game View with its overlay UI. Every other kind is rejected with `kind not allowed during play session`.
 - A foreign play session cannot be stopped: `stopplay` answers `rejected` with `play_session_held_by:<id>`. Play mode left behind without a session — a stuck task or a manual start — can be stopped by any agent. Outside play mode `stopplay` is a no-op returning `not_playing`.
 - The session ends on its own at the deadline, and a human pressing Stop ends it too (`stopped:external`). Play mode a human started is never exited automatically; play mode an agent slipped into without a session is, and the culprit's journal record says so.
@@ -271,7 +272,7 @@ Three settings in `ProjectSettings/AgentBridge.json`, all exposed in **Tools →
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `PlaySessionDefaultSeconds` | `120` | Session length when `--seconds` is omitted. |
+| `PlaySessionDefaultSeconds` | `30` | Session length when `--seconds` is omitted. |
 | `PlaySessionMaxSeconds` | `600` | Upper bound `--seconds` is clamped to. |
 | `AgentPlayGraceSeconds` | `5` | How long after a task finishes play mode still counts as agent-caused. |
 

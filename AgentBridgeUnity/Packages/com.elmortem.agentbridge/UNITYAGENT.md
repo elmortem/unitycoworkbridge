@@ -57,11 +57,11 @@ Guardrail также отклоняет модальные и интеракти
 Законный канал — отдельные команды CLI:
 
 ```bash
-agentbridge play [--seconds N] --session <id>
+agentbridge play [--seconds N] --note <intent> --session <id>
 agentbridge stopplay [--session <id>]
 ```
 
-- `play` требует `--session`: сессия становится владельцем плей мода. `ReturnValue` — `playing_until:<UTC>`. Без `--seconds` берётся `PlaySessionDefaultSeconds` (120), сверху обрезается `PlaySessionMaxSeconds` (600); обе настройки — в `ProjectSettings/AgentBridge.json` и в **Tools → Agent Bridge → Setup...**.
+- `play` требует `--session` (сессия становится владельцем плей мода) и `--note` — короткое намерение сессии; без любого из них команда отклоняется. `ReturnValue` — `playing_until:<UTC>`. Без `--seconds` берётся `PlaySessionDefaultSeconds` (30), сверху обрезается `PlaySessionMaxSeconds` (600); обе настройки — в `ProjectSettings/AgentBridge.json` и в **Tools → Agent Bridge → Setup...**.
 - Во время своей play-сессии выполняются только `csharp` и `sceneshot` (включая `"view": "game"` — снимок настоящего Game View с overlay-UI). Остальные kind'ы отклоняются с `kind not allowed during play session`.
 - Чужую play-сессию остановить нельзя: `stopplay` вернёт `rejected` с `play_session_held_by:<id>`.
 - Плей мод без сессии (застрявший таск, ручной запуск) гасит `stopplay` от любого агента. Вне плей мода `stopplay` — no-op со `success` и `ReturnValue: "not_playing"`.
