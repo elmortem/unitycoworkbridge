@@ -141,7 +141,7 @@ namespace AgentBridge.Ui
 			if (typeName == null)
 				return node.gameObject;
 
-			Type type = DomainTypeResolver.FindType(typeName);
+			Type type = UiComponentTypes.Resolve(typeName);
 			if (type == null)
 				throw new Exception("Ref type not found: " + typeName);
 

@@ -61,6 +61,8 @@ namespace AgentBridge.Ui
 						throw new Exception("Prefab not found: " + prefabPath);
 					}
 
+					var refs = new UiRefQueue();
+
 					foreach (object actionObj in actions)
 					{
 						var action = (Dictionary<string, object>)actionObj;
@@ -69,7 +71,7 @@ namespace AgentBridge.Ui
 						{
 							string target = action.TryGetValue("target", out object tv) ? (string)tv : string.Empty;
 							var node = (Dictionary<string, object>)action["node"];
-							UiNodeApplier.Apply(root, target, node, logs);
+							UiNodeApplier.Apply(root, target, node, refs, logs);
 							summary.Add("apply " + (string.IsNullOrEmpty(target) ? "<root>" : target));
 						}
 						else if (kind == "delete")
@@ -79,6 +81,8 @@ namespace AgentBridge.Ui
 							summary.Add("delete " + path);
 						}
 					}
+
+					refs.Resolve(root, logs);
 
 					EnsureAssetFolder(projectRoot, prefabPath);
 					PrefabUtility.SaveAsPrefabAsset(root, prefabPath);

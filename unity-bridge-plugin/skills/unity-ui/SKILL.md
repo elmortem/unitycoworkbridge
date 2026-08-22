@@ -57,8 +57,9 @@ description: "Use this skill for any uGUI layout work in a Unity project via Age
 - `{ "type": "Image", "sprite": "путь" | "путь#SubSprite" | null, "color": "#RRGGBB[AA]", "imageType": "Simple|Sliced|Tiled|Filled", "raycast": false, "fillCenter": true, "ppuMultiplier": 1 }`
 - `{ "type": "Text", "text": "...", "size": 42, "color": "#...", "align": "Center", "font": "путь до TMP_FontAsset", "wrap": false }` — TMP; без `font` — дефолт TMP Settings, но в проекте обычно есть свой шрифт в UNITYAGENT-UI.md.
 - `{ "type": "Button", "targetGraphic": "#Image", "wire": [ { "target": "", "type": "UI.MyModal", "method": "OnCloseClicked" } ] }` — `wire` полностью замещает persistent-листенеры onClick.
-- Любой другой компонент — по имени типа: `{ "type": "UI.MyView", "set": { "Speed": 2, "Mode": "Fast" }, "ref": { "Icon": "Icon#Image", "Data": "asset:Assets/Configs/X.asset" } }`. `set` — значения (число/строка/bool/`[x,y]`/`[x,y,z]`/`"#цвет"`/имя enum), `ref` — ссылки: `"путь"` → GameObject, `"путь#Тип"` → компонент, `""` → корень, `"asset:путь"` → ассет.
+- Любой другой компонент — по имени типа: `{ "type": "UI.MyView", "set": { "Speed": 2, "Mode": "Fast" }, "ref": { "Icon": "Icon#Image", "Data": "asset:Assets/Configs/X.asset" } }`. `set` — значения (число/строка/bool/`[x,y]`/`[x,y,z]`/`"#цвет"`/имя enum), `ref` — ссылки: `"путь"` → GameObject, `"путь#Тип"` → компонент, `""` → корень, `"asset:путь"` → ассет. Ссылки резолвятся после применения всех `apply`/`delete` таска — можно ссылаться на узлы, которые создаются позже в этом же таске.
 - `set`/`ref` работают и на нативных типах для остальных свойств.
+- Имя типа в `"#Тип"` и `wire.type` можно писать коротким (`"Button"`, `"Text"`, `"UI.MyView"`) — резолв ищет только наследников `Component`; при неоднозначности таск падает с перечислением полных имён, тогда укажи полное имя.
 - Компонент матчится по типу: существующий обновляется, отсутствующий добавляется.
 
 ## dump — чтение экрана

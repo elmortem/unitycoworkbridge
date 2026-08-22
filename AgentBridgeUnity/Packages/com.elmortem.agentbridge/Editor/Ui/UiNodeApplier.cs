@@ -10,7 +10,7 @@ namespace AgentBridge.Ui
 	// name (created when missing), extra children are never removed.
 	public static class UiNodeApplier
 	{
-		public static void Apply(GameObject root, string target, Dictionary<string, object> node, List<string> log)
+		public static void Apply(GameObject root, string target, Dictionary<string, object> node, UiRefQueue refs, List<string> log)
 		{
 			Transform t;
 			if (string.IsNullOrEmpty(target))
@@ -36,10 +36,10 @@ namespace AgentBridge.Ui
 				}
 			}
 
-			SyncNode(t.gameObject, node, root, log);
+			SyncNode(t.gameObject, node, root, refs, log);
 		}
 
-		public static void SyncNode(GameObject go, Dictionary<string, object> node, GameObject root, List<string> log)
+		public static void SyncNode(GameObject go, Dictionary<string, object> node, GameObject root, UiRefQueue refs, List<string> log)
 		{
 			if (node.TryGetValue("prefab", out object prefabObj) && prefabObj is string prefabPath)
 				VerifyPrefabInstance(go, prefabPath);
@@ -60,7 +60,7 @@ namespace AgentBridge.Ui
 			if (node.TryGetValue("components", out object componentsObj) && componentsObj is IList<object> components)
 			{
 				foreach (object comp in components)
-					UiComponentSync.Sync(go, (Dictionary<string, object>)comp, root, log);
+					UiComponentSync.Sync(go, (Dictionary<string, object>)comp, refs, log);
 			}
 
 			if (node.TryGetValue("children", out object childrenObj) && childrenObj is IList<object> children)
@@ -78,7 +78,7 @@ namespace AgentBridge.Ui
 							childT = CreateEmpty(go.transform, name, log);
 					}
 
-					SyncNode(childT.gameObject, child, root, log);
+					SyncNode(childT.gameObject, child, root, refs, log);
 				}
 			}
 		}

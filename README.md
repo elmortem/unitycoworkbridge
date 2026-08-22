@@ -362,6 +362,8 @@ One task targets one prefab and runs a list of actions:
 
 Order within a task: all `apply`/`delete` run first over the loaded prefab contents, then a single save, then `dump`/`uishot` over the saved asset. If the prefab does not exist and there is an `apply`, it is created (root `RectTransform` stretched 0..1). Any error (bad JSON, missing prefab/sprite/type/path) yields `runtime_error` and leaves the prefab unchanged.
 
+Object references — `ref`, a button's `targetGraphic` and its `wire` list — are collected while nodes are applied and resolved in a single pass after the last action, so a reference may point at a node that is created later in the same task. A component type name may be written short (`"Button"`, `"Text"`, `"UI.MyView"`): resolution only considers types deriving from `Component`, and an ambiguous short name fails the task with the list of full names to pick from.
+
 ## Scene Screenshots
 
 `agentbridge sceneshot <path-to-sceneshot-json>` photographs the currently open scene from the angles listed in the file — no compilation, no domain reload. The task id is the file name without the `.sceneshot.json` suffix. Each shot opens a temporary Scene View window of the requested size, poses its camera and renders that view into a texture — not a screen grab, so an occluded, unfocused or fully minimized Editor produces the same image. That temporary window is shown without activation, so taking a screenshot does not pull Unity in front of whatever you are working in; `"view": "game"` reuses an existing Game View as-is and only creates an unfocused one when the project has none.
