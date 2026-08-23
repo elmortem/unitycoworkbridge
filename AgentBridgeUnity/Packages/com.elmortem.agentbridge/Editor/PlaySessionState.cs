@@ -13,6 +13,7 @@ namespace AgentBridge
 		public string Phase;
 		public string StartedAtUtc;
 		public string DeadlineUtc;
+		public string OwnerLastActivityUtc;
 		public string PendingStopTaskId;
 		public string StopReason;
 	}

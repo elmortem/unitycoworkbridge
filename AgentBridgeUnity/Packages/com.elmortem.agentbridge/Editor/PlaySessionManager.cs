@@ -216,6 +216,7 @@ namespace AgentBridge
 				Phase = PlaySessionPhases.Entering,
 				StartedAtUtc = nowUtc.ToString("o"),
 				DeadlineUtc = nowUtc.AddSeconds(seconds).ToString("o"),
+				OwnerLastActivityUtc = nowUtc.ToString("o"),
 				PendingStopTaskId = "",
 				StopReason = ""
 			};
@@ -234,6 +235,20 @@ namespace AgentBridge
 			return true;
 		}
 
+		// The owner keeps its claim on the editor by working, not by having asked for the
+		// session: every task it starts inside the session pushes the idle preemption away.
+		public static void TouchOwnerActivity()
+		{
+			PlaySessionState state = PlaySessionStore.Read();
+			if (state == null || state.Phase != PlaySessionPhases.Active)
+			{
+				return;
+			}
+
+			state.OwnerLastActivityUtc = DateTime.UtcNow.ToString("o");
+			PlaySessionStore.Write(state);
+		}
+
 		public static void BeginStop(string taskId, string reason)
 		{
 			PlaySessionState state = PlaySessionStore.Read();
@@ -245,7 +260,8 @@ namespace AgentBridge
 					TaskId = "",
 					OwnerAgentSessionId = "",
 					StartedAtUtc = nowUtc.ToString("o"),
-					DeadlineUtc = nowUtc.ToString("o")
+					DeadlineUtc = nowUtc.ToString("o"),
+					OwnerLastActivityUtc = ""
 				};
 			}
 

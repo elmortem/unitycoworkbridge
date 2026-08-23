@@ -61,9 +61,9 @@ agentbridge play [--seconds N] --note <intent> --session <id>
 agentbridge stopplay [--session <id>]
 ```
 
-- `play` требует `--session` (сессия становится владельцем плей мода) и `--note` — короткое намерение сессии; без любого из них команда отклоняется. `ReturnValue` — `playing_until:<UTC>`. Без `--seconds` берётся `PlaySessionDefaultSeconds` (30), сверху обрезается `PlaySessionMaxSeconds` (600); обе настройки — в `ProjectSettings/AgentBridge.json` и в **Tools → Agent Bridge → Setup...**.
+- `play` требует `--session` (сессия становится владельцем плей мода) и `--note` — короткое намерение сессии; без любого из них команда отклоняется. `ReturnValue` — `playing_until:<UTC>`. Без `--seconds` берётся `PlaySessionDefaultSeconds` (15), сверху обрезается `PlaySessionMaxSeconds` (600); обе настройки — в `ProjectSettings/AgentBridge.json` и в **Tools → Agent Bridge → Setup...**.
 - Во время своей play-сессии выполняются только `csharp` и `sceneshot` (включая `"view": "game"` — снимок настоящего Game View с overlay-UI). Остальные kind'ы отклоняются с `kind not allowed during play session`.
-- Чужую play-сессию остановить нельзя: `stopplay` вернёт `rejected` с `play_session_held_by:<id>`.
+- Чужую play-сессию нельзя остановить, пока владелец работает: `stopplay` вернёт `rejected` с `play_session_held_by:<id>;deadline:<UTC>`. Но если дедлайн истёк или владелец не подавал задач дольше `PlayOwnerIdleSeconds` (10), чужой `stopplay` вытесняет сессию и закрывает её с `stopped:preempted`. Своя сессия держится активной только подачей задач: пауза длиннее грейса отдаёт плей первому чужому `stopplay`.
 - Плей мод без сессии (застрявший таск, ручной запуск) гасит `stopplay` от любого агента. Вне плей мода `stopplay` — no-op со `success` и `ReturnValue: "not_playing"`.
 - Сессия завершается сама по дедлайну. Если человек нажал Stop, сессия закрывается сама с `stopped:external`.
 - Пока идут тесты, `play`/`stopplay` отклоняются с `tests are running` — семантика PlayMode-прогонов не меняется.

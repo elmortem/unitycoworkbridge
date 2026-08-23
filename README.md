@@ -279,21 +279,22 @@ agentbridge stopplay [--session <id>]
 ```
 
 - `play` requires `--session`; that session owns the play mode. The result is `success` with `ReturnValue: "playing_until:<UTC>"`.
-- `play` also requires `--note` — a short statement of what the session is for. A play session locks the Editor away from every other agent, so the neighbours get to see why it is busy, and an agent with nothing to write there has no reason to be in play mode. Both the CLI and the bridge reject a `play` without it. `--seconds` defaults to the editor setting, which is deliberately short (30 s); `compile`, `tests`, `sceneshot` with `"view": "scene"` and `uishot` answer most questions without play mode at all.
+- `play` also requires `--note` — a short statement of what the session is for. A play session locks the Editor away from every other agent, so the neighbours get to see why it is busy, and an agent with nothing to write there has no reason to be in play mode. Both the CLI and the bridge reject a `play` without it. `--seconds` defaults to the editor setting, which is deliberately short (15 s); `compile`, `tests`, `sceneshot` with `"view": "scene"` and `uishot` answer most questions without play mode at all.
 - Inside its own play session an agent may run only `csharp` and `sceneshot` — including `"view": "game"`, which captures the real Game View with its overlay UI. Every other kind is rejected with `kind not allowed during play session`.
-- A foreign play session cannot be stopped: `stopplay` answers `rejected` with `play_session_held_by:<id>`. Play mode left behind without a session — a stuck task or a manual start — can be stopped by any agent. Outside play mode `stopplay` is a no-op returning `not_playing`.
+- A foreign play session cannot be stopped while its owner is working: `stopplay` answers `rejected` with `play_session_held_by:<id>;deadline:<UTC>`. Once the deadline has passed, or the owner has submitted no task for `PlayOwnerIdleSeconds`, a foreign `stopplay` preempts the session and closes it with `stopped:preempted` — an owner keeps its claim by working, not by having asked. Play mode left behind without a session — a stuck task or a manual start — can be stopped by any agent. Outside play mode `stopplay` is a no-op returning `not_playing`.
 - The session ends on its own at the deadline, and a human pressing Stop ends it too (`stopped:external`). Play mode a human started is never exited automatically; play mode an agent slipped into without a session is, and the culprit's journal record says so.
 - While a test run is in flight both commands are rejected with `tests are running`: PlayMode test semantics are untouched.
 - Entering play mode does not steal your focus. Both bridge entries — `play` and `tests --mode PlayMode` — suppress the Editor's habit of activating the Game View, and the session runs with `Application.runInBackground`, so the game keeps ticking while Unity sits in the background. If the Editor still jumps to the front, the bridge hands focus back to the window that had it, at most twice per entry — click into Unity yourself and it stays yours. Windows only; elsewhere the suppression applies and the hand-back is a no-op.
 - `agentbridge status` reports `IsPlaying`, `PlaySessionAgentId` and `PlaySessionDeadlineUtc`.
 
-Three settings in `ProjectSettings/AgentBridge.json`, all exposed in **Tools → Agent Bridge → Setup...**:
+Four settings in `ProjectSettings/AgentBridge.json`, all exposed in **Tools → Agent Bridge → Setup...**:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `PlaySessionDefaultSeconds` | `30` | Session length when `--seconds` is omitted. |
+| `PlaySessionDefaultSeconds` | `15` | Session length when `--seconds` is omitted. |
 | `PlaySessionMaxSeconds` | `600` | Upper bound `--seconds` is clamped to. |
 | `AgentPlayGraceSeconds` | `5` | How long after a task finishes play mode still counts as agent-caused. |
+| `PlayOwnerIdleSeconds` | `10` | How long an owner may submit nothing before a foreign `stopplay` preempts its session. |
 
 ## Multi-Agent Sessions
 

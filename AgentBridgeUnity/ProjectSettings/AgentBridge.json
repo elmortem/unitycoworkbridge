@@ -12,9 +12,10 @@
     "DirtyScenePolicy": "Save",
     "LeaseIdleTimeoutSeconds": 120,
     "ContentionSliceSeconds": 90,
-    "PlaySessionDefaultSeconds": 120,
+    "PlaySessionDefaultSeconds": 15,
     "PlaySessionMaxSeconds": 600,
     "AgentPlayGraceSeconds": 5,
+    "PlayOwnerIdleSeconds": 10,
     "TelemetryEnabled": true,
     "TelemetryKeepDays": 14
 }

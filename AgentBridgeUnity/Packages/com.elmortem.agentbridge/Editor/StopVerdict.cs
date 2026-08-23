@@ -5,6 +5,7 @@ namespace AgentBridge
 		NotPlaying,
 		StopOwn,
 		StopUnsanctioned,
+		StopPreempt,
 		RejectForeign,
 		RejectTests
 	}

@@ -174,7 +174,7 @@ namespace AgentBridge
 			AgentBridgeSettings settings = Load();
 			if (settings.PlaySessionDefaultSeconds <= 0)
 			{
-				return 120;
+				return 15;
 			}
 
 			return settings.PlaySessionDefaultSeconds;
@@ -220,6 +220,24 @@ namespace AgentBridge
 		{
 			AgentBridgeSettings settings = Load();
 			settings.AgentPlayGraceSeconds = value;
+			Save(settings);
+		}
+
+		public static int GetPlayOwnerIdleSeconds()
+		{
+			AgentBridgeSettings settings = Load();
+			if (settings.PlayOwnerIdleSeconds <= 0)
+			{
+				return 10;
+			}
+
+			return settings.PlayOwnerIdleSeconds;
+		}
+
+		public static void SetPlayOwnerIdleSeconds(int value)
+		{
+			AgentBridgeSettings settings = Load();
+			settings.PlayOwnerIdleSeconds = value;
 			Save(settings);
 		}
 

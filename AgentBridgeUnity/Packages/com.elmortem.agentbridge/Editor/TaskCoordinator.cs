@@ -389,6 +389,8 @@ namespace AgentBridge
 			string owner = state.OwnerAgentSessionId ?? "";
 			List<PendingTaskInfo> pending = BuildPendingList(null);
 			PendingTaskInfo next = null;
+			DateTime nowUtc = DateTime.UtcNow;
+			int ownerIdleSeconds = AgentBridgeSettingsStore.GetPlayOwnerIdleSeconds();
 
 			foreach (PendingTaskInfo task in pending)
 			{
@@ -398,14 +400,28 @@ namespace AgentBridge
 				{
 					if (task.Kind == "stopplay")
 					{
-						RejectTaskFile(task.TaskFilePath, task.Id, "stopplay", "play_session_held_by:" + owner);
+						// A session the owner has abandoned or run past its deadline is no longer
+						// its own: the foreign stopplay runs and preempts it.
+						if (PlaySessionArbiter.CanPreempt(state, nowUtc, ownerIdleSeconds))
+						{
+							if (next == null || task.CreatedUtc < next.CreatedUtc)
+							{
+								next = task;
+							}
+						}
+						else
+						{
+							RejectTaskFile(task.TaskFilePath, task.Id, "stopplay",
+								"play_session_held_by:" + owner + ";deadline:" + (state.DeadlineUtc ?? ""));
+						}
 					}
 					else if (task.Kind == "release")
 					{
 						// The ordinary release path is unreachable with the scheduler asleep, and a
 						// foreign session must not wait out the whole play session for an answer.
-						_rejectedTaskHashes[task.TaskFilePath] = TaskFileHash.HashOf(task.TaskFilePath, PayloadPathOf(task.TaskFilePath));
-						WriteTerminal(task.Id, "release", "success", "not_holder");
+						string releaseHash = TaskFileHash.HashOf(task.TaskFilePath, PayloadPathOf(task.TaskFilePath));
+						_rejectedTaskHashes[task.TaskFilePath] = releaseHash;
+						WriteTerminal(task.Id, "release", "success", "not_holder", releaseHash);
 					}
 
 					continue;
@@ -423,6 +439,10 @@ namespace AgentBridge
 				}
 			}
 
+			// The scan loop below never runs while the editor plays, so without this the position
+			// a foreign client sees freezes for the whole session.
+			UpdateQueueStatus(pending);
+
 			// The owner is working even though the scheduler never sees these picks, so the lease
 			// has to be kept warm by hand or it expires in the middle of the session.
 			SchedulerStateStore.State.HolderLastActivityUtc = DateTime.UtcNow.ToString("o");
@@ -431,6 +451,11 @@ namespace AgentBridge
 			if (next == null)
 			{
 				return;
+			}
+
+			if (string.Equals(next.EffectiveSessionId, owner, StringComparison.Ordinal))
+			{
+				PlaySessionManager.TouchOwnerActivity();
 			}
 
 			StartTask(next, false, "", pending.Count);
@@ -619,7 +644,7 @@ namespace AgentBridge
 				if (existing.Hash != hash)
 				{
 					_rejectedTaskHashes[taskFilePath] = hash;
-					WriteTerminal(id, request.Kind, "rejected", "id_conflict");
+					WriteTerminal(id, request.Kind, "rejected", "id_conflict", hash);
 				}
 
 				return;
@@ -794,7 +819,8 @@ namespace AgentBridge
 			string effective = AgentSessionScheduler.EffectiveSessionId(request.AgentSessionId, request.Id);
 			PlaySessionState state = PlaySessionStore.Read();
 			StopVerdict verdict = PlaySessionArbiter.Judge(
-				state, effective, EditorApplication.isPlaying, PlayModeSceneRecovery.IsPending);
+				state, effective, EditorApplication.isPlaying, PlayModeSceneRecovery.IsPending,
+				DateTime.UtcNow, AgentBridgeSettingsStore.GetPlayOwnerIdleSeconds());
 
 			switch (verdict)
 			{
@@ -806,12 +832,16 @@ namespace AgentBridge
 					return;
 				case StopVerdict.RejectForeign:
 					FinishTask("rejected", null,
-						new List<string> { "play_session_held_by:" + (state.OwnerAgentSessionId ?? "") }, false);
+						new List<string> { "play_session_held_by:" + (state.OwnerAgentSessionId ?? "")
+							+ ";deadline:" + (state.DeadlineUtc ?? "") }, false);
 					return;
 			}
 
 			UnsanctionedPlayGuard.ClearMark();
-			PlaySessionManager.BeginStop(request.Id, verdict == StopVerdict.StopOwn ? "stopplay" : "manual");
+			string stopReason = verdict == StopVerdict.StopOwn
+				? "stopplay"
+				: verdict == StopVerdict.StopPreempt ? "preempted" : "manual";
+			PlaySessionManager.BeginStop(request.Id, stopReason);
 		}
 
 		private static bool NeedsScenes(string kind)
@@ -1187,17 +1217,22 @@ namespace AgentBridge
 
 		private static void RejectTaskFile(string taskFilePath, string id, string kind, string logLine)
 		{
-			_rejectedTaskHashes[taskFilePath] = TaskFileHash.HashOf(taskFilePath, PayloadPathOf(taskFilePath));
-			WriteTerminal(id, kind, "rejected", logLine);
+			string hash = TaskFileHash.HashOf(taskFilePath, PayloadPathOf(taskFilePath));
+			_rejectedTaskHashes[taskFilePath] = hash;
+			WriteTerminal(id, kind, "rejected", logLine, hash);
 		}
 
-		private static void WriteTerminal(string id, string kind, string status, string logLine)
+		// The hash belongs in the record even for a task that never ran: the in-memory set of
+		// refused files does not survive a domain reload, and BuildPendingList falls back to the
+		// journal to tell a stale inbox file from a resubmitted one.
+		private static void WriteTerminal(string id, string kind, string status, string logLine, string hash)
 		{
 			var record = new TaskRecord
 			{
 				Id = id,
 				Kind = kind,
 				Status = status,
+				Hash = hash,
 				SessionId = BridgeStatusWriter.Current.SessionId,
 				StartedAtUtc = DateTime.UtcNow.ToString("o"),
 				FinishedAtUtc = DateTime.UtcNow.ToString("o")

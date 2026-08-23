@@ -99,9 +99,17 @@ namespace AgentBridge
 				AgentBridgeSettingsStore.SetAgentPlayGraceSeconds(nextAgentPlayGrace);
 			}
 
+			int playOwnerIdle = AgentBridgeSettingsStore.GetPlayOwnerIdleSeconds();
+			int nextPlayOwnerIdle = EditorGUILayout.DelayedIntField("Play owner idle (s)", playOwnerIdle);
+			if (nextPlayOwnerIdle != playOwnerIdle)
+			{
+				AgentBridgeSettingsStore.SetPlayOwnerIdleSeconds(nextPlayOwnerIdle);
+			}
+
 			EditorGUILayout.HelpBox(
 				"An agent play session runs for the requested seconds, defaulting to the first value and capped by the second. "
-				+ "Play mode entered by an agent task within the grace window and without a session is exited automatically.",
+				+ "Play mode entered by an agent task within the grace window and without a session is exited automatically. "
+				+ "An owner that submits no task for the idle timeout loses its session to the next foreign stopplay.",
 				MessageType.Info);
 			EditorGUILayout.Space();
 
