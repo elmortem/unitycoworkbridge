@@ -445,6 +445,8 @@ Build the distributable plugin only with:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-plugin.ps1
 ```
 
+The same script validates every `skills/<name>/SKILL.md` frontmatter before packaging: `description` at most 1024 characters, `name` at most 64 characters, lowercase kebab-case and equal to the skill directory, single-line `key: value` fields only. An oversized description produces a valid ZIP that the agent host still refuses to load, so this check is fail-closed too and prints `frontmatter_validation=PASS` with the actual lengths.
+
 Do not use `Compress-Archive` for this artifact. On Windows it can store backslashes in ZIP central-directory entry names and consumers then report `Zip file contains path with invalid characters`. The canonical script writes explicit forward-slash names, rejects `\`, absolute paths, `..`, duplicates and Windows-invalid characters, then compares every archived file hash with its source. A successful build ends with `invalid_entries=0` and `zip_validation=PASS`.
 
 Only the CLI has a publishing pipeline. Bumping `<Version>` in the csproj and pushing is the entire release procedure: the workflow runs the tests, sees that no `agentbridge-v<version>` release exists yet, creates the tag and release at that commit, then builds and attaches the six self-contained binaries with checksums. Pushing without a version bump only runs the tests — the release step is skipped because the tag already exists, so no tags are created by hand.

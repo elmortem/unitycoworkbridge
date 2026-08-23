@@ -11,6 +11,8 @@ Set-StrictMode -Version Latest
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = (Resolve-Path (Join-Path $scriptRoot "..")).Path
 $pluginRoot = Join-Path $repoRoot "unity-bridge-plugin"
+$skillNameLimit = 64
+$skillDescriptionLimit = 1024
 $defaultArchive = Join-Path $pluginRoot "unity-bridge-plugin.zip"
 $archivePath = if ([string]::IsNullOrWhiteSpace($OutputPath)) {
 	$defaultArchive
@@ -68,6 +70,102 @@ function Assert-VersionBumped {
 		throw "$Component changed but its version was not increased: current=$Current base=$Previous"
 	}
 	Write-Output "version_bump=$Component $Previous->$Current"
+}
+
+function Get-YamlScalar {
+	param([string]$Value)
+	$trimmed = $Value.Trim()
+	if ($trimmed.Length -ge 2 -and $trimmed.StartsWith('"') -and $trimmed.EndsWith('"')) {
+		return $trimmed.Substring(1, $trimmed.Length - 2).Replace('\"', '"').Replace('\\', '\')
+	}
+	if ($trimmed.Length -ge 2 -and $trimmed.StartsWith("'") -and $trimmed.EndsWith("'")) {
+		return $trimmed.Substring(1, $trimmed.Length - 2).Replace("''", "'")
+	}
+	return $trimmed
+}
+
+function Get-SkillFrontmatter {
+	param([string]$Entry, [string]$Source)
+
+	$lines = @([System.IO.File]::ReadAllText($Source) -split "\r?\n")
+	if ($lines.Count -lt 3 -or $lines[0].Trim() -ne "---") {
+		throw "Skill '$Entry' must start with a YAML frontmatter block"
+	}
+
+	$closing = -1
+	for ($index = 1; $index -lt $lines.Count; $index++) {
+		if ($lines[$index].Trim() -eq "---") {
+			$closing = $index
+			break
+		}
+	}
+	if ($closing -lt 0) {
+		throw "Skill '$Entry' has no closing '---' for its frontmatter"
+	}
+
+	$fields = @{}
+	for ($index = 1; $index -lt $closing; $index++) {
+		$line = $lines[$index]
+		if ([string]::IsNullOrWhiteSpace($line)) {
+			continue
+		}
+		$match = [regex]::Match($line, "^(?<key>[A-Za-z0-9_-]+):(?<value>.*)$")
+		if (-not $match.Success) {
+			throw "Skill '$Entry': frontmatter line $($index + 1) is not a single-line 'key: value' pair. Multi-line and block scalars are not allowed here, because their length cannot be validated: $line"
+		}
+		$key = $match.Groups["key"].Value
+		if ($fields.ContainsKey($key)) {
+			throw "Skill '$Entry': duplicate frontmatter field '$key'"
+		}
+		$value = Get-YamlScalar $match.Groups["value"].Value
+		if ([string]::IsNullOrWhiteSpace($value)) {
+			throw "Skill '$Entry': frontmatter field '$key' must have a non-empty single-line value"
+		}
+		$fields[$key] = $value
+	}
+
+	return $fields
+}
+
+function Assert-SkillFrontmatter {
+	param([object[]]$Items)
+
+	$skillFiles = @($Items | Where-Object { $_.Entry -match "^skills/[^/]+/SKILL\.md$" })
+	if ($skillFiles.Count -eq 0) {
+		throw "Plugin contains no skills/<name>/SKILL.md"
+	}
+
+	foreach ($file in $skillFiles) {
+		$entry = $file.Entry
+		$directoryName = ($entry -split "/")[1]
+		$fields = Get-SkillFrontmatter $entry $file.Source
+
+		foreach ($required in @("name", "description")) {
+			if (-not $fields.ContainsKey($required)) {
+				throw "Skill '$entry': frontmatter has no '$required' field"
+			}
+		}
+
+		$name = $fields["name"]
+		$description = $fields["description"]
+
+		if ($name -cne $directoryName) {
+			throw "Skill '$entry': field 'name' is '$name' but its directory is '$directoryName'"
+		}
+		if ($name -cnotmatch "^[a-z0-9]+(-[a-z0-9]+)*$") {
+			throw "Skill '$entry': field 'name' must be lowercase kebab-case: $name"
+		}
+		if ($name.Length -gt $skillNameLimit) {
+			throw "Skill '$entry': field 'name' must be at most $skillNameLimit characters, actual $($name.Length)"
+		}
+		if ($description.Length -gt $skillDescriptionLimit) {
+			throw "Skill '$entry': field 'description' must be at most $skillDescriptionLimit characters, actual $($description.Length). Shorten the description; do not ship a skill the agent host will refuse to load."
+		}
+
+		Write-Output "skill_frontmatter=$entry name=$($name.Length)/$skillNameLimit description=$($description.Length)/$skillDescriptionLimit"
+	}
+
+	Write-Output "frontmatter_validation=PASS"
 }
 
 function Test-UnsafeEntryName {
@@ -183,6 +281,7 @@ if (-not $SkipVersionCheck) {
 }
 
 $items = Get-PluginFiles
+Assert-SkillFrontmatter $items
 if (-not $ValidateOnly) {
 	$archiveDirectory = Split-Path -Parent $archivePath
 	[System.IO.Directory]::CreateDirectory($archiveDirectory) | Out-Null
