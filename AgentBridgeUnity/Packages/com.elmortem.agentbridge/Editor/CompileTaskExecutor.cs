@@ -10,6 +10,7 @@ namespace AgentBridge
 	public static class CompileTaskExecutor
 	{
 		public const string PendingCompileTaskKey = "AgentBridge_CompileTask";
+		public const string PendingCompileFingerprintKey = "AgentBridge_CompileFingerprint";
 		private const float NoReloadTimeoutSeconds = 20f;
 
 		private static readonly List<TaskDiagnostic> _collectedErrors = new List<TaskDiagnostic>();
@@ -23,6 +24,8 @@ namespace AgentBridge
 			_collectedErrors.Clear();
 
 			EnsureSubscribed();
+
+			SessionState.SetString(PendingCompileFingerprintKey, CompileFingerprint.Current());
 
 			AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
 			CompilationPipeline.RequestScriptCompilation();

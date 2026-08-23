@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using UnityEditor;
@@ -14,11 +13,12 @@ namespace AgentBridge
 		private const float ScanIntervalSeconds = 0.25f;
 		private const float TrimIntervalSeconds = 30f;
 		private const float QueueRefreshIntervalSeconds = 2f;
+		private const float ServeIntervalSeconds = 1f;
 
 		private static double _lastScanTime;
 		private static double _lastTrimTime;
 		private static double _lastQueueRefreshTime;
-		private static readonly Dictionary<string, CachedHash> _hashCache = new Dictionary<string, CachedHash>();
+		private static double _lastServeTime;
 		private static readonly Dictionary<string, string> _rejectedTaskHashes = new Dictionary<string, string>();
 		private static bool _pendingTimeoutReload;
 
@@ -76,6 +76,19 @@ namespace AgentBridge
 
 				if (IsTerminal(record.Status))
 				{
+					continue;
+				}
+
+				// An attachment only means something while its run is alive. If the run did not
+				// survive the reload, the record goes away and the task returns to the queue.
+				if (record.Status == "attached")
+				{
+					if (!string.IsNullOrEmpty(testTaskId) && record.AttachedToTaskId == testTaskId)
+					{
+						continue;
+					}
+
+					TaskJournal.Delete(record.Id);
 					continue;
 				}
 
@@ -141,6 +154,24 @@ namespace AgentBridge
 			record.FinishedAtUtc = DateTime.UtcNow.ToString("o");
 			TaskJournal.Write(record);
 			AgentSessionScheduler.OnTaskFinished(record.AgentSessionId, DateTime.UtcNow);
+
+			// The fingerprint taken before the refresh proves nothing changed while the project
+			// compiled; a mismatch means the result already describes older sources.
+			string startFingerprint = SessionState.GetString(CompileTaskExecutor.PendingCompileFingerprintKey, "");
+			SessionState.EraseString(CompileTaskExecutor.PendingCompileFingerprintKey);
+			if ((record.Status == "success" || record.Status == "compiler_error")
+				&& !string.IsNullOrEmpty(startFingerprint)
+				&& startFingerprint == CompileFingerprint.Current())
+			{
+				CompileCacheStore.Write(new CompileCacheEntry
+				{
+					Fingerprint = startFingerprint,
+					SourceTaskId = record.Id,
+					Status = record.Status,
+					Diagnostics = record.Diagnostics,
+					FinishedAtUtc = record.FinishedAtUtc
+				});
+			}
 		}
 
 		public static void Stop()
@@ -202,6 +233,7 @@ namespace AgentBridge
 			{
 				CheckTimeout(now);
 				RefreshQueueStatus(now);
+				TryServeThrottled(now);
 
 				if (_activeCSharpExecutor != null)
 				{
@@ -243,11 +275,14 @@ namespace AgentBridge
 
 			if (PlayModeSceneRecovery.IsPending)
 			{
+				TryServeThrottled(now);
 				return;
 			}
 
 			if (EditorApplication.isPlayingOrWillChangePlaymode)
 			{
+				TryServeThrottled(now);
+
 				if (PlaySessionManager.IsSessionActive)
 				{
 					TryStartPlaySessionTask();
@@ -280,9 +315,26 @@ namespace AgentBridge
 			TaskJournal.Trim(AgentBridgeSettingsStore.GetKeepCompletedCount());
 		}
 
+		// A cache hit owes nothing to the scheduler: no lease, no scene context, no editor time.
+		// Serving it from the scan keeps the answer instant even while another task holds the
+		// editor, a play session is open, or a PlayMode run waits for its scenes back.
+		private static void TryServeThrottled(double now)
+		{
+			if (now - _lastServeTime < ServeIntervalSeconds)
+			{
+				return;
+			}
+
+			_lastServeTime = now;
+			List<PendingTaskInfo> pending = BuildPendingList(_activeTaskId);
+			CachedResultServer.TryServePending(pending);
+			TestRunCoalescer.TryAttachPending(pending);
+		}
+
 		private static void TryStartNextTask()
 		{
 			List<PendingTaskInfo> pending = BuildPendingList(null);
+			CachedResultServer.TryServePending(pending);
 
 			DateTime nowUtc = DateTime.UtcNow;
 			string idleHolder = SchedulerStateStore.State.HolderAgentSessionId;
@@ -340,7 +392,7 @@ namespace AgentBridge
 					{
 						// The ordinary release path is unreachable with the scheduler asleep, and a
 						// foreign session must not wait out the whole play session for an answer.
-						_rejectedTaskHashes[task.TaskFilePath] = HashOf(task.TaskFilePath, PayloadPathOf(task.TaskFilePath));
+						_rejectedTaskHashes[task.TaskFilePath] = TaskFileHash.HashOf(task.TaskFilePath, PayloadPathOf(task.TaskFilePath));
 						WriteTerminal(task.Id, "release", "success", "not_holder");
 					}
 
@@ -417,12 +469,22 @@ namespace AgentBridge
 				}
 
 				TaskRecord existing;
-				if (TaskJournal.TryRead(id, out existing) && IsTerminal(existing.Status))
+				if (TaskJournal.TryRead(id, out existing))
 				{
-					string payloadPath = PayloadPathOf(file);
-					if (existing.Hash == HashOf(file, payloadPath))
+					// An attached task is alive: it waits for the run it joined, and putting it
+					// back in the queue would start a second run of the same tests.
+					if (existing.Status == "attached")
 					{
 						continue;
+					}
+
+					if (IsTerminal(existing.Status))
+					{
+						string payloadPath = PayloadPathOf(file);
+						if (existing.Hash == TaskFileHash.HashOf(file, payloadPath))
+						{
+							continue;
+						}
 					}
 				}
 
@@ -431,7 +493,7 @@ namespace AgentBridge
 				// every other session behind it.
 				string rejectedHash;
 				if (_rejectedTaskHashes.TryGetValue(file, out rejectedHash)
-					&& rejectedHash == HashOf(file, PayloadPathOf(file)))
+					&& rejectedHash == TaskFileHash.HashOf(file, PayloadPathOf(file)))
 				{
 					continue;
 				}
@@ -533,7 +595,7 @@ namespace AgentBridge
 				payloadPath = Path.Combine(BridgePaths.Inbox, request.PayloadFile);
 			}
 
-			string hash = HashOf(taskFilePath, payloadPath);
+			string hash = TaskFileHash.HashOf(taskFilePath, payloadPath);
 
 			TaskRecord existing;
 			bool hasExisting = TaskJournal.TryRead(id, out existing);
@@ -880,6 +942,7 @@ namespace AgentBridge
 			}
 
 			_activeRecord.Diagnostics = outcome.Diagnostics;
+			SessionState.EraseString(CompileTaskExecutor.PendingCompileFingerprintKey);
 			FinishTask(outcome.Status, null, extraLogs, outcome.ForeignErrors);
 		}
 
@@ -1069,7 +1132,7 @@ namespace AgentBridge
 
 		private static void RejectTaskFile(string taskFilePath, string id, string kind, string logLine)
 		{
-			_rejectedTaskHashes[taskFilePath] = HashOf(taskFilePath, PayloadPathOf(taskFilePath));
+			_rejectedTaskHashes[taskFilePath] = TaskFileHash.HashOf(taskFilePath, PayloadPathOf(taskFilePath));
 			WriteTerminal(id, kind, "rejected", logLine);
 		}
 
@@ -1137,64 +1200,5 @@ namespace AgentBridge
 			}
 		}
 
-		private static string HashOf(string taskFilePath, string payloadPath)
-		{
-			long taskFileLength = new FileInfo(taskFilePath).Length;
-			long payloadLength = !string.IsNullOrEmpty(payloadPath) && File.Exists(payloadPath)
-				? new FileInfo(payloadPath).Length
-				: 0;
-			string taskFileWriteUtc = File.GetLastWriteTimeUtc(taskFilePath).ToString("o");
-			string payloadWriteUtc = !string.IsNullOrEmpty(payloadPath) && File.Exists(payloadPath)
-				? File.GetLastWriteTimeUtc(payloadPath).ToString("o")
-				: "";
-			string cacheKey = taskFilePath + "|" + (payloadPath ?? "");
-
-			CachedHash cached;
-			if (_hashCache.TryGetValue(cacheKey, out cached)
-				&& cached.TaskFileLength == taskFileLength
-				&& cached.PayloadLength == payloadLength
-				&& cached.TaskFileWriteUtc == taskFileWriteUtc
-				&& cached.PayloadWriteUtc == payloadWriteUtc)
-			{
-				return cached.Hash;
-			}
-
-			string hash = ComputeHash(taskFilePath, payloadPath);
-			_hashCache[cacheKey] = new CachedHash
-			{
-				TaskFileLength = taskFileLength,
-				PayloadLength = payloadLength,
-				TaskFileWriteUtc = taskFileWriteUtc,
-				PayloadWriteUtc = payloadWriteUtc,
-				Hash = hash
-			};
-			return hash;
-		}
-
-		private static string ComputeHash(string taskFilePath, string payloadPath)
-		{
-			using (SHA256 sha = SHA256.Create())
-			{
-				byte[] taskBytes = File.ReadAllBytes(taskFilePath);
-				byte[] combined = taskBytes;
-
-				if (!string.IsNullOrEmpty(payloadPath) && File.Exists(payloadPath))
-				{
-					byte[] payloadBytes = File.ReadAllBytes(payloadPath);
-					combined = new byte[taskBytes.Length + payloadBytes.Length];
-					Buffer.BlockCopy(taskBytes, 0, combined, 0, taskBytes.Length);
-					Buffer.BlockCopy(payloadBytes, 0, combined, taskBytes.Length, payloadBytes.Length);
-				}
-
-				byte[] hashBytes = sha.ComputeHash(combined);
-				var builder = new StringBuilder(hashBytes.Length * 2);
-				foreach (byte b in hashBytes)
-				{
-					builder.Append(b.ToString("x2"));
-				}
-
-				return builder.ToString();
-			}
-		}
 	}
 }

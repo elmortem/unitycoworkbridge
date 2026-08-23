@@ -81,12 +81,13 @@ internal sealed class BridgeClient
 		return await WaitForTaskAsync(taskId, waitSeconds);
 	}
 
-	public async Task<int> SubmitCompileAsync(int waitSeconds)
+	public async Task<int> SubmitCompileAsync(int waitSeconds, bool fresh)
 	{
 		var request = new TaskRequest
 		{
 			Id = TaskIdGenerator.NewId(),
 			Kind = "compile",
+			Fresh = fresh,
 			AgentSessionId = _session ?? "",
 			Note = _note ?? ""
 		};
@@ -135,7 +136,8 @@ internal sealed class BridgeClient
 		string[] assemblies,
 		string[] tests,
 		string[] categories,
-		int waitSeconds)
+		int waitSeconds,
+		bool fresh)
 	{
 		var request = new TaskRequest
 		{
@@ -145,6 +147,7 @@ internal sealed class BridgeClient
 			AssemblyNames = assemblies,
 			TestNames = tests,
 			CategoryNames = categories,
+			Fresh = fresh,
 			AgentSessionId = _session ?? "",
 			Note = _note ?? ""
 		};

@@ -98,10 +98,10 @@ internal static class AgentBridgeApplication
 			case "compile":
 				if (commandArguments.Length != 0)
 				{
-					return WriteError("bad_usage", "usage: agentbridge compile [--project <path>] [--wait <seconds>] [--format json|human]", options.Format);
+					return WriteError("bad_usage", "usage: agentbridge compile [--fresh] [--project <path>] [--wait <seconds>] [--format json|human]", options.Format);
 				}
 
-				return await client.SubmitCompileAsync(options.WaitSeconds);
+				return await client.SubmitCompileAsync(options.WaitSeconds, options.Fresh);
 
 			case "tests":
 				if (!TryParseTests(commandArguments, out var mode, out var assemblies, out var tests, out var categories, out var error))
@@ -109,7 +109,7 @@ internal static class AgentBridgeApplication
 					return WriteError("bad_usage", error, options.Format);
 				}
 
-				return await client.SubmitTestsAsync(mode, assemblies, tests, categories, options.WaitSeconds);
+				return await client.SubmitTestsAsync(mode, assemblies, tests, categories, options.WaitSeconds, options.Fresh);
 
 			case "release":
 				if (commandArguments.Length != 0 || options.Session == null)
@@ -174,7 +174,7 @@ internal static class AgentBridgeApplication
 				assemblies = Array.Empty<string>();
 				tests = Array.Empty<string>();
 				categories = Array.Empty<string>();
-				error = "usage: agentbridge tests [--mode EditMode|PlayMode] [--assembly A] [--test T] [--category C]";
+				error = "usage: agentbridge tests [--mode EditMode|PlayMode] [--assembly A] [--test T] [--category C] [--fresh]";
 				return false;
 			}
 
@@ -325,8 +325,8 @@ internal static class AgentBridgeApplication
 			  csharp <file.cs>          task files belong in <project>/Temp/AgentBridge, never in Assets
 			  ui <file.ui.json>
 			  sceneshot <file.sceneshot.json>
-			  compile
-			  tests [--mode EditMode|PlayMode] [--assembly A] [--test T] [--category C]
+			  compile [--fresh]
+			  tests [--mode EditMode|PlayMode] [--assembly A] [--test T] [--category C] [--fresh]
 			  release --session <id>     give the editor back to the other agent sessions
 			  play [--seconds N] --note <intent> --session <id>   open a play session; only csharp and sceneshot run inside it
 			  stopplay [--session <id>]  end your play session, or an unsanctioned one anybody left behind
@@ -339,6 +339,7 @@ internal static class AgentBridgeApplication
 			  --format <value>   json (default, machine-readable) or human for every command
 			  --session <id>     agent session for fair scheduling
 			  --note <text>      intent shown to the session holding the editor
+			  --fresh            force a real run for tests/compile, ignore cached results
 			  --version
 			""");
 	}

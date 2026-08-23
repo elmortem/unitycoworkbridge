@@ -22,8 +22,8 @@ There are eight task kinds, all created via the CLI and processed sequentially, 
 - **`csharp`** — a `.cs` script; Bridge compiles it in memory with Roslyn and runs its `Run()` method on the main thread.
 - **`ui`** — a `.ui.json` file; Bridge applies it to a prefab directly, without compilation.
 - **`sceneshot`** — a `.sceneshot.json` file; Bridge screenshots the open scene from the requested Scene View angles, or the running Game View, without compilation.
-- **`compile`** — forces Unity to compile the project and returns the resulting errors, surviving the domain reload this triggers.
-- **`tests`** — runs EditMode or PlayMode tests and returns pass/fail counts and failure details in the same result record, surviving Play Mode's domain reload.
+- **`compile`** — forces Unity to compile the project and returns the resulting errors, surviving the domain reload this triggers. A repeat with unchanged sources is answered from cache instantly — the result carries `Cached: true` and the `SourceTaskId` of the original run; `--fresh` forces a real compilation.
+- **`tests`** — runs EditMode or PlayMode tests and returns pass/fail counts and failure details in the same result record, surviving Play Mode's domain reload. Results are cached per mode: a repeat on an unchanged project — including a subset filter of a previous full run — is answered from cache, and a request compatible with a run already in flight attaches to it and shares its result. Any code or asset change invalidates the cache automatically; `--fresh` forces a real run.
 - **`play`** / **`stopplay`** — open and close an owned play session, the only sanctioned way for an agent to reach Play Mode; both survive the domain reloads that entering and leaving it trigger. See [Play Mode](#play-mode).
 
 - **`release`** — hands the editor back to the other agent sessions; it changes nothing in the project. See [Multi-Agent Sessions](#multi-agent-sessions).
@@ -188,6 +188,7 @@ Typical successful human output is deliberately short, so agents do not need a s
 ```text
 compile: success (Task_20260805_092200_123_abcd1234, foreign errors: no)
 tests: success (Task_20260805_092233_477_6cc4b1d1, 202 passed, 0 failed, 0 skipped, 0 inconclusive, 202 total, 4.103s)
+tests: success (Task_20260805_092301_512_9ab2c3d4, cached from Task_20260805_092233_477_6cc4b1d1, 202 passed, 0 failed, 0 skipped, 0 inconclusive, 202 total, 4.103s)
 ```
 
 Keep the default JSON format when another program needs the complete structured `TaskRecord` contract.
@@ -286,6 +287,7 @@ Pass `--session <id>` (1–64 characters of `A-Za-z0-9_-`) with every command to
 - Once another session queues work, the holder keeps the editor for at most `ContentionSliceSeconds` and then the queue rotates — always on a task boundary, never mid-task. A holder with nothing queued rotates immediately, and a holder idle for longer than `LeaseIdleTimeoutSeconds` loses the lease on its own.
 - A rotation carries the scene context: the outgoing session's scene setup and open prefab stage are saved, and the incoming session's are restored, so a session that comes back finds the scenes it left.
 - Every result carries a `Contention` block — how many foreign sessions are waiting, for how long, and their `--note` texts. `--format human` prints it as `Contention: 2 waiting, oldest 47s`.
+- `tests` and `compile` on an unchanged project skip the queue entirely: they are answered from the result cache or attach to a compatible run already in flight, without taking the lease or switching scene contexts. Only a run after real changes costs editor time; `--fresh` opts out of the cache.
 - `agentbridge release --session <id>` hands the editor back early instead of waiting for the idle timeout. It answers `released` when the session held the lease, `not_holder` otherwise, and never interrupts another session's slice.
 - While a task waits behind another session, the client waits in the queue and reports `queued <n>s, position <p>/<total>, holder <id>` on stderr; `--wait` starts counting only when the task actually starts in Unity, with a hard queue ceiling of 3600 seconds. If the bridge dies while the task is queued, the client exits 3 with `bridge_unavailable`.
 

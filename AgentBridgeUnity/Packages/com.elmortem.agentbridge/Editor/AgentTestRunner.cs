@@ -10,6 +10,8 @@ namespace AgentBridge
 	{
 		public const string CoordinatorTestTaskKey = "AgentBridge_CoordinatorTestTask";
 		public const string CoordinatorTestModeKey = "AgentBridge_CoordinatorTestMode";
+		public const string CoordinatorTestSourceKey = "AgentBridge_CoordinatorTestSource";
+		public const string CoordinatorTestFilterKey = "AgentBridge_CoordinatorTestFilter";
 		private static TestRunnerApi _api;
 
 		static AgentTestRunner()
@@ -66,6 +68,14 @@ namespace AgentBridge
 
 			SessionState.SetString(CoordinatorTestTaskKey, taskId);
 			SessionState.SetString(CoordinatorTestModeKey, mode.ToString());
+			SessionState.SetString(CoordinatorTestSourceKey, TestFingerprint.Sources());
+			SessionState.SetString(CoordinatorTestFilterKey, JsonUtility.ToJson(new TestRunFilter
+			{
+				TestMode = mode.ToString(),
+				AssemblyNames = assemblyNames ?? new string[0],
+				TestNames = testNames ?? new string[0],
+				CategoryNames = categoryNames ?? new string[0]
+			}));
 
 			// The job runner ticks asynchronously after Execute returns, so anything can dirty
 			// a scene between the preflight and SaveModiedSceneTask. Verify once more, then
@@ -75,6 +85,8 @@ namespace AgentBridge
 			{
 				SessionState.EraseString(CoordinatorTestTaskKey);
 				SessionState.EraseString(CoordinatorTestModeKey);
+				SessionState.EraseString(CoordinatorTestSourceKey);
+				SessionState.EraseString(CoordinatorTestFilterKey);
 				if (mode == TestMode.PlayMode)
 				{
 					PlayModeSceneRecovery.Cancel();
@@ -104,6 +116,8 @@ namespace AgentBridge
 			{
 				SessionState.EraseString(CoordinatorTestTaskKey);
 				SessionState.EraseString(CoordinatorTestModeKey);
+				SessionState.EraseString(CoordinatorTestSourceKey);
+				SessionState.EraseString(CoordinatorTestFilterKey);
 				SceneDirtyWatcher.Disarm(taskId);
 				if (mode == TestMode.PlayMode)
 				{
@@ -145,11 +159,83 @@ namespace AgentBridge
 			return TestMode.EditMode;
 		}
 
+		private static void WritePendingDump(string taskId, ITestResultAdaptor result)
+		{
+			string filterJson = SessionState.GetString(CoordinatorTestFilterKey, "");
+			if (string.IsNullOrEmpty(filterJson))
+			{
+				return;
+			}
+
+			TestRunFilter filter = JsonUtility.FromJson<TestRunFilter>(filterJson);
+			if (filter == null)
+			{
+				return;
+			}
+
+			// Fingerprint is stamped at promotion, not here: PlayMode scene recovery still has to
+			// delete its temporary scenes, and every one of those imports moves the value.
+			var dump = new TestRunDump
+			{
+				SourceTaskId = taskId,
+				Filter = filter,
+				FinishedAtUtc = System.DateTime.UtcNow.ToString("o")
+			};
+
+			CollectEntries(result, null, dump.Entries);
+			TestRunDumpStore.WritePending(dump);
+		}
+
+		private static void CollectEntries(ITestResultAdaptor node, string assembly, List<TestCaseResult> entries)
+		{
+			if (node.Test != null && node.Test.FullName != null
+				&& node.Test.FullName.EndsWith(".dll", System.StringComparison.OrdinalIgnoreCase))
+			{
+				assembly = System.IO.Path.GetFileNameWithoutExtension(node.Test.FullName);
+			}
+
+			if (node.HasChildren)
+			{
+				foreach (ITestResultAdaptor child in node.Children)
+				{
+					CollectEntries(child, assembly, entries);
+				}
+
+				return;
+			}
+
+			var entry = new TestCaseResult
+			{
+				FullName = node.FullName,
+				Assembly = assembly ?? "",
+				Status = node.TestStatus.ToString(),
+				DurationSeconds = node.Duration,
+				Message = node.Message,
+				StackTrace = node.StackTrace
+			};
+
+			if (node.Test != null && node.Test.Categories != null)
+			{
+				entry.Categories.AddRange(node.Test.Categories);
+			}
+
+			entries.Add(entry);
+		}
+
 		private static void FinalizeCoordinatorRun(string taskId, TestRunResult run, string recoveryError)
 		{
+			string testMode = SessionState.GetString(CoordinatorTestModeKey, "");
+			string startSources = SessionState.GetString(CoordinatorTestSourceKey, "");
+			SessionState.EraseString(CoordinatorTestTaskKey);
+			SessionState.EraseString(CoordinatorTestModeKey);
+			SessionState.EraseString(CoordinatorTestSourceKey);
+			SessionState.EraseString(CoordinatorTestFilterKey);
+
 			TaskRecord record;
 			if (!TaskJournal.TryRead(taskId, out record))
 			{
+				TestRunDumpStore.DeletePending(testMode);
+				TestRunAttachments.Requeue(taskId);
 				return;
 			}
 
@@ -167,11 +253,6 @@ namespace AgentBridge
 				record.Status = "runtime_error";
 				if (!string.IsNullOrEmpty(recoveryError))
 				{
-					if (record.Logs == null)
-					{
-						record.Logs = new List<string>();
-					}
-
 					record.Logs.Add(recoveryError);
 				}
 			}
@@ -182,13 +263,31 @@ namespace AgentBridge
 
 			record.FinishedAtUtc = System.DateTime.UtcNow.ToString("o");
 			TaskJournal.Write(record);
+
+			TestRunDump dump;
+			bool promoted = TestRunDumpStore.TryTakePending(testMode, out dump)
+				&& dump.SourceTaskId == taskId
+				&& run != null && !run.aborted && string.IsNullOrEmpty(recoveryError)
+				&& !string.IsNullOrEmpty(startSources)
+				&& startSources == TestFingerprint.Sources();
+
+			if (promoted)
+			{
+				// Everything that could move the artifact version — the tests themselves, then
+				// PlayMode scene recovery — is done, so this is the state the results describe.
+				dump.Fingerprint = TestFingerprint.Current();
+				dump.SourceFingerprint = startSources;
+				TestRunDumpStore.Write(dump);
+				TestRunAttachments.Resolve(taskId, dump);
+			}
+			else
+			{
+				TestRunAttachments.Requeue(taskId);
+			}
 		}
 
 		public static void FinalizeRecoveredPlayModeRun(string taskId, TestRunResult run, string recoveryError)
 		{
-			SessionState.EraseString(CoordinatorTestTaskKey);
-			SessionState.EraseString(CoordinatorTestModeKey);
-
 			if (run == null)
 			{
 				run = new TestRunResult
@@ -271,6 +370,7 @@ namespace AgentBridge
 				if (!string.IsNullOrEmpty(coordinatorTaskId))
 				{
 					TestRunResult run = BuildResult(result);
+					WritePendingDump(coordinatorTaskId, result);
 					if (SessionState.GetString(CoordinatorTestModeKey, "") == TestMode.PlayMode.ToString()
 						&& PlayModeSceneRecovery.IsPending)
 					{
@@ -278,8 +378,6 @@ namespace AgentBridge
 						return;
 					}
 
-					SessionState.EraseString(CoordinatorTestTaskKey);
-					SessionState.EraseString(CoordinatorTestModeKey);
 					FinalizeCoordinatorRun(coordinatorTaskId, run, null);
 				}
 			}

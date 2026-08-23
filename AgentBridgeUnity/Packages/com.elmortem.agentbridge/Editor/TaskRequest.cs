@@ -15,5 +15,6 @@ namespace AgentBridge
 		public string AgentSessionId;
 		public string Note;
 		public int PlaySeconds;
+		public bool Fresh;
 	}
 }

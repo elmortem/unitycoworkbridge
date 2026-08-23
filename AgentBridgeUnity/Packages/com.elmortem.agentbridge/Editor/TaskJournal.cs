@@ -38,6 +38,15 @@ namespace AgentBridge
 			return record != null;
 		}
 
+		public static void Delete(string id)
+		{
+			string path = Path.Combine(BridgePaths.Journal, id + ".json");
+			if (File.Exists(path))
+			{
+				File.Delete(path);
+			}
+		}
+
 		public static void Trim(int keep)
 		{
 			string[] files = Directory.GetFiles(BridgePaths.Journal, "*.json");
@@ -54,7 +63,7 @@ namespace AgentBridge
 				{
 					string json = File.ReadAllText(file);
 					TaskRecord record = JsonUtility.FromJson<TaskRecord>(json);
-					if (record != null)
+					if (record != null && record.Status != "attached")
 					{
 						records.Add(record);
 					}

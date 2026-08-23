@@ -12,4 +12,5 @@ internal sealed class TaskRequest
 	public string AgentSessionId { get; set; } = "";
 	public string Note { get; set; } = "";
 	public int PlaySeconds { get; set; }
+	public bool Fresh { get; set; }
 }

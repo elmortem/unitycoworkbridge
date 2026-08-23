@@ -35,6 +35,12 @@ internal static class TaskResultFormatter
 			details.Add(id);
 		}
 
+		if (root.TryGetProperty("Cached", out var cachedElement) && cachedElement.ValueKind == JsonValueKind.True)
+		{
+			var sourceTaskId = GetString(root, "SourceTaskId");
+			details.Add(string.IsNullOrWhiteSpace(sourceTaskId) ? "cached" : "cached from " + sourceTaskId);
+		}
+
 		JsonElement tests = default;
 		var hasTests = kind == "tests"
 			&& root.TryGetProperty("Tests", out tests)

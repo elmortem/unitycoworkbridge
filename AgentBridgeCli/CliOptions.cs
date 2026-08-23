@@ -8,6 +8,7 @@ internal sealed class CliOptions
 	public string Format { get; private set; } = "json";
 	public string? Session { get; private set; }
 	public string? Note { get; private set; }
+	public bool Fresh { get; private set; }
 	public List<string> Arguments { get; } = new();
 	public string? Error { get; private set; }
 
@@ -22,6 +23,12 @@ internal sealed class CliOptions
 		for (var index = 0; index < args.Length; index++)
 		{
 			var argument = args[index];
+			if (argument == "--fresh")
+			{
+				options.Fresh = true;
+				continue;
+			}
+
 			if (argument == "--project")
 			{
 				if (!TryTakeValue(args, ref index, out var value))

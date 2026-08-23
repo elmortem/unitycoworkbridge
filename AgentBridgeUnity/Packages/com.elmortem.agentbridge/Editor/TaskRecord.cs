@@ -14,6 +14,9 @@ namespace AgentBridge
 		public List<string> Logs = new List<string>();
 		public List<TaskDiagnostic> Diagnostics = new List<TaskDiagnostic>();
 		public bool ForeignErrors;
+		public bool Cached;
+		public string SourceTaskId;
+		public string AttachedToTaskId;
 		public List<string> Artifacts = new List<string>();
 		public TestRunResult Tests;
 		public TaskTiming Timing = new TaskTiming();
