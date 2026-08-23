@@ -15,6 +15,9 @@ internal sealed class BridgeStatus
 	public string? RoslynSource { get; set; }
 	public bool RoslynReady { get; set; }
 	public bool SignalTickAvailable { get; set; }
+	public bool WakeTimerInstalled { get; set; }
+	public string? WakeTimerKind { get; set; }
+	public string? InteractionMode { get; set; }
 	public int LoadedTaskAssemblies { get; set; }
 	public int ExecutedTasks { get; set; }
 	public string? ActiveTaskId { get; set; }

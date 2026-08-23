@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using UnityEngine;
 
@@ -7,68 +6,70 @@ namespace AgentBridge
 {
 	public static class AgentEditorWakeTimer
 	{
-		private const int TimerId = 0xC0B0;
-		private const uint IntervalMs = 500;
+		private const int MinimumIntervalMs = 15;
+		private const double RetryIntervalSeconds = 1d;
 
-		private static IntPtr _windowHandle;
-		private static bool _installed;
+		private static UIntPtr _timerId;
+		private static int _intervalMs;
+		private static double _nextAttemptTime;
 
-		[DllImport("user32.dll")]
-		private static extern UIntPtr SetTimer(IntPtr hWnd, UIntPtr nIdEvent, uint uElapse, IntPtr lpTimerFunc);
+		public static bool Installed { get; private set; }
 
-		[DllImport("user32.dll")]
-		private static extern bool KillTimer(IntPtr hWnd, UIntPtr uIdEvent);
+		public static string Kind { get; private set; }
 
-		public static void Start()
+		[DllImport("user32.dll", SetLastError = true)]
+		private static extern UIntPtr SetTimer(IntPtr hWnd, UIntPtr nIDEvent, uint uElapse, IntPtr lpTimerFunc);
+
+		[DllImport("user32.dll", SetLastError = true)]
+		private static extern bool KillTimer(IntPtr hWnd, UIntPtr uIDEvent);
+
+		public static void Ensure(int intervalMs, double nowSeconds)
 		{
 			if (Application.platform != RuntimePlatform.WindowsEditor)
 			{
+				Kind = "unsupported";
 				return;
 			}
 
-			if (_installed)
+			int clamped = intervalMs < MinimumIntervalMs ? MinimumIntervalMs : intervalMs;
+			if (Installed && _intervalMs == clamped)
 			{
 				return;
 			}
 
-			IntPtr handle = ResolveWindowHandle();
-			if (handle == IntPtr.Zero)
+			if (!Installed && nowSeconds < _nextAttemptTime)
 			{
 				return;
 			}
 
-			UIntPtr result = SetTimer(handle, (UIntPtr)TimerId, IntervalMs, IntPtr.Zero);
-			_installed = result != UIntPtr.Zero;
+			Stop();
+			_nextAttemptTime = nowSeconds + RetryIntervalSeconds;
+
+			UIntPtr id = SetTimer(IntPtr.Zero, UIntPtr.Zero, (uint)clamped, IntPtr.Zero);
+			if (id == UIntPtr.Zero)
+			{
+				Kind = "none";
+				return;
+			}
+
+			_timerId = id;
+			_intervalMs = clamped;
+			Installed = true;
+			Kind = "thread";
 		}
 
 		public static void Stop()
 		{
-			if (!_installed)
+			if (!Installed)
 			{
 				return;
 			}
 
-			KillTimer(_windowHandle, (UIntPtr)TimerId);
-			_installed = false;
-		}
-
-		private static IntPtr ResolveWindowHandle()
-		{
-			if (_windowHandle != IntPtr.Zero)
-			{
-				return _windowHandle;
-			}
-
-			try
-			{
-				_windowHandle = Process.GetCurrentProcess().MainWindowHandle;
-			}
-			catch (Exception)
-			{
-				_windowHandle = IntPtr.Zero;
-			}
-
-			return _windowHandle;
+			KillTimer(IntPtr.Zero, _timerId);
+			_timerId = UIntPtr.Zero;
+			_intervalMs = 0;
+			Installed = false;
+			Kind = "none";
 		}
 	}
 }

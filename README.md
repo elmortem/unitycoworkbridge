@@ -205,7 +205,25 @@ To stop Claude Code from asking for confirmation on every call, allow this exact
 }
 ```
 
-`agentbridge status` validates the project path, package presence, Editor PID, heartbeat freshness and protocol version. `agentbridge doctor` additionally reports the CLI path/version, Unity/package versions, Roslyn readiness, capabilities and active task.
+`agentbridge status` validates the project path, package presence, Editor PID, heartbeat freshness and protocol version. `agentbridge doctor` additionally reports the CLI path/version, Unity/package versions, Roslyn readiness, capabilities, active task, and the two wake diagnostics described below (`Wake timer`, `Interaction mode`).
+
+Beyond the fatal `Problems` that make the bridge unavailable, health also carries non-fatal `Warnings`. `doctor` prints them prefixed with `!` in human format and exposes them as `Health.Warnings` in JSON. They never affect `Ok`, `Code`, or the exit code:
+
+| Warning | Meaning |
+|---|---|
+| `signal_tick_missing` | This Unity version has no internal `EditorApplication.SignalTick`; the bridge relies on the wake timer alone. |
+| `wake_timer_missing` | The Editor runs on Windows but could not install its wake timer — background tasks may stall until the window is focused. |
+| `interaction_throttled` | Preferences → General → Interaction Mode throttles the Editor's update loop in the background. |
+
+### Running While the Editor Is in the Background
+
+Everything in the bridge rides on `EditorApplication.update`: the inbox scan, compile polling, task timeouts, awaited continuations and the heartbeat. Unity throttles that loop when its window loses focus and can stop calling it altogether when the window is minimized, so an unattended agent would otherwise watch its task sit in the queue until a human clicks into the Editor. Two layers keep the loop alive.
+
+On the Editor side the package installs a thread timer (`SetTimer` with a `NULL` window handle) whose `WM_TIMER` messages land in the main thread's message queue and wake Unity's message loop. It needs no window handle, so it cannot fail to resolve one at load time, it is re-armed from the update tick whenever the interval changes, and a failed install is retried once a second. While a task is queued or running the pump signals every tick with no idle throttle; when idle it falls back to `IdleTickIntervalMs`. `status` reports the result as `Wake timer: thread` (`missing` if the install failed, `unsupported` outside the Windows Editor).
+
+On the client side, `agentbridge` polls bridge health every three seconds for the whole wait — while the task is queued *and* while it runs. If the heartbeat goes stale it posts `WM_NULL` to the Editor window up to five times, at most one poke every three seconds; a `WM_NULL` reaches the message queue without touching focus. Only after those are exhausted does it fall back to a single focus poke that immediately hands focus back to the window that had it, and it never pokes an Editor that is already in the foreground. A successful wake resets the counters, so a long task that dips into sleep a few times does not burn through the budget. If nothing revives the Editor, the client gives up with code `bridge_asleep` (exit code `3`) — the task itself stays in the queue and runs once the Editor wakes, so retrieve it later with `agentbridge wait <TaskId>` instead of resubmitting.
+
+Both layers are Windows-only. Elsewhere the wake timer reports `unsupported` and the client does not poke; set Preferences → General → Interaction Mode to **No Throttling** so the Editor keeps ticking in the background on its own. `agentbridge doctor` warns with `! interaction_throttled` when the Editor reports a throttling mode. Unity versions without an `EditorApplication.interactionMode` property report `Interaction mode: unknown`, which is not treated as throttling.
 
 ### C# Task Script
 
@@ -425,6 +443,7 @@ Library/AgentBridge/
 - `Run()` is invoked on Unity's main thread; awaited continuations resume there too, so heavy synchronous work still blocks the Editor — offload it via `await Task.Run(...)`. Bridge caps a task at `TaskTimeoutSeconds` (default 300, configurable in `ProjectSettings/AgentBridge.json`); on timeout it writes `Status: "timeout"` and unblocks the queue
 - A running task can be aborted via **Tools → Agent Bridge → Cancel Running Task**
 - `csharp` tasks compile against whatever assemblies are already loaded in the domain — they cannot reference project code that has compilation errors, since the broken assembly itself would never have loaded. Use a `compile` task first to confirm the project builds.
+- Keeping the Editor's update loop alive while its window is unfocused or minimized is Windows-only: the wake timer and the client's wake pokes both no-op elsewhere. On macOS and Linux set Interaction Mode to No Throttling. See [Running While the Editor Is in the Background](#running-while-the-editor-is-in-the-background).
 - Roslyn ships inside the package (`Roslyn~/`), so no download and no network access are required; third-party licenses are in `Roslyn~/THIRD-PARTY-NOTICES.md`.
 
 ## Releasing

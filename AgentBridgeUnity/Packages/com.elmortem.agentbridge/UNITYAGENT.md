@@ -94,6 +94,9 @@ agentbridge stopplay [--session <id>]
 - Один прогон — одна команда `tests`. Не запускай вторую, пока первая не завершилась (мост выполняет задачи строго по одной).
 - Для запуска тестов нужен пакет **Unity Test Framework** (`com.unity.test-framework`) — он есть в проекте по умолчанию.
 - Записи задач чистит мост автоматически (авто-трим последних N успешных по `KeepCompletedCount` в `ProjectSettings/AgentBridge.json`). Отдельно ничего чистить не нужно.
+- Свёрнутый или потерявший фокус редактор не мешает работе: на Windows пакет держит главный цикл живым таймером сообщений потока, а CLI, пока ждёт задачу, будит редактор `WM_NULL`, если heartbeat протух. Не сворачивай проверку в «попроси человека кликнуть в Unity».
+- Код `bridge_asleep` (выход `3`) означает, что редактор так и не проснулся. Задача остаётся в очереди и выполнится позже — не пересоздавай её, забери результат по тому же id: `agentbridge wait <TaskId>`.
+- `agentbridge status` показывает `Wake timer` и `Interaction mode`, `agentbridge doctor` печатает нефатальные предупреждения строками с `!` (`signal_tick_missing`, `wake_timer_missing`, `interaction_throttled`). На коды выхода они не влияют. Увидел `! interaction_throttled` — попроси человека выставить Preferences → General → Interaction Mode = No Throttling.
 
 ## Работа рядом с другими агентами
 

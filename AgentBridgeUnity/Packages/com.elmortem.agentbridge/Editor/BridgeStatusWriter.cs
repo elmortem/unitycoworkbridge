@@ -56,6 +56,10 @@ namespace AgentBridge
 			Current.RoslynReady = location.Available;
 			Current.RoslynSource = location.Available ? location.Kind.ToString() : AgentBridgeSettingsStore.GetRoslynSource();
 
+			Current.WakeTimerInstalled = AgentEditorWakeTimer.Installed;
+			Current.WakeTimerKind = AgentEditorWakeTimer.Kind ?? "none";
+			Current.InteractionMode = InteractionModeProbe.Read();
+
 			Write();
 		}
 

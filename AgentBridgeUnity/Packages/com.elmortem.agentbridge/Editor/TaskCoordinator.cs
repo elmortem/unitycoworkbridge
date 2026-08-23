@@ -457,6 +457,7 @@ namespace AgentBridge
 			var pending = new List<PendingTaskInfo>();
 			if (!Directory.Exists(BridgePaths.Inbox))
 			{
+				EditorTickPump.HasPendingWork = pending.Count > 0;
 				return pending;
 			}
 
@@ -527,6 +528,7 @@ namespace AgentBridge
 				pending.Add(info);
 			}
 
+			EditorTickPump.HasPendingWork = pending.Count > 0;
 			return pending;
 		}
 

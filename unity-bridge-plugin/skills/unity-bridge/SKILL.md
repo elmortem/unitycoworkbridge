@@ -302,4 +302,8 @@ agentbridge stopplay --session AB_20260813_1500_a1f
 
 Смотри поле `code` в JSON. Для `project_not_found` найди корень Unity-проекта и повтори с `--project`; для `heartbeat_stale`/`editor_process_not_running` сообщи: «Открой проект в Unity»; для `bridge_disabled` — «Включи мост через Tools → Agent Bridge → Start»; для `protocol_mismatch` обнови CLI или пакет; для `project_mismatch` — `status.json` от другого проекта, проверь `--project`. Не пытайся запускать Unity самостоятельно.
 
+Код `bridge_asleep` означает, что главный цикл редактора уснул и не проснулся после попыток разбудить его. Задача при этом остаётся в очереди и выполнится, когда редактор оживёт; повторять команду не нужно, достаточно дождаться и запросить результат по тому же id через `agentbridge wait <id>`.
+
+Если `agentbridge doctor` печатает `! interaction_throttled`, человеку стоит выставить Preferences → General → Interaction Mode = No Throttling: без этого редактор в фоне засыпает штатно.
+
 Ни один из этих кодов не повод обойти CLI. Если мост недоступен — сообщи пользователю и остановись.

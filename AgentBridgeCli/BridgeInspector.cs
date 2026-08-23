@@ -105,6 +105,22 @@ internal static class BridgeInspector
 			{
 				health.Problems.Add("roslyn_not_ready");
 			}
+
+			if (!health.Bridge.SignalTickAvailable)
+			{
+				health.Warnings.Add("signal_tick_missing");
+			}
+
+			if (!health.Bridge.WakeTimerInstalled
+				&& string.Equals(health.HostOs, HostPlatform.Windows, StringComparison.OrdinalIgnoreCase))
+			{
+				health.Warnings.Add("wake_timer_missing");
+			}
+
+			if (IsThrottledInteractionMode(health.Bridge.InteractionMode))
+			{
+				health.Warnings.Add("interaction_throttled");
+			}
 		}
 
 		health.BridgeReady = health.PackageDeclared
@@ -118,6 +134,19 @@ internal static class BridgeInspector
 		health.Ok = health.BridgeReady;
 		health.Code = health.BridgeReady ? "ready" : FirstOperationalProblem(health.Problems);
 		return health;
+	}
+
+	private static bool IsThrottledInteractionMode(string? mode)
+	{
+		if (string.IsNullOrWhiteSpace(mode))
+		{
+			return false;
+		}
+
+		var normalized = mode.Trim();
+		return string.Equals(normalized, "Default", StringComparison.OrdinalIgnoreCase)
+			|| string.Equals(normalized, "MonitorRefreshRate", StringComparison.OrdinalIgnoreCase)
+			|| string.Equals(normalized, "Custom", StringComparison.OrdinalIgnoreCase);
 	}
 
 	private static string FirstOperationalProblem(List<string> problems)

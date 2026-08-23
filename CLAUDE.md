@@ -43,9 +43,11 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
 - `AgentBridgeApplication.cs` — диспетчер команд
 - `CliOptions.cs` — разбор аргументов и валидация флагов
 - `BridgeClient.cs` — постановка задачи в очередь и ожидание результата
-- `BridgeInspector.cs` — `status` / `doctor`
+- `BridgeInspector.cs` — `status` / `doctor`, фатальные `Problems` и нефатальные `Warnings`
 - `TaskResultFormatter.cs` — вывод `json` (стабильный контракт) и `human`
 - `ProjectLocator.cs`, `BridgePaths.cs` — поиск проекта и раскладка `Library/AgentBridge/`
+- Пробуждение уснувшего редактора: `WakePolicy.cs` (чистое решение, точка тестирования),
+  `WakeAction.cs`, `EditorWakeAttempts.cs`, `EditorWaker.cs` (`WM_NULL`, фокус-тычок как крайняя мера)
 
 ### Пакет (`AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/`)
 
@@ -59,6 +61,8 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
   `TestRunDumpStore.cs`
 - Сцены и плей мод: `SceneSafetyGuard.cs`, `SceneDirtyWatcher.cs`, `AgentSceneManager.cs`,
   `PlaySessionManager.cs`, `PlayModeSceneRecovery.cs`, `UnsanctionedPlayGuard.cs`, `FocusGuard.cs`
+- Тик и пробуждение: `EditorTickPump.cs` (единственный владелец будильника, `ShouldSignal`),
+  `AgentEditorWakeTimer.cs` (потоковый `SetTimer` без hwnd), `InteractionModeProbe.cs`
 - Протокол: `BridgePaths.cs`, `BridgeStatusWriter.cs`, `TaskJournal.cs`, `TaskRecord.cs`
 - `Roslyn~/` — вендоренный Roslyn (тильда прячет папку от импорта Unity), обновляется
   `scripts/fetch-roslyn.ps1`; лицензии в `Roslyn~/THIRD-PARTY-NOTICES.md`
@@ -122,6 +126,30 @@ unity-bridge-plugin.zip             собранный артефакт, зак�
 записей, и потребитель падает с `Zip file contains path with invalid characters`. Канонический
 скрипт пишет прямые слэши, отклоняет `\`, абсолютные пути, `..`, дубликаты и запрещённые в Windows
 символы, затем сверяет хэш каждого файла в архиве с исходником.
+
+### 3. Документация и карта проекта — решай сам по масштабу правки
+
+Обновление документации входит в задачу и не выносится в отдельный вопрос заказчику. Реши сам, что
+задето, и обнови это в том же изменении. Это не проверяется автоматикой — единственная защита здесь
+твоё суждение.
+
+Что смотреть по масштабу:
+
+| Масштаб правки | Что обновить |
+|---|---|
+| Внутренний рефактор без смены поведения | ничего; только код и, если нужно, комментарии |
+| Новое или изменённое поведение, флаг, поле статуса, код ошибки, предупреждение | `README.md`; при изменении контракта задач и диагностики — `unity-bridge-plugin/skills/*/SKILL.md` и `AgentBridgeUnity/Packages/com.elmortem.agentbridge/UNITYAGENT.md` |
+| Новая команда CLI, новый kind задачи, смена кодов выхода | всё перечисленное выше плюс раздел «Карта проекта» в этом файле |
+| Новый файл с самостоятельной ролью, переезд или удаление файла | «Карта проекта» в этом файле; перечень существует ради навигации, а не полноты — мелкий хелпер рядом с уже упомянутым файлом в него не добавляется |
+| Изменение процесса сборки, релиза или обязательных правил | этот файл и раздел `## Releasing` в `README.md` |
+
+Кому что адресовано: `README.md` — человеку, ставящему и настраивающему мост; `SKILL.md` — агенту,
+работающему через CLI; `UNITYAGENT.md` пакета — агенту в чужом проекте, где нет этого репозитория;
+`CLAUDE.md` — агенту, правящему сам мост. Один и тот же факт формулируется под своего читателя, а не
+копируется дословно.
+
+Правка `unity-bridge-plugin/skills/*` или файлов пакета — это правка компонента: версия поднимается
+и плагин пересобирается по правилу 2, включая случай, когда изменилась только документация.
 
 ## Соглашения
 

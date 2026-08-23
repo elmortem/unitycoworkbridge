@@ -18,6 +18,9 @@ namespace AgentBridge
 		public string RoslynSource;
 		public bool RoslynReady;
 		public bool SignalTickAvailable;
+		public bool WakeTimerInstalled;
+		public string WakeTimerKind;
+		public string InteractionMode;
 		public int LoadedTaskAssemblies;
 		public int ExecutedTasks;
 		public string ActiveTaskId;

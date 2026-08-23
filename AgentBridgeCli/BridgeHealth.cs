@@ -22,5 +22,6 @@ internal sealed class BridgeHealth
 	public bool BridgeReady { get; set; }
 	public bool CSharpReady { get; set; }
 	public List<string> Problems { get; set; } = new();
+	public List<string> Warnings { get; set; } = new();
 	public BridgeStatus? Bridge { get; set; }
 }

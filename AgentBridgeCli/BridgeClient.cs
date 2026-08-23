@@ -165,7 +165,10 @@ internal sealed class BridgeClient
 		DateTime? runningSince = null;
 		var queuedSince = DateTime.UtcNow;
 		var nextProgress = TimeSpan.Zero;
-		var nextHealthCheck = TimeSpan.Zero;
+		var nextQueueReport = TimeSpan.Zero;
+		var attempts = new EditorWakeAttempts();
+		var nextHealthPoll = DateTime.MinValue;
+		BridgeHealth? lastHealth = null;
 
 		while (true)
 		{
@@ -177,6 +180,60 @@ internal sealed class BridgeClient
 			}
 
 			var now = DateTime.UtcNow;
+
+			// A running task needs the same watchdog as a queued one: the editor can fall asleep
+			// mid-run, and then nothing but an external poke gets the main loop ticking again.
+			if (now >= nextHealthPoll)
+			{
+				nextHealthPoll = now.AddSeconds(3);
+				var pulse = BridgeInspector.Inspect(_projectRoot);
+				lastHealth = pulse;
+				var asleep = pulse.Problems.Contains("heartbeat_stale");
+
+				if (!pulse.BridgeReady && !asleep)
+				{
+					return WriteError("bridge_unavailable", "Bridge became unavailable while the task was waiting: " + pulse.Code);
+				}
+
+				if (asleep)
+				{
+					var pid = pulse.Bridge?.EditorPid ?? 0;
+					var action = WakePolicy.Decide(
+						pulse.HeartbeatAgeMs,
+						EditorWaker.IsEditorForeground(pid),
+						attempts.PostAttempts,
+						attempts.FocusAttempts,
+						(now - attempts.LastAttemptUtc).TotalSeconds);
+
+					if (action == WakeAction.Post)
+					{
+						attempts.PostAttempts++;
+						attempts.LastAttemptUtc = now;
+						EditorWaker.TryPost(pid);
+						Console.Error.WriteLine("[agentbridge] editor asleep for "
+							+ (pulse.HeartbeatAgeMs ?? 0) / 1000 + "s, waking (post #" + attempts.PostAttempts + ")");
+					}
+					else if (action == WakeAction.Focus)
+					{
+						attempts.FocusAttempts++;
+						attempts.LastAttemptUtc = now;
+						EditorWaker.TryFocus(pid);
+						Console.Error.WriteLine("[agentbridge] editor still asleep, focus poke");
+					}
+					else if (attempts.Exhausted)
+					{
+						return WriteError(
+							"bridge_asleep",
+							"The Unity editor stopped ticking and did not wake up. Focus the editor window, "
+							+ "and set Preferences > General > Interaction Mode to No Throttling.");
+					}
+				}
+				else
+				{
+					attempts.PostAttempts = 0;
+					attempts.FocusAttempts = 0;
+				}
+			}
 
 			// The client budget covers the task itself. Time spent behind another agent session
 			// in the editor queue is waited out separately, against the queue cap.
@@ -220,16 +277,10 @@ internal sealed class BridgeClient
 				return 2;
 			}
 
-			if (queued >= nextHealthCheck)
+			if (queued >= nextQueueReport && lastHealth != null)
 			{
-				nextHealthCheck = queued + TimeSpan.FromSeconds(5);
-				var health = BridgeInspector.Inspect(_projectRoot);
-				if (!health.BridgeReady)
-				{
-					return WriteError("bridge_unavailable", "Bridge became unavailable while the task was queued: " + health.Code);
-				}
-
-				Console.Error.WriteLine("[agentbridge] " + taskId + " " + DescribeQueuePosition(health, taskId, (int)queued.TotalSeconds));
+				nextQueueReport = queued + TimeSpan.FromSeconds(5);
+				Console.Error.WriteLine("[agentbridge] " + taskId + " " + DescribeQueuePosition(lastHealth, taskId, (int)queued.TotalSeconds));
 			}
 
 			await Task.Delay(250);

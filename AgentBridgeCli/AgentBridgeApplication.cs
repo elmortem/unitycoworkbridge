@@ -245,6 +245,9 @@ internal static class AgentBridgeApplication
 				Console.Out.WriteLine("Package: " + health.Bridge.PackageVersion);
 				Console.Out.WriteLine("Unity: " + health.Bridge.UnityVersion);
 				Console.Out.WriteLine("Roslyn: " + (health.Bridge.RoslynReady ? "ready" : "not ready"));
+				Console.Out.WriteLine("Wake timer: "
+					+ (health.Bridge.WakeTimerInstalled ? (health.Bridge.WakeTimerKind ?? "installed") : "missing"));
+				Console.Out.WriteLine("Interaction mode: " + (health.Bridge.InteractionMode ?? "unknown"));
 				Console.Out.WriteLine("Active task: " + (health.Bridge.ActiveTaskId ?? "none"));
 
 				var playing = health.Bridge.IsPlaying ? "yes" : "no";
@@ -273,6 +276,11 @@ internal static class AgentBridgeApplication
 			foreach (var problem in health.Problems)
 			{
 				Console.Out.WriteLine("- " + problem);
+			}
+
+			foreach (var warning in health.Warnings)
+			{
+				Console.Out.WriteLine("! " + warning);
 			}
 
 			return;

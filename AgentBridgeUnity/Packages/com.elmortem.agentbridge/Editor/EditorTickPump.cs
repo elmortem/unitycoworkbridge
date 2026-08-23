@@ -9,6 +9,7 @@ namespace AgentBridge
 	public static class EditorTickPump
 	{
 		public static bool HasActiveTask;
+		public static bool HasPendingWork;
 
 		private static Action _signalTick;
 		private static double _lastTickTime;
@@ -22,14 +23,14 @@ namespace AgentBridge
 			if (method == null)
 			{
 				BridgeStatusWriter.Current.SignalTickAvailable = false;
-				BridgeStatusWriter.Write();
-				Debug.LogWarning("[AgentBridge] EditorApplication.SignalTick not found; falling back to AgentEditorWakeTimer.");
-				AgentEditorWakeTimer.Start();
-				return;
+				Debug.LogWarning("[AgentBridge] EditorApplication.SignalTick not found; relying on AgentEditorWakeTimer alone.");
+			}
+			else
+			{
+				_signalTick = (Action)Delegate.CreateDelegate(typeof(Action), method);
+				BridgeStatusWriter.Current.SignalTickAvailable = true;
 			}
 
-			_signalTick = (Action)Delegate.CreateDelegate(typeof(Action), method);
-			BridgeStatusWriter.Current.SignalTickAvailable = true;
 			BridgeStatusWriter.Write();
 
 			EditorApplication.update -= OnUpdate;
@@ -44,20 +45,58 @@ namespace AgentBridge
 			_installed = true;
 		}
 
+		public static bool HasWork
+		{
+			get { return HasActiveTask || HasPendingWork; }
+		}
+
+		public static bool ShouldSignal(double nowSeconds, double lastSignalSeconds, bool hasWork, int intervalMs)
+		{
+			if (hasWork)
+			{
+				return true;
+			}
+
+			return (nowSeconds - lastSignalSeconds) * 1000d >= intervalMs;
+		}
+
 		private static void OnUpdate()
 		{
-			int intervalMs = HasActiveTask
+			double now = EditorApplication.timeSinceStartup;
+			int intervalMs = HasWork
 				? AgentBridgeSettingsStore.GetActiveTickIntervalMs()
 				: AgentBridgeSettingsStore.GetIdleTickIntervalMs();
 
-			double now = EditorApplication.timeSinceStartup;
-			if ((now - _lastTickTime) * 1000d < intervalMs)
+			AgentEditorWakeTimer.Ensure(intervalMs, now);
+			PublishWakeState();
+
+			if (!ShouldSignal(now, _lastTickTime, HasWork, intervalMs))
 			{
 				return;
 			}
 
 			_lastTickTime = now;
+
+			if (_signalTick == null)
+			{
+				return;
+			}
+
 			_signalTick();
+		}
+
+		private static void PublishWakeState()
+		{
+			string kind = AgentEditorWakeTimer.Kind ?? "none";
+			if (BridgeStatusWriter.Current.WakeTimerInstalled == AgentEditorWakeTimer.Installed
+				&& BridgeStatusWriter.Current.WakeTimerKind == kind)
+			{
+				return;
+			}
+
+			BridgeStatusWriter.Current.WakeTimerInstalled = AgentEditorWakeTimer.Installed;
+			BridgeStatusWriter.Current.WakeTimerKind = kind;
+			BridgeStatusWriter.Write();
 		}
 
 		private static void Unsubscribe()
@@ -70,6 +109,7 @@ namespace AgentBridge
 			EditorApplication.update -= OnUpdate;
 			AssemblyReloadEvents.beforeAssemblyReload -= Unsubscribe;
 			EditorApplication.quitting -= Unsubscribe;
+			AgentEditorWakeTimer.Stop();
 			_installed = false;
 		}
 	}

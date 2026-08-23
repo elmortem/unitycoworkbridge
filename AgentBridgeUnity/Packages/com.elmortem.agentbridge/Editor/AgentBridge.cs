@@ -74,7 +74,6 @@ namespace AgentBridge
 			EditorApplication.quitting -= AgentEditorWakeTimer.Stop;
 			EditorApplication.quitting += AgentEditorWakeTimer.Stop;
 
-			AgentEditorWakeTimer.Start();
 			TaskCoordinator.Start();
 		}
 

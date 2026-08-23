@@ -15,6 +15,7 @@ try
 	RunScratchTests(root);
 	RunSessionOptionTests();
 	RunContentionFormattingTests();
+	RunWakePolicyTests();
 	Console.WriteLine("AgentBridgeCli.Tests: PASS");
 	return 0;
 }
@@ -247,6 +248,21 @@ static void RunContentionFormattingTests()
 	var quiet = TaskResultFormatter.FormatHuman(
 		"""{"Id":"Task_b","Kind":"csharp","Status":"success","Contention":{"WaitingSessions":0,"OldestWaitSeconds":0,"Notes":[]}}""");
 	Expect(!quiet.Contains("Contention", StringComparison.Ordinal), "an uncontended task must not mention contention");
+}
+
+static void RunWakePolicyTests()
+{
+	Expect(WakePolicy.Decide(null, false, 0, 0, 100d) == WakeAction.None, "unknown heartbeat age must not poke");
+	Expect(WakePolicy.Decide(1000, false, 0, 0, 100d) == WakeAction.None, "fresh heartbeat must not poke");
+	Expect(WakePolicy.Decide(9000, true, 0, 0, 100d) == WakeAction.None, "focused editor must not be poked");
+	Expect(WakePolicy.Decide(9000, false, 0, 0, 1d) == WakeAction.None, "attempts must respect the interval");
+	Expect(WakePolicy.Decide(9000, false, 0, 0, 100d) == WakeAction.Post, "stale heartbeat must post first");
+	Expect(
+		WakePolicy.Decide(9000, false, WakePolicy.MaxPostAttempts, 0, 100d) == WakeAction.Focus,
+		"focus poke only after posts are exhausted");
+	Expect(
+		WakePolicy.Decide(9000, false, WakePolicy.MaxPostAttempts, WakePolicy.MaxFocusAttempts, 100d) == WakeAction.None,
+		"exhausted attempts must stop poking");
 }
 
 static void CreateProject(string path)
