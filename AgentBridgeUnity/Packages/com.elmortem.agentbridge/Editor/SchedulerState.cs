@@ -9,6 +9,7 @@ namespace AgentBridge
 		public int EditorPid;
 		public string HolderAgentSessionId = "";
 		public string HolderLastActivityUtc = "";
+		public string HolderSinceUtc = "";
 		public string ContentionStartedUtc = "";
 		public bool HolderContextRestored = true;
 		public List<SessionContext> Contexts = new List<SessionContext>();

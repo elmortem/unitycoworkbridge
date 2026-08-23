@@ -21,6 +21,7 @@ namespace AgentBridge
 		public bool WakeTimerInstalled;
 		public string WakeTimerKind;
 		public string InteractionMode;
+		public bool TelemetryEnabled;
 		public int LoadedTaskAssemblies;
 		public int ExecutedTasks;
 		public string ActiveTaskId;

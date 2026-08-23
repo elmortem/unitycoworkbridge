@@ -307,3 +307,7 @@ agentbridge stopplay --session AB_20260813_1500_a1f
 Если `agentbridge doctor` печатает `! interaction_throttled`, человеку стоит выставить Preferences → General → Interaction Mode = No Throttling: без этого редактор в фоне засыпает штатно.
 
 Ни один из этих кодов не повод обойти CLI. Если мост недоступен — сообщи пользователю и остановись.
+
+### Разбор зависаний
+
+Мост ведёт телеметрию в `<проект>/Logs/AgentBridge-editor-<дата>.jsonl` и `AgentBridge-client-<дата>.jsonl` — по одной JSON-строке на событие (`task_start`, `task_finish`, `lease_grant`, `lease_release`, `watchdog`, `tick_gap`, `play_open`, `play_close`, `cli_submit`, `cli_wake`, `cli_exit`), строки задачи связаны полем `Id`. Читай их напрямую (`grep`/`json.loads`), когда надо понять, почему задача ждала долго, кто держал редактор или засыпал ли редактор.

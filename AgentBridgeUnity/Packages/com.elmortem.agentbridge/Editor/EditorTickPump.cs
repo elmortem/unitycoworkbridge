@@ -11,9 +11,13 @@ namespace AgentBridge
 		public static bool HasActiveTask;
 		public static bool HasPendingWork;
 
+		private const double GapThresholdMs = 2000d;
+
 		private static Action _signalTick;
 		private static double _lastTickTime;
+		private static double _lastUpdateTime;
 		private static bool _installed;
+		private static bool _startReported;
 
 		static EditorTickPump()
 		{
@@ -63,12 +67,37 @@ namespace AgentBridge
 		private static void OnUpdate()
 		{
 			double now = EditorApplication.timeSinceStartup;
+
+			// The gap between two consecutive updates is the only direct evidence that the editor
+			// stopped ticking: everything else only shows the delay it caused downstream.
+			if (_lastUpdateTime > 0d)
+			{
+				double gapMs = (now - _lastUpdateTime) * 1000d;
+				if (gapMs >= GapThresholdMs)
+				{
+					TelemetryLog.Write("tick_gap", "", "", new[]
+					{
+						TelemetryField.Number("GapMs", (long)gapMs),
+						TelemetryField.Flag("HasWork", HasWork),
+						TelemetryField.Flag("Focused", UnityEditorInternal.InternalEditorUtility.isApplicationActive)
+					});
+				}
+			}
+
+			_lastUpdateTime = now;
+
 			int intervalMs = HasWork
 				? AgentBridgeSettingsStore.GetActiveTickIntervalMs()
 				: AgentBridgeSettingsStore.GetIdleTickIntervalMs();
 
 			AgentEditorWakeTimer.Ensure(intervalMs, now);
 			PublishWakeState();
+
+			if (!_startReported)
+			{
+				_startReported = true;
+				BridgeStatusWriter.WriteStartTelemetry();
+			}
 
 			if (!ShouldSignal(now, _lastTickTime, HasWork, intervalMs))
 			{

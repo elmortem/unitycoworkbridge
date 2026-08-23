@@ -14,5 +14,7 @@
     "ContentionSliceSeconds": 90,
     "PlaySessionDefaultSeconds": 120,
     "PlaySessionMaxSeconds": 600,
-    "AgentPlayGraceSeconds": 5
+    "AgentPlayGraceSeconds": 5,
+    "TelemetryEnabled": true,
+    "TelemetryKeepDays": 14
 }

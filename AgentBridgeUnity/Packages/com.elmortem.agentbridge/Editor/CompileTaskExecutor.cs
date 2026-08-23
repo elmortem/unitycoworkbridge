@@ -11,7 +11,7 @@ namespace AgentBridge
 	{
 		public const string PendingCompileTaskKey = "AgentBridge_CompileTask";
 		public const string PendingCompileFingerprintKey = "AgentBridge_CompileFingerprint";
-		private const float NoReloadTimeoutSeconds = 20f;
+		public const float NoReloadTimeoutSeconds = 20f;
 
 		private static readonly List<TaskDiagnostic> _collectedErrors = new List<TaskDiagnostic>();
 		private static bool _subscribed;

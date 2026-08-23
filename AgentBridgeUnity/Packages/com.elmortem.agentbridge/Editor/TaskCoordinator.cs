@@ -117,6 +117,7 @@ namespace AgentBridge
 
 				record.Logs.Add("orphaned record finalized on domain load");
 				TaskJournal.Write(record);
+				TelemetryLog.TaskFinished(record);
 			}
 		}
 
@@ -153,6 +154,7 @@ namespace AgentBridge
 			record.ForeignErrors = outcome.ForeignErrors;
 			record.FinishedAtUtc = DateTime.UtcNow.ToString("o");
 			TaskJournal.Write(record);
+			TelemetryLog.TaskFinished(record);
 			AgentSessionScheduler.OnTaskFinished(record.AgentSessionId, DateTime.UtcNow);
 
 			// The fingerprint taken before the refresh proves nothing changed while the project
@@ -338,9 +340,19 @@ namespace AgentBridge
 
 			DateTime nowUtc = DateTime.UtcNow;
 			string idleHolder = SchedulerStateStore.State.HolderAgentSessionId;
+
+			// TickIdle wipes the holder along with the moment it took the lease, so the length
+			// of the lease has to be read before it can expire.
+			long idleHeldMs = AgentSessionScheduler.HeldMs(nowUtc);
 			AgentSessionScheduler.TickIdle(nowUtc, pending.Count > 0);
 			if (!string.IsNullOrEmpty(idleHolder) && string.IsNullOrEmpty(SchedulerStateStore.State.HolderAgentSessionId))
 			{
+				TelemetryLog.Write("lease_release", idleHolder, "", new[]
+				{
+					TelemetryField.Text("Reason", "idle_timeout"),
+					TelemetryField.Number("HeldMs", idleHeldMs)
+				});
+
 				// The lease expired with an empty queue, so the editor is idle and the scenes on
 				// screen still belong to the session that just lost it.
 				string idleError;
@@ -360,7 +372,7 @@ namespace AgentBridge
 				return;
 			}
 
-			StartTask(next, holderChanged, previousHolder);
+			StartTask(next, holderChanged, previousHolder, pending.Count);
 		}
 
 		// The regular scheduler is off while the editor plays, so the session that owns the play
@@ -421,7 +433,7 @@ namespace AgentBridge
 				return;
 			}
 
-			StartTask(next, false, "");
+			StartTask(next, false, "", pending.Count);
 		}
 
 		// Play mode without a session is a stuck editor: nothing but stopplay may run, and it
@@ -449,7 +461,7 @@ namespace AgentBridge
 				return;
 			}
 
-			StartTask(next, false, "");
+			StartTask(next, false, "", pending.Count);
 		}
 
 		private static List<PendingTaskInfo> BuildPendingList(string excludeTaskId)
@@ -568,7 +580,7 @@ namespace AgentBridge
 			BridgeStatusWriter.Write();
 		}
 
-		private static void StartTask(PendingTaskInfo task, bool holderChanged, string previousHolder)
+		private static void StartTask(PendingTaskInfo task, bool holderChanged, string previousHolder, int queueDepth)
 		{
 			string taskFilePath = task.TaskFilePath;
 			string id = task.Id;
@@ -646,6 +658,24 @@ namespace AgentBridge
 			}
 
 			AgentSessionScheduler.CommitStart(task, holderChanged);
+
+			if (holderChanged)
+			{
+				TelemetryLog.Write("lease_grant", task.EffectiveSessionId, id, new[]
+				{
+					TelemetryField.Text("Reason", string.IsNullOrEmpty(previousHolder) ? "first" : "rotation"),
+					TelemetryField.Text("Prev", previousHolder)
+				});
+			}
+
+			TelemetryLog.Write("task_start", task.EffectiveSessionId, id, new[]
+			{
+				TelemetryField.Text("Kind", request.Kind),
+				TelemetryField.Number("WaitedMs", (long)(DateTime.UtcNow - task.CreatedUtc).TotalMilliseconds),
+				TelemetryField.Number("QueueDepth", queueDepth),
+				TelemetryField.Flag("Rotated", holderChanged),
+				TelemetryField.Text("Note", request.Note ?? "")
+			});
 
 			// Every kind but release runs the preflight: compile forces a domain reload and
 			// sceneshot ticks the editor, and both can reach Unity code that opens the save dialog.
@@ -736,6 +766,12 @@ namespace AgentBridge
 			{
 				logs.Add(error);
 			}
+
+			TelemetryLog.Write("lease_release", effective, request.Id, new[]
+			{
+				TelemetryField.Text("Reason", "release_cmd"),
+				TelemetryField.Number("HeldMs", AgentSessionScheduler.HeldMs(DateTime.UtcNow))
+			});
 
 			AgentSessionScheduler.Release(effective);
 			FinishTask("success", "released", logs, false);
@@ -929,6 +965,13 @@ namespace AgentBridge
 				return;
 			}
 
+			TelemetryLog.Write("watchdog", _activeRecord.AgentSessionId, _activeRecord.Id, new[]
+			{
+				TelemetryField.Text("What", "compile_no_reload"),
+				TelemetryField.Text("Kind", "compile"),
+				TelemetryField.Number("LimitS", (long)CompileTaskExecutor.NoReloadTimeoutSeconds)
+			});
+
 			string taskId;
 			CompileTaskExecutor.HasPendingTask(out taskId);
 			TaskRecordOutcome outcome = CompileTaskExecutor.ConsumePending(taskId);
@@ -1030,6 +1073,8 @@ namespace AgentBridge
 			_activeRecord.Contention = AgentSessionScheduler.BuildContention(BuildPendingList(_activeRecord.Id), finishedUtc);
 
 			TaskJournal.Write(_activeRecord);
+
+			TelemetryLog.TaskFinished(_activeRecord);
 			UnsanctionedPlayGuard.RecordTaskFinish(_activeRecord.Id);
 			AgentSessionScheduler.OnTaskFinished(_activeRecord.AgentSessionId, DateTime.UtcNow);
 
@@ -1101,6 +1146,13 @@ namespace AgentBridge
 				_pendingTimeoutReload = true;
 			}
 
+			TelemetryLog.Write("watchdog", _activeRecord.AgentSessionId, _activeRecord.Id, new[]
+			{
+				TelemetryField.Text("What", "task_timeout"),
+				TelemetryField.Text("Kind", _activeRecord.Kind),
+				TelemetryField.Number("LimitS", timeoutSeconds)
+			});
+
 			FinishTask("timeout", null, new List<string> { "task exceeded timeout: " + timeoutSeconds + "s" }, false);
 		}
 
@@ -1127,6 +1179,7 @@ namespace AgentBridge
 			_activeRecord.Status = "interrupted_by_domain_reload";
 			_activeRecord.FinishedAtUtc = DateTime.UtcNow.ToString("o");
 			TaskJournal.Write(_activeRecord);
+			TelemetryLog.TaskFinished(_activeRecord);
 			AgentSessionScheduler.OnTaskFinished(_activeRecord.AgentSessionId, DateTime.UtcNow);
 
 			CleanupActive();
@@ -1156,6 +1209,7 @@ namespace AgentBridge
 			}
 
 			TaskJournal.Write(record);
+			TelemetryLog.TaskFinished(record);
 		}
 
 		private static bool IsTerminal(string status)

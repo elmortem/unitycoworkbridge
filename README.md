@@ -436,6 +436,70 @@ Library/AgentBridge/
         └── shot.png.rects.json ← screen rects for the screenshot
 ```
 
+Telemetry is deliberately not in there: it lives in `<project>/Logs/` so that deleting `Library/` to
+fix something does not delete the record of what went wrong.
+
+## Telemetry
+
+Bridge writes down what happened to every task, so questions like "why did this wait four minutes",
+"who is holding the editor", "did the editor fall asleep again" and "which timeout fired" can be
+answered after the fact instead of guessed at.
+
+Two writers, two files, one line of JSON per event:
+
+```
+Logs/AgentBridge-editor-YYYYMMDD.jsonl   ← queue, lease, timeouts, play sessions, tick gaps
+Logs/AgentBridge-client-YYYYMMDD.jsonl   ← what the agent actually waited for, and its exit code
+```
+
+Both processes run on the same machine and the same clock, so the two halves of a task join on its
+id. Every line starts with the same envelope — `T` (unix ms UTC), `W` (`editor` or `client`), `E`
+(event name), `S` (agent session, empty if none), `Id` (task id, empty if the event is not about a
+task) — followed by the fields of that event.
+
+| Writer | `E` | Fields |
+|---|---|---|
+| editor | `bridge_start` | `Package`, `Unity`, `Wake`, `Interaction`, `Pid` |
+| editor | `tick_gap` | `GapMs`, `HasWork`, `Focused` — the editor missed a tick for ≥ 2 s |
+| editor | `task_start` | `Kind`, `WaitedMs`, `QueueDepth`, `Rotated`, `Note` |
+| editor | `task_finish` | `Kind`, `Status`, `TotalMs`, `Cached`, `Waiting`, `OldestWaitS` |
+| editor | `lease_grant` | `Reason` (`first`/`rotation`), `Prev` |
+| editor | `lease_release` | `Reason` (`idle_timeout`/`release_cmd`), `HeldMs` |
+| editor | `play_open` | `RequestedS` |
+| editor | `play_close` | `Reason`, `ActualMs` |
+| editor | `watchdog` | `What` (`task_timeout`/`compile_no_reload`/`play_enter`), `Kind`, `LimitS` |
+| client | `cli_submit` | `Cmd`, `Note` |
+| client | `cli_wake` | `Action` (`post`/`focus`), `AgeMs` |
+| client | `cli_exit` | `Cmd`, `Code`, `Status`, `QueuedMs`, `RunningMs`, `Posts`, `Focuses` |
+
+There is no aggregate command on purpose — a fixed report would hide exactly the unexpected thing
+the log exists to reveal. Read the raw JSONL:
+
+```bash
+cd <project>/Logs
+
+grep '"tick_gap"' AgentBridge-editor-*.jsonl      # did the editor fall asleep, and when
+grep '"watchdog"' AgentBridge-editor-*.jsonl      # every timeout that fired
+grep '"cli_exit"'  AgentBridge-client-*.jsonl     # how each wait ended for the agent
+
+# the longest queue waits
+cat AgentBridge-editor-*.jsonl | grep '"task_start"' | python3 -c "
+import sys, json
+rows = [json.loads(line) for line in sys.stdin]
+for event in sorted(rows, key=lambda r: -r['WaitedMs'])[:20]:
+    print(event['WaitedMs'], event['Kind'], event['S'], event['Note'])
+"
+```
+
+Two settings in `ProjectSettings/AgentBridge.json`:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `TelemetryEnabled` | `true` | Turns both writers off. The editor reads it per event; the client reads `TelemetryEnabled` from `status.json`, so it follows after a domain reload. |
+| `TelemetryKeepDays` | `14` | Files older than this are deleted on the first event of a new day. |
+
+Telemetry never fails a task: a write that cannot happen is dropped silently.
+
 ## Limitations
 
 - Works in Unity Editor. Play Mode is reachable only through an owned play session (`agentbridge play`), and only `csharp` and `sceneshot` run inside one; `tests --mode PlayMode` enters Play Mode on its own and is unaffected. See [Play Mode](#play-mode).

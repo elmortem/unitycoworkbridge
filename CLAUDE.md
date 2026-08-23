@@ -48,6 +48,8 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
 - `ProjectLocator.cs`, `BridgePaths.cs` — поиск проекта и раскладка `Library/AgentBridge/`
 - Пробуждение уснувшего редактора: `WakePolicy.cs` (чистое решение, точка тестирования),
   `WakeAction.cs`, `EditorWakeAttempts.cs`, `EditorWaker.cs` (`WM_NULL`, фокус-тычок как крайняя мера)
+- `TelemetryLog.cs` — клиентская половина телеметрии в `Logs/AgentBridge-client-*.jsonl`;
+  включённость берётся из `status.json`, а не из настроек проекта
 
 ### Пакет (`AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/`)
 
@@ -64,6 +66,8 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
 - Тик и пробуждение: `EditorTickPump.cs` (единственный владелец будильника, `ShouldSignal`),
   `AgentEditorWakeTimer.cs` (потоковый `SetTimer` без hwnd), `InteractionModeProbe.cs`
 - Протокол: `BridgePaths.cs`, `BridgeStatusWriter.cs`, `TaskJournal.cs`, `TaskRecord.cs`
+- Телеметрия: `TelemetryLog.cs` (запись JSONL в `Logs/`, ротация по суткам), `TelemetryJson.cs`
+  (конверт строки и экранирование), `TelemetryField.cs`
 - `Roslyn~/` — вендоренный Roslyn (тильда прячет папку от импорта Unity), обновляется
   `scripts/fetch-roslyn.ps1`; лицензии в `Roslyn~/THIRD-PARTY-NOTICES.md`
 - `UNITYAGENT.md` — описание API пакета для агента в чужом проекте

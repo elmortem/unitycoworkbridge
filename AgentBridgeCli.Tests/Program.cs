@@ -16,6 +16,7 @@ try
 	RunSessionOptionTests();
 	RunContentionFormattingTests();
 	RunWakePolicyTests();
+	RunTelemetryTests(root);
 	Console.WriteLine("AgentBridgeCli.Tests: PASS");
 	return 0;
 }
@@ -263,6 +264,34 @@ static void RunWakePolicyTests()
 	Expect(
 		WakePolicy.Decide(9000, false, WakePolicy.MaxPostAttempts, WakePolicy.MaxFocusAttempts, 100d) == WakeAction.None,
 		"exhausted attempts must stop poking");
+}
+
+static void RunTelemetryTests(string temporaryRoot)
+{
+	var project = Path.Combine(temporaryRoot, "TelemetryProject");
+	CreateProject(project);
+
+	var disabled = new TelemetryLog(project, false);
+	disabled.Write("cli_submit", "s1", "t1", new Dictionary<string, object?> { ["Cmd"] = "csharp" });
+	Expect(!Directory.Exists(Path.Combine(project, "Logs")), "disabled telemetry must not create the folder");
+
+	var enabled = new TelemetryLog(project, true);
+	enabled.Write("cli_submit", "s1", "t1", new Dictionary<string, object?> { ["Cmd"] = "csharp", ["Note"] = "тест \"кавычки\"" });
+	enabled.Write("cli_exit", "s1", "t1", new Dictionary<string, object?> { ["Code"] = 0 });
+
+	var file = Directory.GetFiles(Path.Combine(project, "Logs"), "AgentBridge-client-*.jsonl").Single();
+	var lines = File.ReadAllLines(file);
+	Expect(lines.Length == 2, "each event must be one line");
+
+	using var document = JsonDocument.Parse(lines[0]);
+	Expect(document.RootElement.GetProperty("E").GetString() == "cli_submit", "event name must round-trip");
+	Expect(document.RootElement.GetProperty("W").GetString() == "client", "writer must be marked");
+	Expect(document.RootElement.GetProperty("Note").GetString()!.Contains('"'), "quotes must survive escaping");
+
+	var truncating = new TelemetryLog(project, true);
+	truncating.Write("cli_submit", "s2", "t2", new Dictionary<string, object?> { ["Note"] = new string('x', 500) });
+	using var longNote = JsonDocument.Parse(File.ReadAllLines(file)[2]);
+	Expect(longNote.RootElement.GetProperty("Note").GetString()!.Length == 200, "long text must be truncated");
 }
 
 static void CreateProject(string path)

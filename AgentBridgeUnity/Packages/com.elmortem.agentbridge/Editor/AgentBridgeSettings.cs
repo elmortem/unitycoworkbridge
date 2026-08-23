@@ -21,5 +21,7 @@ namespace AgentBridge
 		public int PlaySessionDefaultSeconds = 30;
 		public int PlaySessionMaxSeconds = 600;
 		public int AgentPlayGraceSeconds = 5;
+		public bool TelemetryEnabled = true;
+		public int TelemetryKeepDays = 14;
 	}
 }

@@ -113,6 +113,7 @@ namespace AgentBridge
 			if (holderChanged)
 			{
 				state.HolderAgentSessionId = task.EffectiveSessionId;
+				state.HolderSinceUtc = DateTime.UtcNow.ToString("o");
 				state.ContentionStartedUtc = "";
 				state.HolderContextRestored = FindContext(task.EffectiveSessionId) == null;
 			}
@@ -176,6 +177,19 @@ namespace AgentBridge
 
 			ClearHolder(state);
 			SchedulerStateStore.Save();
+		}
+
+		// How long the current holder has owned the lease. Reads the state and mutates nothing,
+		// so telemetry can ask for it at any point without disturbing the scheduler.
+		public static long HeldMs(DateTime nowUtc)
+		{
+			DateTime since;
+			if (!TryParseUtc(SchedulerStateStore.State.HolderSinceUtc, out since))
+			{
+				return 0;
+			}
+
+			return (long)(nowUtc - since).TotalMilliseconds;
 		}
 
 		public static ContentionInfo BuildContention(List<PendingTaskInfo> pending, DateTime nowUtc)
@@ -326,6 +340,7 @@ namespace AgentBridge
 		private static void ClearHolder(SchedulerState state)
 		{
 			state.HolderAgentSessionId = "";
+			state.HolderSinceUtc = "";
 			state.ContentionStartedUtc = "";
 			state.HolderContextRestored = true;
 		}

@@ -59,8 +59,29 @@ namespace AgentBridge
 			Current.WakeTimerInstalled = AgentEditorWakeTimer.Installed;
 			Current.WakeTimerKind = AgentEditorWakeTimer.Kind ?? "none";
 			Current.InteractionMode = InteractionModeProbe.Read();
+			Current.TelemetryEnabled = AgentBridgeSettingsStore.GetTelemetryEnabled();
 
 			Write();
+		}
+
+		// The wake timer installs itself on the first editor update, so this is called from
+		// EditorTickPump rather than from WriteOnLoad: emitted at load, Wake could only ever
+		// say "none" and the field would carry no information at all.
+		public static void WriteStartTelemetry()
+		{
+			if (Suspended)
+			{
+				return;
+			}
+
+			TelemetryLog.Write("bridge_start", "", "", new[]
+			{
+				TelemetryField.Text("Package", Current.PackageVersion),
+				TelemetryField.Text("Unity", Current.UnityVersion),
+				TelemetryField.Text("Wake", Current.WakeTimerKind ?? "none"),
+				TelemetryField.Text("Interaction", Current.InteractionMode ?? "unknown"),
+				TelemetryField.Number("Pid", Current.EditorPid)
+			});
 		}
 
 		public static void Write()

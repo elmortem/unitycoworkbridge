@@ -25,14 +25,16 @@ internal sealed class BridgeClient
 	private readonly string _projectRoot;
 	private readonly string? _session;
 	private readonly string? _note;
+	private readonly TelemetryLog _telemetry;
 
-	public BridgeClient(string projectRoot, string format, string? session, string? note)
+	public BridgeClient(string projectRoot, string format, string? session, string? note, TelemetryLog telemetry)
 	{
 		_paths = new BridgePaths(projectRoot);
 		_format = format;
 		_projectRoot = projectRoot;
 		_session = session;
 		_note = note;
+		_telemetry = telemetry;
 	}
 
 	public async Task<int> SubmitPayloadAsync(string kind, string sourcePath, int waitSeconds)
@@ -71,14 +73,21 @@ internal sealed class BridgeClient
 		{
 			return replay.HasValue
 				? replay.Value
-				: await WaitForTaskAsync(taskId, waitSeconds);
+				: await WaitForTaskAsync(taskId, waitSeconds, kind);
 		}
 
 		Directory.CreateDirectory(_paths.Inbox);
 		Directory.CreateDirectory(_paths.Journal);
 		AtomicWrite(Path.Combine(_paths.Inbox, payloadName), payloadBytes);
 		AtomicWrite(Path.Combine(_paths.Inbox, taskId + ".task.json"), requestBytes);
-		return await WaitForTaskAsync(taskId, waitSeconds);
+
+		_telemetry.Write("cli_submit", _session, request.Id, new Dictionary<string, object?>
+		{
+			["Cmd"] = request.Kind,
+			["Note"] = _note ?? ""
+		});
+
+		return await WaitForTaskAsync(taskId, waitSeconds, kind);
 	}
 
 	public async Task<int> SubmitCompileAsync(int waitSeconds, bool fresh)
@@ -154,14 +163,8 @@ internal sealed class BridgeClient
 		return await SubmitRequestAsync(request, waitSeconds);
 	}
 
-	public async Task<int> WaitForTaskAsync(string taskId, int waitSeconds)
+	public async Task<int> WaitForTaskAsync(string taskId, int waitSeconds, string kind)
 	{
-		if (!IsSafeTaskId(taskId))
-		{
-			return WriteError("invalid_task_id", "Task id contains invalid path characters.");
-		}
-
-		var journalFile = Path.Combine(_paths.Journal, taskId + ".json");
 		DateTime? runningSince = null;
 		var queuedSince = DateTime.UtcNow;
 		var nextProgress = TimeSpan.Zero;
@@ -170,13 +173,46 @@ internal sealed class BridgeClient
 		var nextHealthPoll = DateTime.MinValue;
 		BridgeHealth? lastHealth = null;
 
+		// Every exit from this method is an answer to the agent, and the whole point of the
+		// client half of the telemetry is that no answer leaves without being recorded.
+		int Complete(int code, string status)
+		{
+			var finishedUtc = DateTime.UtcNow;
+			var runningMs = runningSince == null
+				? 0
+				: (long)(finishedUtc - runningSince.Value).TotalMilliseconds;
+			var queuedMs = (long)((runningSince ?? finishedUtc) - queuedSince).TotalMilliseconds;
+
+			_telemetry.Write("cli_exit", _session, taskId, new Dictionary<string, object?>
+			{
+				["Cmd"] = kind,
+				["Code"] = code,
+				["Status"] = status,
+				["QueuedMs"] = queuedMs,
+				["RunningMs"] = runningMs,
+				["Posts"] = attempts.PostAttempts,
+				["Focuses"] = attempts.FocusAttempts
+			});
+
+			return code;
+		}
+
+		if (!IsSafeTaskId(taskId))
+		{
+			return Complete(
+				WriteError("invalid_task_id", "Task id contains invalid path characters."),
+				"invalid_task_id");
+		}
+
+		var journalFile = Path.Combine(_paths.Journal, taskId + ".json");
+
 		while (true)
 		{
 			var hasRecord = TryReadFile(journalFile, out var json);
 			if (hasRecord && TryGetTerminalStatus(json, out _))
 			{
 				WriteResult(json);
-				return ClassifyResult(json);
+				return Complete(ClassifyResult(json), StatusOf(json));
 			}
 
 			var now = DateTime.UtcNow;
@@ -192,7 +228,9 @@ internal sealed class BridgeClient
 
 				if (!pulse.BridgeReady && !asleep)
 				{
-					return WriteError("bridge_unavailable", "Bridge became unavailable while the task was waiting: " + pulse.Code);
+					return Complete(
+						WriteError("bridge_unavailable", "Bridge became unavailable while the task was waiting: " + pulse.Code),
+						"bridge_unavailable");
 				}
 
 				if (asleep)
@@ -212,6 +250,7 @@ internal sealed class BridgeClient
 						EditorWaker.TryPost(pid);
 						Console.Error.WriteLine("[agentbridge] editor asleep for "
 							+ (pulse.HeartbeatAgeMs ?? 0) / 1000 + "s, waking (post #" + attempts.PostAttempts + ")");
+						WriteWakeEvent(taskId, "post", pulse.HeartbeatAgeMs);
 					}
 					else if (action == WakeAction.Focus)
 					{
@@ -219,13 +258,16 @@ internal sealed class BridgeClient
 						attempts.LastAttemptUtc = now;
 						EditorWaker.TryFocus(pid);
 						Console.Error.WriteLine("[agentbridge] editor still asleep, focus poke");
+						WriteWakeEvent(taskId, "focus", pulse.HeartbeatAgeMs);
 					}
 					else if (attempts.Exhausted)
 					{
-						return WriteError(
-							"bridge_asleep",
-							"The Unity editor stopped ticking and did not wake up. Focus the editor window, "
-							+ "and set Preferences > General > Interaction Mode to No Throttling.");
+						return Complete(
+							WriteError(
+								"bridge_asleep",
+								"The Unity editor stopped ticking and did not wake up. Focus the editor window, "
+								+ "and set Preferences > General > Interaction Mode to No Throttling."),
+							"bridge_asleep");
 					}
 				}
 				else
@@ -244,7 +286,7 @@ internal sealed class BridgeClient
 				if (running.TotalSeconds >= waitSeconds)
 				{
 					WriteResult(json);
-					return 2;
+					return Complete(2, "running");
 				}
 
 				if (running >= nextProgress)
@@ -261,7 +303,9 @@ internal sealed class BridgeClient
 			// wait for: an unknown id must not consume the whole queue budget.
 			if (!File.Exists(Path.Combine(_paths.Inbox, taskId + ".task.json")))
 			{
-				return WriteError("task_not_found", "No queued or recorded task with id " + taskId + ".");
+				return Complete(
+					WriteError("task_not_found", "No queued or recorded task with id " + taskId + "."),
+					"task_not_found");
 			}
 
 			var queued = now - queuedSince;
@@ -274,7 +318,7 @@ internal sealed class BridgeClient
 						["Status"] = "queued"
 					},
 					JsonSupport.Task));
-				return 2;
+				return Complete(2, "queued");
 			}
 
 			if (queued >= nextQueueReport && lastHealth != null)
@@ -284,6 +328,30 @@ internal sealed class BridgeClient
 			}
 
 			await Task.Delay(250);
+		}
+	}
+
+	private void WriteWakeEvent(string taskId, string action, long? heartbeatAgeMs)
+	{
+		_telemetry.Write("cli_wake", _session, taskId, new Dictionary<string, object?>
+		{
+			["Action"] = action,
+			["AgeMs"] = heartbeatAgeMs ?? 0
+		});
+	}
+
+	private static string StatusOf(string json)
+	{
+		try
+		{
+			using var document = JsonDocument.Parse(json);
+			return document.RootElement.TryGetProperty("Status", out var element)
+				? element.GetString() ?? ""
+				: "";
+		}
+		catch
+		{
+			return "";
 		}
 	}
 
@@ -350,7 +418,14 @@ internal sealed class BridgeClient
 		Directory.CreateDirectory(_paths.Journal);
 		var requestBytes = JsonSerializer.SerializeToUtf8Bytes(request, JsonSupport.Task);
 		AtomicWrite(Path.Combine(_paths.Inbox, request.Id + ".task.json"), requestBytes);
-		return await WaitForTaskAsync(request.Id, waitSeconds);
+
+		_telemetry.Write("cli_submit", _session, request.Id, new Dictionary<string, object?>
+		{
+			["Cmd"] = request.Kind,
+			["Note"] = _note ?? ""
+		});
+
+		return await WaitForTaskAsync(request.Id, waitSeconds, request.Kind);
 	}
 
 	private bool TryResolveExisting(string taskId, string kind, string expectedHash, out int? result)

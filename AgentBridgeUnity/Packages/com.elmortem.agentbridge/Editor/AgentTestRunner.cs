@@ -263,6 +263,7 @@ namespace AgentBridge
 
 			record.FinishedAtUtc = System.DateTime.UtcNow.ToString("o");
 			TaskJournal.Write(record);
+			TelemetryLog.TaskFinished(record);
 
 			TestRunDump dump;
 			bool promoted = TestRunDumpStore.TryTakePending(testMode, out dump)

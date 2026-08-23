@@ -75,6 +75,13 @@ namespace AgentBridge
 				return;
 			}
 
+			TelemetryLog.Write("watchdog", state.OwnerAgentSessionId, state.TaskId, new[]
+			{
+				TelemetryField.Text("What", "play_enter"),
+				TelemetryField.Text("Kind", "play"),
+				TelemetryField.Number("LimitS", (long)EnterTimeoutSeconds)
+			});
+
 			// Unity silently refuses to enter play mode while the project does not compile,
 			// so the request has to time out instead of leaving the task running forever.
 			FinalizeRecord(state.TaskId, "runtime_error", null, new List<string> { "failed to enter play mode" });
@@ -92,6 +99,7 @@ namespace AgentBridge
 				}
 
 				FinalizeRecord(state.PendingStopTaskId, "success", "stopped:external", null);
+				WritePlayClose(state);
 				PlaySessionStore.Delete();
 				WriteStatus(null);
 				return;
@@ -150,6 +158,7 @@ namespace AgentBridge
 
 			string reason = string.IsNullOrEmpty(state.StopReason) ? "external" : state.StopReason;
 			FinalizeRecord(state.PendingStopTaskId, "success", "stopped:" + reason, logs);
+			WritePlayClose(state);
 			PlaySessionStore.Delete();
 			WriteStatus(null);
 			Debug.Log("[AgentBridge] play session stopped: " + reason);
@@ -212,6 +221,12 @@ namespace AgentBridge
 			};
 
 			PlaySessionStore.Write(state);
+
+			TelemetryLog.Write("play_open", state.OwnerAgentSessionId, request.Id, new[]
+			{
+				TelemetryField.Number("RequestedS", seconds)
+			});
+
 			WriteStatus(state);
 			FocusGuard.BeginPlayEntryGuard();
 			EditorApplication.EnterPlaymode();
@@ -300,7 +315,28 @@ namespace AgentBridge
 			record.ReturnValue = returnValue;
 			record.FinishedAtUtc = nowUtc.ToString("o");
 			TaskJournal.Write(record);
+			TelemetryLog.TaskFinished(record);
 			AgentSessionScheduler.OnTaskFinished(record.AgentSessionId, nowUtc);
+		}
+
+		private static void WritePlayClose(PlaySessionState state)
+		{
+			TelemetryLog.Write("play_close", state.OwnerAgentSessionId, state.TaskId, new[]
+			{
+				TelemetryField.Text("Reason", string.IsNullOrEmpty(state.StopReason) ? "external" : state.StopReason),
+				TelemetryField.Number("ActualMs", ElapsedMs(state))
+			});
+		}
+
+		private static long ElapsedMs(PlaySessionState state)
+		{
+			DateTime startedAtUtc;
+			if (!TryParseUtc(state.StartedAtUtc, out startedAtUtc))
+			{
+				return 0;
+			}
+
+			return (long)(DateTime.UtcNow - startedAtUtc).TotalMilliseconds;
 		}
 
 		private static void WriteStatus(PlaySessionState state)

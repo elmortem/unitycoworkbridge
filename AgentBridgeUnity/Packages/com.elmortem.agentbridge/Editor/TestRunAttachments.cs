@@ -25,6 +25,7 @@ namespace AgentBridge
 				record.FinishedAtUtc = DateTime.UtcNow.ToString("o");
 				record.Logs.Add("served from coalesced run " + sourceTaskId);
 				TaskJournal.Write(record);
+				TelemetryLog.TaskFinished(record);
 			}
 		}
 

@@ -60,7 +60,10 @@ internal static class AgentBridgeApplication
 			return 3;
 		}
 
-		var client = new BridgeClient(projectRoot, options.Format, options.Session, options.Note);
+		// Whether the bridge keeps telemetry is the editor's setting, and the status file is the
+		// only place the client can read it from.
+		var telemetry = new TelemetryLog(projectRoot, health.Bridge?.TelemetryEnabled ?? false);
+		var client = new BridgeClient(projectRoot, options.Format, options.Session, options.Note, telemetry);
 		switch (command)
 		{
 			case "csharp":
@@ -146,7 +149,7 @@ internal static class AgentBridgeApplication
 					return WriteError("bad_usage", "usage: agentbridge wait <TaskId> [--project <path>] [--wait <seconds>] [--format json|human]", options.Format);
 				}
 
-				return await client.WaitForTaskAsync(commandArguments[0], options.WaitSeconds);
+				return await client.WaitForTaskAsync(commandArguments[0], options.WaitSeconds, "wait");
 
 			default:
 				return WriteError("bad_usage", "Unknown command: " + command, options.Format);

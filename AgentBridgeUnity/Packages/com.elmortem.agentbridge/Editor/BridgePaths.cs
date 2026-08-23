@@ -1,3 +1,5 @@
+using System;
+using System.Globalization;
 using System.IO;
 using UnityEngine;
 
@@ -68,6 +70,20 @@ namespace AgentBridge
 		public static string CliRoot
 		{
 			get { return EnsureDirectory(Path.Combine(WorkingRoot, "cli")); }
+		}
+
+		// Telemetry outlives Library/: a wiped cache must not take the record of why the
+		// bridge behaved the way it did with it.
+		public static string LogsRoot
+		{
+			get { return EnsureDirectory(Path.Combine(ProjectRoot, "Logs")); }
+		}
+
+		public static string TelemetryFile(string writer, DateTime utc)
+		{
+			return Path.Combine(
+				LogsRoot,
+				"AgentBridge-" + writer + "-" + utc.ToString("yyyyMMdd", CultureInfo.InvariantCulture) + ".jsonl");
 		}
 
 		public static string LegacyInbox

@@ -49,6 +49,7 @@ namespace AgentBridge
 					TaskRecord record = BuildServedRecord(task, status, sourceTaskId);
 					record.Tests = result;
 					TaskJournal.Write(record);
+					TelemetryLog.TaskFinished(record);
 				}
 				else
 				{
@@ -67,6 +68,7 @@ namespace AgentBridge
 					record.Diagnostics = entry.Diagnostics;
 					record.ForeignErrors = entry.Diagnostics.Count > 0;
 					TaskJournal.Write(record);
+					TelemetryLog.TaskFinished(record);
 				}
 
 				pending.RemoveAt(i);

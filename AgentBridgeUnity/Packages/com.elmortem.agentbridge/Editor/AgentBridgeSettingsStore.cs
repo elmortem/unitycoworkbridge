@@ -223,6 +223,23 @@ namespace AgentBridge
 			Save(settings);
 		}
 
+		public static bool GetTelemetryEnabled()
+		{
+			AgentBridgeSettings settings = Load();
+			return settings.TelemetryEnabled;
+		}
+
+		public static int GetTelemetryKeepDays()
+		{
+			AgentBridgeSettings settings = Load();
+			if (settings.TelemetryKeepDays <= 0)
+			{
+				return 14;
+			}
+
+			return settings.TelemetryKeepDays;
+		}
+
 		public static bool GetDiscardDirtyUntitledScenes()
 		{
 			AgentBridgeSettings settings = Load();
