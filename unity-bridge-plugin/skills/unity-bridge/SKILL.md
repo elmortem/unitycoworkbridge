@@ -235,9 +235,17 @@ agentbridge stopplay --session AB_20260813_1500_a1f
 - Сессия завершается сама по дедлайну; отдельный `stopplay` для этого не нужен, но и не вреден.
 - Пока идут тесты (`tests --mode PlayMode`), `play` и `stopplay` отклоняются с `tests are running`.
 - Если человек нажал Stop в редакторе, сессия закрывается сама, а в логах появляется `play session ended externally`.
-- Если агентский таск всё же прорвался в плей мод в обход guardrail, мост выходит из него автоматически и дописывает в журнальную запись виновника строку `this task entered play mode; the bridge exited it automatically`. Человеческий плей мод мост не трогает никогда.
+- Если агентский таск всё же прорвался в плей мод в обход guardrail, мост выходит из него автоматически и дописывает в журнальную запись виновника строку `this task entered play mode; the bridge exited it automatically`. Сам редактор человеческий плей мод не гасит никогда.
 
-`agentbridge status` показывает состояние: `IsPlaying`, `PlaySessionAgentId`, `PlaySessionDeadlineUtc` (в `--format human` — строка `Playing:`).
+### Ручной плеймод пользователя тебе не помеха
+
+Пока редактор играет без агентской сессии, координатор берёт из очереди только `stopplay`, и любая твоя задача просто ждала бы. CLI решает это сам: подкладывает свой `stopplay`, дожидается его и продолжает ждать твою задачу — до трёх раз за одно ожидание. Никаких особых действий от тебя не требуется, отдельный `stopplay` подавать не нужно.
+
+Как это выглядит: в stderr появляется `editor is in play mode without an agent session; stopping it (stopplay #1)`, дальше задача выполняется обычным порядком и код выхода как всегда. Чужую агентскую play-сессию захват не трогает — для неё действуют правила выше.
+
+Диагностика: `doctor` печатает `! editor_playing_manual`, строка очереди — `..., editor playing (manual), run 'agentbridge stopplay' to take over`, а если бюджет очереди всё же вышел, результат `Status: queued` несёт `Reason: editor_playing_manual`.
+
+`agentbridge status` показывает состояние: `IsPlaying`, `PlaySessionAgentId`, `PlaySessionDeadlineUtc` (в `--format human` — строка `Playing:`, для ничейного плеймода `yes (manual)`).
 
 ### `wait <TaskId>`
 

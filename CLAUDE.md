@@ -48,6 +48,7 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
 - `ProjectLocator.cs`, `BridgePaths.cs` — поиск проекта и раскладка `Library/AgentBridge/`
 - Пробуждение уснувшего редактора: `WakePolicy.cs` (чистое решение, точка тестирования),
   `WakeAction.cs`, `EditorWakeAttempts.cs`, `EditorWaker.cs` (`WM_NULL`, фокус-тычок как крайняя мера)
+- `ManualPlayPolicy.cs` — решение о захвате ничейного плеймода: CLI сам гасит его перед задачей агента
 - `TelemetryLog.cs` — клиентская половина телеметрии в `Logs/AgentBridge-client-*.jsonl`;
   включённость берётся из `status.json`, а не из настроек проекта
 

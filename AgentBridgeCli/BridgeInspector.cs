@@ -121,6 +121,13 @@ internal static class BridgeInspector
 			{
 				health.Warnings.Add("interaction_throttled");
 			}
+
+			// A manual play mode is a warning and not a problem: the bridge is alive and stopplay
+			// goes through, so the client can take it over instead of declaring the bridge dead.
+			if (ManualPlayPolicy.IsManualPlaying(health.Bridge))
+			{
+				health.Warnings.Add("editor_playing_manual");
+			}
 		}
 
 		health.BridgeReady = health.PackageDeclared

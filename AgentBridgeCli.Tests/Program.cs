@@ -16,6 +16,7 @@ try
 	RunSessionOptionTests();
 	RunContentionFormattingTests();
 	RunWakePolicyTests();
+	RunManualPlayPolicyTests();
 	RunTelemetryTests(root);
 	Console.WriteLine("AgentBridgeCli.Tests: PASS");
 	return 0;
@@ -126,7 +127,48 @@ static void RunHealthTests(string temporaryRoot)
 	var health = BridgeInspector.Inspect(project);
 	Expect(health.BridgeReady, "fresh compatible status must be ready");
 	Expect(health.CSharpReady, "Roslyn-ready bridge must be csharp-ready");
+	Expect(!health.Warnings.Contains("editor_playing_manual"), "an idle editor must not warn about manual play");
 
+	var manualPlay = new
+	{
+		status.ProtocolVersion,
+		status.PackageVersion,
+		status.ProjectPath,
+		status.UnityVersion,
+		status.EditorPid,
+		status.SessionId,
+		status.Enabled,
+		status.RoslynSource,
+		status.RoslynReady,
+		status.Capabilities,
+		IsPlaying = true,
+		PlaySessionAgentId = ""
+	};
+	File.WriteAllText(Path.Combine(bridgeRoot, "status.json"), JsonSerializer.Serialize(manualPlay));
+	health = BridgeInspector.Inspect(project);
+	Expect(health.BridgeReady, "manual play must not make the bridge unavailable");
+	Expect(health.Warnings.Contains("editor_playing_manual"), "an unowned play mode must be warned about");
+
+	var ownedPlay = new
+	{
+		status.ProtocolVersion,
+		status.PackageVersion,
+		status.ProjectPath,
+		status.UnityVersion,
+		status.EditorPid,
+		status.SessionId,
+		status.Enabled,
+		status.RoslynSource,
+		status.RoslynReady,
+		status.Capabilities,
+		IsPlaying = true,
+		PlaySessionAgentId = "agent-a"
+	};
+	File.WriteAllText(Path.Combine(bridgeRoot, "status.json"), JsonSerializer.Serialize(ownedPlay));
+	health = BridgeInspector.Inspect(project);
+	Expect(!health.Warnings.Contains("editor_playing_manual"), "an owned play session must not be reported as manual");
+
+	File.WriteAllText(Path.Combine(bridgeRoot, "status.json"), JsonSerializer.Serialize(status));
 	File.WriteAllText(
 		Path.Combine(bridgeRoot, "heartbeat"),
 		(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - 60000).ToString());
@@ -264,6 +306,26 @@ static void RunWakePolicyTests()
 	Expect(
 		WakePolicy.Decide(9000, false, WakePolicy.MaxPostAttempts, WakePolicy.MaxFocusAttempts, 100d) == WakeAction.None,
 		"exhausted attempts must stop poking");
+}
+
+static void RunManualPlayPolicyTests()
+{
+	static BridgeHealth Health(bool ready, bool playing, string? owner)
+	{
+		return new BridgeHealth
+		{
+			BridgeReady = ready,
+			Bridge = new BridgeStatus { IsPlaying = playing, PlaySessionAgentId = owner }
+		};
+	}
+
+	Expect(ManualPlayPolicy.ShouldStop(Health(true, true, null), "csharp", 0), "manual play must be stopped for a queued task");
+	Expect(!ManualPlayPolicy.ShouldStop(Health(true, true, "agent-a"), "csharp", 0), "an owned play session must not be touched");
+	Expect(!ManualPlayPolicy.ShouldStop(Health(true, true, null), "stopplay", 0), "stopplay must not stop play for itself");
+	Expect(!ManualPlayPolicy.ShouldStop(Health(true, true, null), "csharp", ManualPlayPolicy.MaxStops), "exhausted attempts must fall back to waiting");
+	Expect(!ManualPlayPolicy.ShouldStop(Health(false, true, null), "csharp", 0), "an unready bridge must not receive stopplay");
+	Expect(!ManualPlayPolicy.ShouldStop(null, "csharp", 0), "missing health must not trigger a stop");
+	Expect(!ManualPlayPolicy.ShouldStop(Health(true, false, null), "csharp", 0), "an idle editor must not be stopped");
 }
 
 static void RunTelemetryTests(string temporaryRoot)

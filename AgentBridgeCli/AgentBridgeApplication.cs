@@ -259,6 +259,10 @@ internal static class AgentBridgeApplication
 					playing += " (session " + health.Bridge.PlaySessionAgentId
 						+ ", until " + (health.Bridge.PlaySessionDeadlineUtc ?? "unknown") + ")";
 				}
+				else if (health.Bridge.IsPlaying)
+				{
+					playing += " (manual)";
+				}
 
 				Console.Out.WriteLine("Playing: " + playing);
 			}

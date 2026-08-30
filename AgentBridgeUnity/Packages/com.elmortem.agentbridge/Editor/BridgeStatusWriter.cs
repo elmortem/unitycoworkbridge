@@ -46,9 +46,15 @@ namespace AgentBridge
 			Current.Enabled = AgentBridgeSettingsStore.IsEnabled();
 			Current.ActiveTaskId = null;
 			Current.HolderAgentSessionId = null;
+			// The play session outlives the domain reload that entering play mode triggers, so
+			// reading it back here keeps the agent's own play mode from looking manual to the CLI
+			// for the whole window between the reload and the next PlaySessionManager write.
+			PlaySessionState playSession = PlaySessionStore.Read();
 			Current.IsPlaying = EditorApplication.isPlayingOrWillChangePlaymode;
-			Current.PlaySessionAgentId = null;
-			Current.PlaySessionDeadlineUtc = null;
+			Current.PlaySessionAgentId = playSession != null && !string.IsNullOrEmpty(playSession.OwnerAgentSessionId)
+				? playSession.OwnerAgentSessionId
+				: null;
+			Current.PlaySessionDeadlineUtc = playSession != null ? playSession.DeadlineUtc : null;
 			Current.QueuedTasks = new QueuedTaskStatus[0];
 			Current.Capabilities = new[] { "csharp", "ui", "sceneshot", "compile", "tests", "release", "play", "stopplay" };
 
@@ -116,6 +122,22 @@ namespace AgentBridge
 		private static void OnUpdate()
 		{
 			Beat();
+			SyncPlayingFlag();
+		}
+
+		// With Enter Play Mode Options disabling the domain reload, a manual play toggle never
+		// reaches WriteOnLoad, and status.json keeps claiming the editor is idle. Only a changed
+		// flag writes, so this never races the transient writes PlaySessionManager makes.
+		private static void SyncPlayingFlag()
+		{
+			bool playing = EditorApplication.isPlayingOrWillChangePlaymode;
+			if (Current.IsPlaying == playing)
+			{
+				return;
+			}
+
+			Current.IsPlaying = playing;
+			Write();
 		}
 
 		private static void WriteAtomic(string path, string content)

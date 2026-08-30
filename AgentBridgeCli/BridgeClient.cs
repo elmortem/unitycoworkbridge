@@ -20,6 +20,9 @@ internal sealed class BridgeClient
 
 	private const int QueueWaitCapSeconds = 3600;
 
+	// Leaving play mode drags a domain reload behind it, and on a heavy project that is slow.
+	private const int StopManualPlaySeconds = 120;
+
 	private readonly BridgePaths _paths;
 	private readonly string _format;
 	private readonly string _projectRoot;
@@ -171,6 +174,7 @@ internal sealed class BridgeClient
 		var nextQueueReport = TimeSpan.Zero;
 		var attempts = new EditorWakeAttempts();
 		var nextHealthPoll = DateTime.MinValue;
+		var manualStops = 0;
 		BridgeHealth? lastHealth = null;
 
 		// Every exit from this method is an answer to the agent, and the whole point of the
@@ -308,16 +312,34 @@ internal sealed class BridgeClient
 					"task_not_found");
 			}
 
+			// A play mode nobody owns outranks nothing: the coordinator only takes stopplay out of
+			// the queue while it runs, so the task would sit here until the cap. Clearing the last
+			// health forces a fresh status read before another takeover can be decided.
+			if (ManualPlayPolicy.ShouldStop(lastHealth, kind, manualStops))
+			{
+				manualStops++;
+				Console.Error.WriteLine("[agentbridge] " + taskId
+					+ " editor is in play mode without an agent session; stopping it (stopplay #" + manualStops + ")");
+				await StopManualPlayAsync(taskId);
+				lastHealth = null;
+				nextHealthPoll = DateTime.MinValue;
+				continue;
+			}
+
 			var queued = now - queuedSince;
 			if (queued.TotalSeconds >= QueueWaitCapSeconds)
 			{
-				WriteResult(JsonSerializer.Serialize(
-					new Dictionary<string, object?>
-					{
-						["Id"] = taskId,
-						["Status"] = "queued"
-					},
-					JsonSupport.Task));
+				var payload = new Dictionary<string, object?>
+				{
+					["Id"] = taskId,
+					["Status"] = "queued"
+				};
+				if (ManualPlayPolicy.IsManualPlaying(lastHealth?.Bridge))
+				{
+					payload["Reason"] = "editor_playing_manual";
+				}
+
+				WriteResult(JsonSerializer.Serialize(payload, JsonSupport.Task));
 				return Complete(2, "queued");
 			}
 
@@ -329,6 +351,51 @@ internal sealed class BridgeClient
 
 			await Task.Delay(250);
 		}
+	}
+
+	// The stopplay is an implementation detail of waiting for the original task, so it keeps its
+	// whole life on stderr: stdout carries exactly one result, and that result is the agent's task.
+	private async Task StopManualPlayAsync(string forTaskId)
+	{
+		var stopId = TaskIdGenerator.NewId();
+		var request = new TaskRequest
+		{
+			Id = stopId,
+			Kind = "stopplay",
+			AgentSessionId = _session ?? "",
+			Note = "auto-stop manual play for " + forTaskId
+		};
+		Directory.CreateDirectory(_paths.Inbox);
+		Directory.CreateDirectory(_paths.Journal);
+		AtomicWrite(
+			Path.Combine(_paths.Inbox, stopId + ".task.json"),
+			JsonSerializer.SerializeToUtf8Bytes(request, JsonSupport.Task));
+
+		var journalFile = Path.Combine(_paths.Journal, stopId + ".json");
+		var deadline = DateTime.UtcNow.AddSeconds(StopManualPlaySeconds);
+		var status = "timeout";
+		while (DateTime.UtcNow < deadline)
+		{
+			if (TryReadFile(journalFile, out var json) && TryGetTerminalStatus(json, out var terminal))
+			{
+				status = terminal;
+				break;
+			}
+
+			await Task.Delay(250);
+		}
+
+		if (status != "success")
+		{
+			Console.Error.WriteLine("[agentbridge] auto stopplay " + stopId + " ended as " + status
+				+ "; the task stays queued");
+		}
+
+		_telemetry.Write("cli_autostop", _session, stopId, new Dictionary<string, object?>
+		{
+			["For"] = forTaskId,
+			["Status"] = status
+		});
 	}
 
 	private void WriteWakeEvent(string taskId, string action, long? heartbeatAgeMs)
@@ -358,6 +425,9 @@ internal sealed class BridgeClient
 	private static string DescribeQueuePosition(BridgeHealth health, string taskId, int queuedSeconds)
 	{
 		var queue = health.Bridge?.QueuedTasks ?? Array.Empty<QueuedTaskStatus>();
+		var suffix = ManualPlayPolicy.IsManualPlaying(health.Bridge)
+			? ", editor playing (manual), run 'agentbridge stopplay' to take over"
+			: "";
 		foreach (var entry in queue)
 		{
 			if (!string.Equals(entry.Id, taskId, StringComparison.Ordinal))
@@ -368,10 +438,11 @@ internal sealed class BridgeClient
 			var holder = string.IsNullOrEmpty(health.Bridge?.HolderAgentSessionId)
 				? "none"
 				: health.Bridge!.HolderAgentSessionId;
-			return "queued " + queuedSeconds + "s, position " + entry.Position + "/" + queue.Length + ", holder " + holder;
+			return "queued " + queuedSeconds + "s, position " + entry.Position + "/" + queue.Length
+				+ ", holder " + holder + suffix;
 		}
 
-		return "queued " + queuedSeconds + "s";
+		return "queued " + queuedSeconds + "s" + suffix;
 	}
 
 	internal static int ClassifyResult(string json)
