@@ -65,7 +65,8 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
 - Сцены и плей мод: `SceneSafetyGuard.cs`, `SceneDirtyWatcher.cs`, `AgentSceneManager.cs`,
   `PlaySessionManager.cs`, `PlayModeSceneRecovery.cs`, `UnsanctionedPlayGuard.cs`, `FocusGuard.cs`
 - Тик и пробуждение: `EditorTickPump.cs` (единственный владелец будильника, `ShouldSignal`),
-  `AgentEditorWakeTimer.cs` (потоковый `SetTimer` без hwnd), `InteractionModeProbe.cs`
+  `AgentEditorWakeTimer.cs` (выбор backend, `SetTimer` как fallback), `BackgroundTickTimer.cs`
+  (независимый короткий вызов потокобезопасного `SignalTick`, остановка до reload), `InteractionModeProbe.cs`
 - Протокол: `BridgePaths.cs`, `BridgeStatusWriter.cs`, `TaskJournal.cs`, `TaskRecord.cs`
 - Телеметрия: `TelemetryLog.cs` (запись JSONL в `Logs/`, ротация по суткам), `TelemetryJson.cs`
   (конверт строки и экранирование), `TelemetryField.cs`

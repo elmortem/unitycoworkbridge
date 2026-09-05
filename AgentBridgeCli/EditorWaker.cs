@@ -67,15 +67,16 @@ internal static class EditorWaker
 		}
 
 		var previous = GetForegroundWindow();
-		SetForegroundWindow(window);
+		if (!SetForegroundWindow(window)) return false;
 		Thread.Sleep(FocusHoldMs);
+		bool focused = GetForegroundWindow() == window;
 
-		if (previous != IntPtr.Zero && previous != window)
+		if (focused && previous != IntPtr.Zero && previous != window)
 		{
 			SetForegroundWindow(previous);
 		}
 
-		return true;
+		return focused;
 	}
 
 	private static IntPtr ResolveMainWindow(int editorPid)

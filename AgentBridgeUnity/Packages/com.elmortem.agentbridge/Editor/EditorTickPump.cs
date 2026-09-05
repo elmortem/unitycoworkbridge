@@ -21,6 +21,7 @@ namespace AgentBridge
 
 		static EditorTickPump()
 		{
+			if (Application.isBatchMode) return;
 			Application.runInBackground = true;
 
 			MethodInfo method = typeof(EditorApplication).GetMethod("SignalTick", BindingFlags.NonPublic | BindingFlags.Static);
@@ -31,9 +32,17 @@ namespace AgentBridge
 			}
 			else
 			{
-				_signalTick = (Action)Delegate.CreateDelegate(typeof(Action), method);
-				BridgeStatusWriter.Current.SignalTickAvailable = true;
+				try
+				{
+					_signalTick = (Action)Delegate.CreateDelegate(typeof(Action), method);
+					BridgeStatusWriter.Current.SignalTickAvailable = true;
+				}
+				catch (Exception exception)
+				{
+					Debug.LogWarning("[AgentBridge] Cannot bind SignalTick: " + exception.Message);
+				}
 			}
+			AgentEditorWakeTimer.ConfigureSignal(_signalTick);
 
 			BridgeStatusWriter.Write();
 
@@ -47,11 +56,18 @@ namespace AgentBridge
 			EditorApplication.quitting += Unsubscribe;
 
 			_installed = true;
+			// Arm before the first update: that update itself may need waking.
+			RefreshTimer(EditorApplication.timeSinceStartup);
 		}
 
 		public static bool HasWork
 		{
 			get { return HasActiveTask || HasPendingWork; }
+		}
+
+		public static void Refresh()
+		{
+			if (_installed) RefreshTimer(EditorApplication.timeSinceStartup);
 		}
 
 		public static bool ShouldSignal(double nowSeconds, double lastSignalSeconds, bool hasWork, int intervalMs)
@@ -86,12 +102,7 @@ namespace AgentBridge
 
 			_lastUpdateTime = now;
 
-			int intervalMs = HasWork
-				? AgentBridgeSettingsStore.GetActiveTickIntervalMs()
-				: AgentBridgeSettingsStore.GetIdleTickIntervalMs();
-
-			AgentEditorWakeTimer.Ensure(intervalMs, now);
-			PublishWakeState();
+			int intervalMs = RefreshTimer(now);
 
 			if (!_startReported)
 			{
@@ -99,7 +110,9 @@ namespace AgentBridge
 				BridgeStatusWriter.WriteStartTelemetry();
 			}
 
-			if (!ShouldSignal(now, _lastTickTime, HasWork, intervalMs))
+			if (!AgentBridgeSettingsStore.IsEnabled()
+				|| AgentEditorWakeTimer.Kind == "background_signal"
+				|| !ShouldSignal(now, _lastTickTime, HasWork, intervalMs))
 			{
 				return;
 			}
@@ -112,6 +125,17 @@ namespace AgentBridge
 			}
 
 			_signalTick();
+		}
+
+		private static int RefreshTimer(double now)
+		{
+			int intervalMs = HasWork
+				? AgentBridgeSettingsStore.GetActiveTickIntervalMs()
+				: AgentBridgeSettingsStore.GetIdleTickIntervalMs();
+			if (AgentBridgeSettingsStore.IsEnabled()) AgentEditorWakeTimer.Ensure(intervalMs, now);
+			else AgentEditorWakeTimer.Stop();
+			PublishWakeState();
+			return intervalMs;
 		}
 
 		private static void PublishWakeState()

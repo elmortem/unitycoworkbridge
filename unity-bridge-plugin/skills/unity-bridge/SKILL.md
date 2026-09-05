@@ -310,9 +310,11 @@ agentbridge stopplay --session AB_20260813_1500_a1f
 
 ### Код выхода `3` (мост недоступен)
 
-Смотри поле `code` в JSON. Для `project_not_found` найди корень Unity-проекта и повтори с `--project`; для `heartbeat_stale`/`editor_process_not_running` сообщи: «Открой проект в Unity»; для `bridge_disabled` — «Включи мост через Tools → Agent Bridge → Start»; для `protocol_mismatch` обнови CLI или пакет; для `project_mismatch` — `status.json` от другого проекта, проверь `--project`. Не пытайся запускать Unity самостоятельно.
+Смотри поле `code` в JSON. Для `project_not_found` найди корень Unity-проекта и повтори с `--project`; для `editor_process_not_running` сообщи: «Открой проект в Unity»; для `bridge_disabled` — «Включи мост через Tools → Agent Bridge → Start»; для `protocol_mismatch` обнови CLI или пакет; для `project_mismatch` — `status.json` от другого проекта, проверь `--project`. Не пытайся запускать Unity самостоятельно.
 
-Код `bridge_asleep` означает, что главный цикл редактора уснул и не проснулся после попыток разбудить его. Задача при этом остаётся в очереди и выполнится, когда редактор оживёт; повторять команду не нужно, достаточно дождаться и запросить результат по тому же id через `agentbridge wait <id>`.
+`heartbeat_stale` из `status`/`doctor` сам по себе не доказывает, что редактор закрыт. Если процесс жив, мост включён, проект и протокол совпадают, запускай нужную рабочую команду обычным CLI: он допускает восстановление даже при протухшем heartbeat до подачи задачи. Health-команды сами ничего не ставят в очередь и не будят редактор.
+
+Код `bridge_asleep` означает отсутствие прогресса heartbeat в течение 120 секунд ожидания. Причиной может быть сон, долгая блокировка или модальный диалог. Задача остаётся в очереди/работе; проверь редактор и запроси результат по тому же id через `agentbridge wait <id>`, не создавай дубликат.
 
 Если `agentbridge doctor` печатает `! interaction_throttled`, человеку стоит выставить Preferences → General → Interaction Mode = No Throttling: без этого редактор в фоне засыпает штатно.
 

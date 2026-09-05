@@ -19,6 +19,7 @@ namespace AgentBridge
 
 		public static void Start()
 		{
+			if (Application.isBatchMode) return;
 			EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
 			EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
 			EditorApplication.update -= OnRecoveryUpdate;

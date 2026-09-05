@@ -8,7 +8,7 @@ namespace AgentBridge
 	{
 		static AgentBridge()
 		{
-			if (!IsEnabled())
+			if (Application.isBatchMode || !IsEnabled())
 			{
 				return;
 			}
@@ -20,6 +20,7 @@ namespace AgentBridge
 		[MenuItem("Tools/Agent Bridge/Start")]
 		public static void Start()
 		{
+			if (Application.isBatchMode) return;
 			SetEnabled(true);
 			BridgeStatusWriter.Current.Enabled = true;
 			BridgeStatusWriter.Write();
@@ -40,9 +41,7 @@ namespace AgentBridge
 			BridgeStatusWriter.Current.Enabled = false;
 			BridgeStatusWriter.Write();
 
-			AssemblyReloadEvents.beforeAssemblyReload -= AgentEditorWakeTimer.Stop;
-			EditorApplication.quitting -= AgentEditorWakeTimer.Stop;
-			AgentEditorWakeTimer.Stop();
+			EditorTickPump.Refresh();
 
 			TaskCoordinator.Stop();
 			Debug.Log("[AgentBridge] Stopped.");
@@ -68,13 +67,8 @@ namespace AgentBridge
 
 		private static void Initialize()
 		{
-			AssemblyReloadEvents.beforeAssemblyReload -= AgentEditorWakeTimer.Stop;
-			AssemblyReloadEvents.beforeAssemblyReload += AgentEditorWakeTimer.Stop;
-
-			EditorApplication.quitting -= AgentEditorWakeTimer.Stop;
-			EditorApplication.quitting += AgentEditorWakeTimer.Stop;
-
 			TaskCoordinator.Start();
+			EditorTickPump.Refresh();
 		}
 
 		private static bool IsEnabled()

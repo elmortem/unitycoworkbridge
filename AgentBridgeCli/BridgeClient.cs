@@ -228,16 +228,18 @@ internal sealed class BridgeClient
 				nextHealthPoll = now.AddSeconds(3);
 				var pulse = BridgeInspector.Inspect(_projectRoot);
 				lastHealth = pulse;
-				var asleep = pulse.Problems.Contains("heartbeat_stale");
+				var recoverable = WakePolicy.CanRecover(pulse);
+				var asleep = pulse.HeartbeatAgeMs >= WakePolicy.StaleThresholdMs;
 
-				if (!pulse.BridgeReady && !asleep)
+				if (!pulse.BridgeReady && !recoverable)
 				{
 					return Complete(
 						WriteError("bridge_unavailable", "Bridge became unavailable while the task was waiting: " + pulse.Code),
 						"bridge_unavailable");
 				}
 
-				if (asleep)
+				attempts.Observe(pulse.HeartbeatAgeMs, DateTime.UtcNow);
+				if (asleep && recoverable)
 				{
 					var pid = pulse.Bridge?.EditorPid ?? 0;
 					var action = WakePolicy.Decide(
@@ -251,26 +253,26 @@ internal sealed class BridgeClient
 					{
 						attempts.PostAttempts++;
 						attempts.LastAttemptUtc = now;
-						EditorWaker.TryPost(pid);
+						var sent = EditorWaker.TryPost(pid);
 						Console.Error.WriteLine("[agentbridge] editor asleep for "
 							+ (pulse.HeartbeatAgeMs ?? 0) / 1000 + "s, waking (post #" + attempts.PostAttempts + ")");
-						WriteWakeEvent(taskId, "post", pulse.HeartbeatAgeMs);
+						WriteWakeEvent(taskId, "post", pulse.HeartbeatAgeMs, sent);
 					}
 					else if (action == WakeAction.Focus)
 					{
 						attempts.FocusAttempts++;
 						attempts.LastAttemptUtc = now;
-						EditorWaker.TryFocus(pid);
+						var sent = EditorWaker.TryFocus(pid);
 						Console.Error.WriteLine("[agentbridge] editor still asleep, focus poke");
-						WriteWakeEvent(taskId, "focus", pulse.HeartbeatAgeMs);
+						WriteWakeEvent(taskId, "focus", pulse.HeartbeatAgeMs, sent);
 					}
-					else if (attempts.Exhausted)
+					else if (attempts.TimedOut(now))
 					{
 						return Complete(
 							WriteError(
 								"bridge_asleep",
-								"The Unity editor stopped ticking and did not wake up. Focus the editor window, "
-								+ "and set Preferences > General > Interaction Mode to No Throttling."),
+								"No editor heartbeat progress for 120 seconds. The editor may be busy, blocked by a dialog, "
+								+ "or asleep. Inspect Unity; the task is still queued/running. Resume with agentbridge wait " + taskId + "."),
 							"bridge_asleep");
 					}
 				}
@@ -398,12 +400,13 @@ internal sealed class BridgeClient
 		});
 	}
 
-	private void WriteWakeEvent(string taskId, string action, long? heartbeatAgeMs)
+	private void WriteWakeEvent(string taskId, string action, long? heartbeatAgeMs, bool sent)
 	{
 		_telemetry.Write("cli_wake", _session, taskId, new Dictionary<string, object?>
 		{
 			["Action"] = action,
-			["AgeMs"] = heartbeatAgeMs ?? 0
+			["AgeMs"] = heartbeatAgeMs ?? 0,
+			["Sent"] = sent
 		});
 	}
 

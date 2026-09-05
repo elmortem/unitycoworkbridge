@@ -8,5 +8,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../AgentBridgeCli/AgentBridgeCli.csproj" />
+	<Compile Include="../AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/BackgroundTickTimer.cs" Link="BackgroundTickTimer.cs" />
   </ItemGroup>
 </Project>

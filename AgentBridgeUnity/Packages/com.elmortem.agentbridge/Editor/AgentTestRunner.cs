@@ -16,6 +16,7 @@ namespace AgentBridge
 
 		static AgentTestRunner()
 		{
+			if (Application.isBatchMode) return;
 			_api = ScriptableObject.CreateInstance<TestRunnerApi>();
 			_api.RegisterCallbacks(new TestCallbacks());
 			PlayModeSceneRecovery.Start();

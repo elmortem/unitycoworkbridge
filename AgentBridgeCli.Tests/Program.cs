@@ -16,6 +16,8 @@ try
 	RunSessionOptionTests();
 	RunContentionFormattingTests();
 	RunWakePolicyTests();
+	RunBackgroundTickTimerTests();
+	await RunStaleSubmissionTests(root);
 	RunManualPlayPolicyTests();
 	RunTelemetryTests(root);
 	Console.WriteLine("AgentBridgeCli.Tests: PASS");
@@ -297,7 +299,7 @@ static void RunWakePolicyTests()
 {
 	Expect(WakePolicy.Decide(null, false, 0, 0, 100d) == WakeAction.None, "unknown heartbeat age must not poke");
 	Expect(WakePolicy.Decide(1000, false, 0, 0, 100d) == WakeAction.None, "fresh heartbeat must not poke");
-	Expect(WakePolicy.Decide(9000, true, 0, 0, 100d) == WakeAction.None, "focused editor must not be poked");
+	Expect(WakePolicy.Decide(9000, true, 0, 0, 100d) == WakeAction.Post, "focused stalled editor must still receive non-focusing wake signals");
 	Expect(WakePolicy.Decide(9000, false, 0, 0, 1d) == WakeAction.None, "attempts must respect the interval");
 	Expect(WakePolicy.Decide(9000, false, 0, 0, 100d) == WakeAction.Post, "stale heartbeat must post first");
 	Expect(
@@ -306,6 +308,120 @@ static void RunWakePolicyTests()
 	Expect(
 		WakePolicy.Decide(9000, false, WakePolicy.MaxPostAttempts, WakePolicy.MaxFocusAttempts, 100d) == WakeAction.None,
 		"exhausted attempts must stop poking");
+	Expect(WakePolicy.Decide(9000, true, WakePolicy.MaxPostAttempts, 0, 100d) == WakeAction.None,
+		"foreground editor must not receive a focus poke");
+
+	var health = new BridgeHealth
+	{
+		EditorProcessAlive = true, PackageDeclared = true, ProjectMatches = true,
+		ProtocolCompatible = true, HeartbeatAgeMs = 90000,
+		Bridge = new BridgeStatus { Enabled = true }, Problems = new() { "heartbeat_stale" }
+	};
+	Expect(WakePolicy.CanRecover(health), "stale-only local editor must reach recovery");
+	foreach (var problem in new[] { "protocol_mismatch", "project_mismatch", "bridge_disabled", "editor_process_not_running", "heartbeat_invalid" })
+	{
+		health.Problems.Add(problem);
+		Expect(!WakePolicy.CanRecover(health), "staleness must not mask " + problem);
+		health.Problems.Remove(problem);
+	}
+	health.ForeignHost = true;
+	Expect(!WakePolicy.CanRecover(health), "never wake a foreign host PID");
+	health.ForeignHost = false;
+	health.EditorProcessAlive = false;
+	Expect(!WakePolicy.CanRecover(health), "never wake a dead editor");
+
+	var attempts = new EditorWakeAttempts();
+	var now = DateTime.UtcNow;
+	attempts.Observe(16000, now);
+	attempts.PostAttempts = WakePolicy.MaxPostAttempts;
+	attempts.FocusAttempts = WakePolicy.MaxFocusAttempts;
+	Expect(!attempts.TimedOut(now.AddSeconds(30)), "exhausted pokes do not prove a busy editor is dead");
+	Expect(attempts.TimedOut(now.AddSeconds(120)), "a stalled foreground editor must also have a bounded wait");
+	attempts.Observe(19000, now.AddSeconds(3));
+	Expect(attempts.PostAttempts == WakePolicy.MaxPostAttempts, "unchanged heartbeat must not refill wake budget");
+	attempts.Observe(1000, now.AddSeconds(6));
+	Expect(attempts.PostAttempts == 0 && attempts.StalledSinceUtc == null, "real heartbeat progress resets recovery");
+}
+
+static void RunBackgroundTickTimerTests()
+{
+	using var entered = new ManualResetEventSlim();
+	using var release = new ManualResetEventSlim();
+	int callerThread = Environment.CurrentManagedThreadId;
+	int signalThread = callerThread;
+	int signals = 0;
+	var timer = new AgentBridge.BackgroundTickTimer(() =>
+	{
+		signalThread = Environment.CurrentManagedThreadId;
+		Interlocked.Increment(ref signals);
+		entered.Set();
+		release.Wait();
+	}, 15);
+	try
+	{
+		Expect(entered.Wait(3000), "timer must signal without a main-thread update or message pump");
+		Expect(signalThread != callerThread, "signal must originate independently of the caller thread");
+		var dispose = Task.Run(timer.Dispose);
+		Expect(!dispose.Wait(50), "shutdown must drain an in-flight signal before returning");
+		release.Set();
+		Expect(dispose.Wait(3000), "shutdown must finish when the bounded signal finishes");
+		int stoppedCount = signals;
+		Thread.Sleep(70);
+		Expect(signals == stoppedCount, "queued callbacks must not signal after disposal");
+		timer.Dispose();
+	}
+	finally
+	{
+		release.Set();
+		timer.Dispose();
+	}
+
+	using var failed = new AgentBridge.BackgroundTickTimer(() => throw new InvalidOperationException("wake test"), 15);
+	Expect(SpinWait.SpinUntil(() => failed.Error != null, 3000), "callback failure must be captured instead of escaping ThreadPool");
+	Expect(failed.SignalCount == 0 && failed.Error!.Contains("wake test"), "failed signal must not be reported as successful");
+}
+
+static async Task RunStaleSubmissionTests(string temporaryRoot)
+{
+	var project = Path.Combine(temporaryRoot, "StaleSubmission");
+	CreateProject(project);
+	var paths = new BridgePaths(project);
+	Directory.CreateDirectory(paths.WorkingRoot);
+	File.WriteAllText(paths.StatusFile, JsonSerializer.Serialize(new BridgeStatus
+	{
+		ProtocolVersion = 1, ProjectPath = project, EditorPid = Environment.ProcessId,
+		Enabled = true, RoslynReady = true, HostOs = HostPlatform.Current
+	}));
+	WriteHeartbeat(paths.WorkingRoot, 90000);
+	var originalOutput = Console.Out;
+	var originalError = Console.Error;
+	using var output = new StringWriter();
+	using var errors = new StringWriter();
+	Console.SetOut(output);
+	Console.SetError(errors);
+	try
+	{
+		Expect(await AgentBridgeApplication.RunAsync(new[] { "status", "--project", project }) == 3,
+			"read-only status must continue to report stale heartbeat");
+		Expect(!Directory.Exists(paths.Inbox), "status must not enqueue a recovery task");
+		output.GetStringBuilder().Clear();
+		var command = AgentBridgeApplication.RunAsync(new[] { "compile", "--project", project, "--wait", "5" });
+		Expect(!command.IsCompleted, "stale heartbeat before submission must enter the watchdog instead of failing preflight");
+		var requests = Directory.GetFiles(paths.Inbox, "*.task.json");
+		Expect(requests.Length == 1, "stale submission must enqueue exactly one task");
+		var id = Path.GetFileName(requests[0]).Replace(".task.json", "");
+		Directory.CreateDirectory(paths.Journal);
+		WriteHeartbeat(paths.WorkingRoot, 0);
+		File.WriteAllText(Path.Combine(paths.Journal, id + ".json"),
+			JsonSerializer.Serialize(new { Id = id, Kind = "compile", Status = "success" }));
+		Expect(await command.WaitAsync(TimeSpan.FromSeconds(5)) == 0, "recovered submission must return the original task result");
+		Expect(output.ToString().Contains(id), "returned result must identify the admitted task");
+	}
+	finally
+	{
+		Console.SetOut(originalOutput);
+		Console.SetError(originalError);
+	}
 }
 
 static void RunManualPlayPolicyTests()

@@ -70,9 +70,8 @@ namespace AgentBridge
 			Write();
 		}
 
-		// The wake timer installs itself on the first editor update, so this is called from
-		// EditorTickPump rather than from WriteOnLoad: emitted at load, Wake could only ever
-		// say "none" and the field would carry no information at all.
+		// Emit after EditorTickPump has published its initialized wake backend. Static
+		// initialization order alone does not guarantee that WriteOnLoad sees it.
 		public static void WriteStartTelemetry()
 		{
 			if (Suspended)

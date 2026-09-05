@@ -35,6 +35,9 @@ namespace AgentBridge
 
 		public static void Start()
 		{
+			// AssetImportWorker shares Library with the interactive editor but has its own
+			// SessionState. It must not consume requests or "recover" the editor's live tasks.
+			if (Application.isBatchMode) return;
 			EditorApplication.update -= OnUpdate;
 			EditorApplication.update += OnUpdate;
 

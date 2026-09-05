@@ -54,7 +54,9 @@ internal static class AgentBridgeApplication
 			return health.BridgeReady && health.CSharpReady ? 0 : 1;
 		}
 
-		if (!health.BridgeReady)
+		// status/doctor remain read-only and report stale honestly. Work commands may
+		// enter the bounded watchdog even if the editor fell asleep before submission.
+		if (!health.BridgeReady && !WakePolicy.CanRecover(health))
 		{
 			WriteHealth(health, options.Format);
 			return 3;
@@ -72,7 +74,7 @@ internal static class AgentBridgeApplication
 					return WriteError("bad_usage", "usage: agentbridge csharp <file> [--project <path>] [--wait <seconds>] [--format json|human]", options.Format);
 				}
 
-				if (!health.CSharpReady)
+				if (health.Bridge?.RoslynReady != true)
 				{
 					return WriteError("roslyn_not_ready", "Roslyn is not ready. Run agentbridge doctor.", options.Format);
 				}
