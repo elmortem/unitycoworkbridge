@@ -1111,9 +1111,44 @@ namespace AgentBridge
 
 		private static void StartTestsTask(TaskRequest request)
 		{
+			var api = ScriptableObject.CreateInstance<UnityEditor.TestTools.TestRunner.Api.TestRunnerApi>();
+			api.RetrieveTestList(request.TestMode == "PlayMode"
+				? UnityEditor.TestTools.TestRunner.Api.TestMode.PlayMode
+				: UnityEditor.TestTools.TestRunner.Api.TestMode.EditMode, root =>
+			{
+				try
+				{
+					// Discovery can finish after cancellation or timeout. Never start that old task.
+					if (_activeTaskId != request.Id || _activeRequest != request) return;
+					string[] resolved;
+					string status;
+					string message;
+					var catalog = new TestNameResolver.CatalogData { Nodes = TestNameResolver.Catalog(root) };
+					if (!TestNameResolver.TryResolve(catalog.Nodes, request.TestNames,
+						request.AssemblyNames, request.CategoryNames, out resolved, out status, out message))
+					{
+						ValidationEvidence.Abort();
+						_activeRecord.Tests = new TestRunResult { message = message };
+						FinishTask(status, null, new List<string> { message, "Filters: " + CachedResultServer.FilterOf(request) }, false);
+						return;
+					}
+					StartResolvedTestsTask(request, resolved, catalog);
+				}
+				catch (Exception ex)
+				{
+					if (_activeTaskId != request.Id) return;
+					ValidationEvidence.Abort();
+					FinishTask("runtime_error", null, new List<string> { "Test discovery: " + ex.Message }, false);
+				}
+				finally { UnityEngine.Object.DestroyImmediate(api); }
+			});
+		}
+
+		private static void StartResolvedTestsTask(TaskRequest request, string[] resolvedNames, TestNameResolver.CatalogData catalog)
+		{
 			TestRunResult abortedResult;
 			bool started = AgentTestRunner.TryRequestRunForCoordinator(
-				request.Id, request.TestMode, request.AssemblyNames, request.TestNames, request.CategoryNames, out abortedResult);
+				request.Id, request.TestMode, request.AssemblyNames, resolvedNames, request.CategoryNames, out abortedResult, catalog);
 
 			if (!started)
 			{
@@ -1416,6 +1451,8 @@ namespace AgentBridge
 			{
 				case "success":
 				case "test_failure":
+				case "no_tests_matched":
+				case "ambiguous_test_filter":
 				case "compiler_error":
 				case "runtime_error":
 				case "timeout":

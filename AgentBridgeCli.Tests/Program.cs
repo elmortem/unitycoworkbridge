@@ -59,7 +59,14 @@ static void RunTaskIdTests()
 static void RunResultClassificationTests()
 {
 	Expect(BridgeClient.ClassifyResult("""{"Kind":"csharp","Status":"success"}""") == 0, "successful csharp task must exit 0");
-	Expect(BridgeClient.ClassifyResult("""{"Kind":"tests","Status":"success","Tests":{"failed":0,"inconclusive":0}}""") == 0, "green tests must exit 0");
+	Expect(BridgeClient.ClassifyResult("""{"Kind":"tests","Status":"success","Tests":{"total":1,"passed":1,"failed":0,"inconclusive":0}}""") == 0, "green tests must exit 0");
+	Expect(BridgeClient.ClassifyResult("""{"Kind":"tests","Status":"success","Tests":{"total":0,"failed":0,"inconclusive":0}}""") == 1, "legacy empty success must exit 1");
+	Expect(BridgeClient.ClassifyResult("""{"Kind":"tests","Status":"success"}""") == 1, "missing test results cannot pass");
+	Expect(BridgeClient.ClassifyResult("""{"Kind":"tests","Status":"success","Tests":{"passed":1}}""") == 1, "missing total cannot pass");
+	Expect(BridgeClient.ClassifyResult("""{"Kind":"tests","Status":"no_tests_matched"}""") == 1, "empty selection must exit 1");
+	Expect(BridgeClient.ClassifyResult("""{"Kind":"tests","Status":"ambiguous_test_filter"}""") == 1, "ambiguous filter must exit 1");
+	Expect(BridgeClient.ClassifyResult("""{"Kind":"tests","Status":"success","Tests":{"total":1,"aborted":true}}""") == 1, "aborted result cannot pass");
+	Expect(TaskResultFormatter.FormatHuman("""{"Kind":"tests","Status":"success","Tests":{"total":0}}""").StartsWith("tests: no_tests_matched"), "legacy empty result must not look green");
 	Expect(BridgeClient.ClassifyResult("""{"Kind":"tests","Status":"success","Tests":{"failed":1,"inconclusive":0}}""") == 1, "legacy red tests must exit 1");
 	Expect(BridgeClient.ClassifyResult("""{"Kind":"tests","Status":"test_failure","Tests":{"failed":1}}""") == 1, "test_failure must exit 1");
 }

@@ -18,7 +18,7 @@ namespace AgentBridge
 					continue;
 				}
 
-				List<TestCaseResult> selected = TestFilterCoverage.Select(dump.Entries, request);
+				List<TestCaseResult> selected = TestFilterCoverage.Select(dump, request);
 				if (selected.Count == 0)
 				{
 					TaskJournal.Delete(record.Id);

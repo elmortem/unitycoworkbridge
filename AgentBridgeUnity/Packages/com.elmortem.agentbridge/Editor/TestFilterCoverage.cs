@@ -6,27 +6,53 @@ namespace AgentBridge
 	{
 		public static bool Covers(TestRunDump dump, TaskRequest request)
 		{
-			TestRunFilter filter = dump.Filter;
-
-			if (IsEmpty(filter.AssemblyNames) && IsEmpty(filter.TestNames) && IsEmpty(filter.CategoryNames))
+			List<TestNameResolver.Node> expected;
+			if (!TrySelectCatalog(dump, request, out expected) || expected.Count == 0) return false;
+			var remaining = new Dictionary<string, int>();
+			foreach (TestCaseResult entry in dump.Entries)
 			{
-				return true;
+				string key = Key(entry.Assembly, entry.FullName);
+				int count;
+				remaining.TryGetValue(key, out count);
+				remaining[key] = count + 1;
 			}
-
-			if (!IsEmpty(request.TestNames) && AllNamesPresent(dump.Entries, request.TestNames))
+			foreach (TestNameResolver.Node test in expected)
 			{
-				return true;
+				string key = Key(test.Assembly, test.FullName);
+				int count;
+				if (!remaining.TryGetValue(key, out count) || count == 0) return false;
+				remaining[key] = count - 1;
 			}
+			return true;
+		}
 
-			if (!IsEmpty(filter.AssemblyNames) && IsEmpty(filter.TestNames) && IsEmpty(filter.CategoryNames)
-				&& !IsEmpty(request.AssemblyNames) && IsSubset(request.AssemblyNames, filter.AssemblyNames))
-			{
-				return true;
-			}
+		private static bool TrySelectCatalog(TestRunDump dump, TaskRequest request, out List<TestNameResolver.Node> expected)
+		{
+			expected = null;
+			// Old records have no complete discovery catalog and cannot prove selection coverage.
+			if (dump.Catalog == null || dump.Catalog.Nodes == null) return false;
+			string[] resolved;
+			string status;
+			string message;
+			if (!TestNameResolver.TryResolve(dump.Catalog.Nodes, request.TestNames, request.AssemblyNames,
+				request.CategoryNames, out resolved, out status, out message)) return false;
+			expected = TestNameResolver.SelectCases(dump.Catalog.Nodes, resolved, request.AssemblyNames, request.CategoryNames);
+			return true;
+		}
 
-			return SetsEqual(filter.AssemblyNames, request.AssemblyNames)
-				&& SetsEqual(filter.TestNames, request.TestNames)
-				&& SetsEqual(filter.CategoryNames, request.CategoryNames);
+		public static List<TestCaseResult> Select(TestRunDump dump, TaskRequest request)
+		{
+			List<TestNameResolver.Node> expected;
+			if (!TrySelectCatalog(dump, request, out expected)) return new List<TestCaseResult>();
+			var keys = new HashSet<string>();
+			foreach (TestNameResolver.Node test in expected) keys.Add(Key(test.Assembly, test.FullName));
+			return dump.Entries.FindAll(entry => keys.Contains(Key(entry.Assembly, entry.FullName)));
+		}
+
+		private static string Key(string assembly, string fullName)
+		{
+			assembly = assembly ?? "";
+			return assembly.Length + ":" + assembly + fullName;
 		}
 
 		public static bool CoversFilterOnly(TestRunFilter filter, TaskRequest request)
@@ -45,68 +71,6 @@ namespace AgentBridge
 			return SetsEqual(filter.AssemblyNames, request.AssemblyNames)
 				&& SetsEqual(filter.TestNames, request.TestNames)
 				&& SetsEqual(filter.CategoryNames, request.CategoryNames);
-		}
-
-		public static List<TestCaseResult> Select(List<TestCaseResult> entries, TaskRequest request)
-		{
-			var selected = new List<TestCaseResult>();
-			var assemblies = ToSet(request.AssemblyNames);
-			var names = ToSet(request.TestNames);
-			var categories = ToSet(request.CategoryNames);
-
-			foreach (TestCaseResult entry in entries)
-			{
-				if (assemblies != null && !assemblies.Contains(entry.Assembly))
-				{
-					continue;
-				}
-
-				if (names != null && !names.Contains(entry.FullName))
-				{
-					continue;
-				}
-
-				if (categories != null && !HasAnyCategory(entry, categories))
-				{
-					continue;
-				}
-
-				selected.Add(entry);
-			}
-
-			return selected;
-		}
-
-		private static bool HasAnyCategory(TestCaseResult entry, HashSet<string> categories)
-		{
-			foreach (string category in entry.Categories)
-			{
-				if (categories.Contains(category))
-				{
-					return true;
-				}
-			}
-
-			return false;
-		}
-
-		private static bool AllNamesPresent(List<TestCaseResult> entries, string[] names)
-		{
-			var present = new HashSet<string>();
-			foreach (TestCaseResult entry in entries)
-			{
-				present.Add(entry.FullName);
-			}
-
-			foreach (string name in names)
-			{
-				if (!present.Contains(name))
-				{
-					return false;
-				}
-			}
-
-			return true;
 		}
 
 		private static bool IsSubset(string[] inner, string[] outer)
@@ -135,14 +99,5 @@ namespace AgentBridge
 			return values == null || values.Length == 0;
 		}
 
-		private static HashSet<string> ToSet(string[] values)
-		{
-			if (values == null || values.Length == 0)
-			{
-				return null;
-			}
-
-			return new HashSet<string>(values);
-		}
 	}
 }

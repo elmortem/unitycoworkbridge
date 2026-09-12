@@ -37,6 +37,8 @@ namespace AgentBridge
 
 		public static string StatusOf(TestRunResult run)
 		{
+			if (run == null || run.aborted) return "runtime_error";
+			if (run.total <= 0) return "no_tests_matched";
 			return run.failed > 0 || run.inconclusive > 0 ? "test_failure" : "success";
 		}
 

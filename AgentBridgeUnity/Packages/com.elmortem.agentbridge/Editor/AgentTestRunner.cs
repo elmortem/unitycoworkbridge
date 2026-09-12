@@ -12,6 +12,7 @@ namespace AgentBridge
 		public const string CoordinatorTestModeKey = "AgentBridge_CoordinatorTestMode";
 		public const string CoordinatorTestSourceKey = "AgentBridge_CoordinatorTestSource";
 		public const string CoordinatorTestFilterKey = "AgentBridge_CoordinatorTestFilter";
+		public const string CoordinatorTestCatalogKey = "AgentBridge_CoordinatorTestCatalog";
 		private static TestRunnerApi _api;
 
 		static AgentTestRunner()
@@ -22,7 +23,7 @@ namespace AgentBridge
 			PlayModeSceneRecovery.Start();
 		}
 
-		public static bool TryRequestRunForCoordinator(string taskId, string testMode, string[] assemblyNames, string[] testNames, string[] categoryNames, out TestRunResult abortedResult)
+		public static bool TryRequestRunForCoordinator(string taskId, string testMode, string[] assemblyNames, string[] testNames, string[] categoryNames, out TestRunResult abortedResult, TestNameResolver.CatalogData catalog = null)
 		{
 			abortedResult = null;
 
@@ -68,6 +69,7 @@ namespace AgentBridge
 			Filter filter = BuildFilter(mode, assemblyNames, testNames, categoryNames);
 
 			SessionState.SetString(CoordinatorTestTaskKey, taskId);
+			SessionState.SetString(CoordinatorTestCatalogKey, catalog == null ? "" : JsonUtility.ToJson(catalog));
 			SessionState.SetString(CoordinatorTestModeKey, mode.ToString());
 			SessionState.SetString(CoordinatorTestSourceKey, TestFingerprint.Sources());
 			SessionState.SetString(CoordinatorTestFilterKey, JsonUtility.ToJson(new TestRunFilter
@@ -88,6 +90,7 @@ namespace AgentBridge
 				SessionState.EraseString(CoordinatorTestModeKey);
 				SessionState.EraseString(CoordinatorTestSourceKey);
 				SessionState.EraseString(CoordinatorTestFilterKey);
+				SessionState.EraseString(CoordinatorTestCatalogKey);
 				if (mode == TestMode.PlayMode)
 				{
 					PlayModeSceneRecovery.Cancel();
@@ -119,6 +122,7 @@ namespace AgentBridge
 				SessionState.EraseString(CoordinatorTestModeKey);
 				SessionState.EraseString(CoordinatorTestSourceKey);
 				SessionState.EraseString(CoordinatorTestFilterKey);
+				SessionState.EraseString(CoordinatorTestCatalogKey);
 				SceneDirtyWatcher.Disarm(taskId);
 				if (mode == TestMode.PlayMode)
 				{
@@ -179,12 +183,19 @@ namespace AgentBridge
 			var dump = new TestRunDump
 			{
 				SourceTaskId = taskId,
+				Catalog = ReadCatalog(),
 				Filter = filter,
 				FinishedAtUtc = System.DateTime.UtcNow.ToString("o")
 			};
 
 			CollectEntries(result, null, dump.Entries);
 			TestRunDumpStore.WritePending(dump);
+		}
+
+		private static TestNameResolver.CatalogData ReadCatalog()
+		{
+			string json = SessionState.GetString(CoordinatorTestCatalogKey, "");
+			return string.IsNullOrEmpty(json) ? null : JsonUtility.FromJson<TestNameResolver.CatalogData>(json);
 		}
 
 		private static void CollectEntries(ITestResultAdaptor node, string assembly, List<TestCaseResult> entries)
@@ -225,12 +236,14 @@ namespace AgentBridge
 
 		private static void FinalizeCoordinatorRun(string taskId, TestRunResult run, string recoveryError)
 		{
+			string requestedFilter = SessionState.GetString(CoordinatorTestFilterKey, "");
 			string testMode = SessionState.GetString(CoordinatorTestModeKey, "");
 			string startSources = SessionState.GetString(CoordinatorTestSourceKey, "");
 			SessionState.EraseString(CoordinatorTestTaskKey);
 			SessionState.EraseString(CoordinatorTestModeKey);
 			SessionState.EraseString(CoordinatorTestSourceKey);
 			SessionState.EraseString(CoordinatorTestFilterKey);
+			SessionState.EraseString(CoordinatorTestCatalogKey);
 
 			TaskRecord record;
 			if (!TaskJournal.TryRead(taskId, out record))
@@ -281,7 +294,12 @@ namespace AgentBridge
 			}
 			else
 			{
-				record.Status = run.failed > 0 || run.inconclusive > 0 ? "test_failure" : "success";
+				record.Status = TestResultAggregator.StatusOf(run);
+				if (record.Status == "no_tests_matched")
+				{
+					run.message = "No test cases matched. Check --mode, --assembly, --test and --category. Filters: " + requestedFilter;
+					record.Logs.Add(run.message);
+				}
 			}
 
 			record.FinishedAtUtc = System.DateTime.UtcNow.ToString("o");
@@ -291,6 +309,7 @@ namespace AgentBridge
 
 			bool promoted = hasDump
 				&& ranCleanly
+				&& run.total > 0
 				&& evidence.Validity == EvidenceRecord.Valid
 				&& !string.IsNullOrEmpty(startSources)
 				&& startSources == TestFingerprint.Sources();

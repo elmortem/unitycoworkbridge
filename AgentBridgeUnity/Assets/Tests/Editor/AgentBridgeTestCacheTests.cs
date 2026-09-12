@@ -76,13 +76,13 @@ public class AgentBridgeTestCacheTests
 
 		var subset = new TaskRequest { Kind = "tests", TestMode = "EditMode", TestNames = new[] { "Suite.Alpha" } };
 		Assert.IsTrue(TestFilterCoverage.Covers(dump, subset), "a named subset of a stored set is covered");
-		Assert.AreEqual(1, TestFilterCoverage.Select(dump.Entries, subset).Count, "and selects exactly that test");
+		Assert.AreEqual(1, TestFilterCoverage.Select(dump, subset).Count, "and selects exactly that test");
 
 		var missing = new TaskRequest { Kind = "tests", TestMode = "EditMode", TestNames = new[] { "Suite.Missing" } };
 		Assert.IsFalse(TestFilterCoverage.Covers(dump, missing), "a test the set never ran is not covered");
 
 		var empty = new TaskRequest { Kind = "tests", TestMode = "EditMode", TestNames = new[] { "Suite.Nothing" } };
-		Assert.AreEqual(0, TestFilterCoverage.Select(dump.Entries, empty).Count, "an empty selection is not a pass");
+		Assert.AreEqual(0, TestFilterCoverage.Select(dump, empty).Count, "an empty selection is not a pass");
 	}
 
 	[Test]
@@ -127,6 +127,7 @@ public class AgentBridgeTestCacheTests
 	{
 		var dump = new TestRunDump
 		{
+			Catalog = new TestNameResolver.CatalogData(),
 			SourceTaskId = taskId,
 			InputDigest = digest,
 			SourceFingerprint = "source-" + digest,
@@ -139,6 +140,7 @@ public class AgentBridgeTestCacheTests
 
 		foreach (string test in tests)
 		{
+			dump.Catalog.Nodes.Add(new TestNameResolver.Node { Name = test.Substring(test.LastIndexOf('.') + 1), FullName = test, Assembly = "AgentBridge.ProbeTests" });
 			dump.Entries.Add(new TestCaseResult
 			{
 				FullName = test,

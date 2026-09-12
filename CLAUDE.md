@@ -86,6 +86,7 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
   `AgentEditorWakeTimer.cs` (выбор backend, `SetTimer` как fallback), `BackgroundTickTimer.cs`
   (независимый короткий вызов потокобезопасного `SignalTick`, остановка до reload), `InteractionModeProbe.cs`
 - Протокол: `BridgePaths.cs`, `BridgeStatusWriter.cs`, `TaskJournal.cs`, `TaskRecord.cs`
+- Выбор тестов: `TestNameResolver.cs` разрешает полные/короткие имена по полному каталогу Unity; `TestFilterCoverage.cs` проверяет покрытие кэша по тестовым случаям. `no_tests_matched` и `ambiguous_test_filter` — терминальные ошибки тестов, CLI возвращает `1`.
 - Телеметрия: `TelemetryLog.cs` (запись JSONL в `Logs/`, ротация по суткам), `TelemetryJson.cs`
   (конверт строки и экранирование), `TelemetryField.cs`
 - `Roslyn~/` — вендоренный Roslyn (тильда прячет папку от импорта Unity), обновляется

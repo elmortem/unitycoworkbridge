@@ -326,8 +326,9 @@ namespace AgentBridge
 				+ ";package=" + (package != null ? package.version : "unknown")
 				+ ";platform=" + EditorUserBuildSettings.activeBuildTarget
 				+ ";group=" + EditorUserBuildSettings.selectedBuildTargetGroup
-				+ ";mode=" + (mode ?? "")
-				+ ";filter=" + (filter ?? "");
+				// Selection is checked against the complete discovery catalog by TestFilterCoverage.
+				// It is not an input change: aliases and subsets must share the same content digest.
+				+ ";mode=" + (mode ?? "");
 		}
 
 		public static string[] CollectRoots()

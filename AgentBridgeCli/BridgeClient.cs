@@ -10,6 +10,8 @@ internal sealed class BridgeClient
 	{
 		"success",
 		"test_failure",
+		"no_tests_matched",
+		"ambiguous_test_filter",
 		"compiler_error",
 		"runtime_error",
 		"timeout",
@@ -473,10 +475,15 @@ internal sealed class BridgeClient
 			}
 
 			if (root.TryGetProperty("Kind", out var kindElement)
-				&& kindElement.GetString() == "tests"
-				&& root.TryGetProperty("Tests", out var testsElement)
-				&& testsElement.ValueKind == JsonValueKind.Object)
+				&& kindElement.GetString() == "tests")
 			{
+				if (!root.TryGetProperty("Tests", out var testsElement)
+					|| testsElement.ValueKind != JsonValueKind.Object
+					|| GetInt(testsElement, "total") <= 0
+					|| (testsElement.TryGetProperty("aborted", out var aborted) && aborted.ValueKind == JsonValueKind.True))
+				{
+					return 1;
+				}
 				var failed = GetInt(testsElement, "failed");
 				var inconclusive = GetInt(testsElement, "inconclusive");
 				if (failed > 0 || inconclusive > 0)

@@ -6,7 +6,8 @@ namespace AgentBridge
 	[Serializable]
 	public class TestRunDump
 	{
-		public int Version = 2;
+		public int Version = 3;
+		public TestNameResolver.CatalogData Catalog;
 		public string Fingerprint;
 		public string SourceFingerprint;
 		public string SourceTaskId;

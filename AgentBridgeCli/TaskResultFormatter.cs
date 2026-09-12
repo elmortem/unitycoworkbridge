@@ -45,6 +45,11 @@ internal static class TaskResultFormatter
 		var hasTests = kind == "tests"
 			&& root.TryGetProperty("Tests", out tests)
 			&& tests.ValueKind == JsonValueKind.Object;
+		if (kind == "tests" && status == "success" && (!hasTests || GetInt(tests, "total") <= 0))
+		{
+			status = "no_tests_matched";
+			details.Add("legacy success rejected: no test cases reported");
+		}
 		if (hasTests)
 		{
 			details.Add(GetInt(tests, "passed") + " passed");
