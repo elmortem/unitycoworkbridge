@@ -31,5 +31,13 @@ namespace AgentBridge
 		public string PlaySessionDeadlineUtc;
 		public QueuedTaskStatus[] QueuedTasks;
 		public string[] Capabilities;
+
+		// coordination-v1 summary. Never carries anybody's token: the status file is world
+		// readable to every agent working in this project.
+		public bool CoordinationActive;
+		public int CoordinationParticipants;
+		public long CoordinationRevision;
+		public string CoordinationWindowSession;
+		public string CoordinationUnavailable;
 	}
 }

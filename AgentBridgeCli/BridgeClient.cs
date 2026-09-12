@@ -15,7 +15,9 @@ internal sealed class BridgeClient
 		"timeout",
 		"canceled",
 		"interrupted_by_domain_reload",
-		"rejected"
+		"rejected",
+		"stale_input",
+		"evidence_unavailable"
 	};
 
 	private const int QueueWaitCapSeconds = 3600;
@@ -39,6 +41,10 @@ internal sealed class BridgeClient
 		_note = note;
 		_telemetry = telemetry;
 	}
+
+	// coordination-v1. Empty for a legacy submission, which an uncoordinated project still accepts.
+	public string? CoordinationWindowToken { get; init; }
+	public string? CoordinationStepId { get; init; }
 
 	public async Task<int> SubmitPayloadAsync(string kind, string sourcePath, int waitSeconds)
 	{
@@ -68,6 +74,7 @@ internal sealed class BridgeClient
 			AgentSessionId = _session ?? "",
 			Note = _note ?? ""
 		};
+		Decorate(request);
 		var requestBytes = JsonSerializer.SerializeToUtf8Bytes(request, JsonSupport.Task);
 		var payloadBytes = await File.ReadAllBytesAsync(fullSourcePath);
 		var expectedHash = ComputeHash(requestBytes, payloadBytes);
@@ -486,8 +493,17 @@ internal sealed class BridgeClient
 		}
 	}
 
+	// The window token travels with the task, not with the client: the package checks it again
+	// immediately before cache, attach or execution.
+	private void Decorate(TaskRequest request)
+	{
+		request.CoordinationWindowToken = CoordinationWindowToken ?? "";
+		request.CoordinationStepId = CoordinationStepId ?? "";
+	}
+
 	private async Task<int> SubmitRequestAsync(TaskRequest request, int waitSeconds)
 	{
+		Decorate(request);
 		Directory.CreateDirectory(_paths.Inbox);
 		Directory.CreateDirectory(_paths.Journal);
 		var requestBytes = JsonSerializer.SerializeToUtf8Bytes(request, JsonSupport.Task);

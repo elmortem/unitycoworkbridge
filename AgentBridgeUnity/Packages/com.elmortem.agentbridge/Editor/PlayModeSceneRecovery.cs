@@ -156,6 +156,14 @@ namespace AgentBridge
 			DeleteStateFile();
 		}
 
+		// Read once on the main thread by the evidence layer, which then has to answer the same
+		// question from a worker thread and from a file watcher callback.
+		public static string BootstrapScenePath()
+		{
+			PlayModeSceneState state = Read();
+			return state != null ? state.BootstrapScenePath ?? "" : "";
+		}
+
 		public static bool IsBootstrapScenePath(string path)
 		{
 			PlayModeSceneState state = Read();

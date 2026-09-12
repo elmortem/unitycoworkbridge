@@ -31,6 +31,8 @@ namespace AgentBridge
 		private static SceneShot.SceneShotTaskExecutor _activeShotExecutor;
 		private static TaskContext _activeShotContext;
 		private static List<string> _activeRestoreLogs;
+		private static TaskRequest _activeRequest;
+		private static string _pendingValidationKind;
 		private static string _queueSignature = "";
 
 		public static void Start()
@@ -155,16 +157,36 @@ namespace AgentBridge
 			record.Status = outcome.Status;
 			record.Diagnostics = outcome.Diagnostics;
 			record.ForeignErrors = outcome.ForeignErrors;
+
+			// A compiler error stays a compiler error whatever the evidence says; only a clean
+			// compile can be downgraded by inputs that moved underneath it.
+			EvidenceRecord evidence = ValidationEvidence.Complete(taskId, true);
+			record.Evidence = evidence;
+			if (record.Status == "success" && evidence.Validity == EvidenceRecord.Stale)
+			{
+				record.Status = "stale_input";
+				record.Logs.Add("stale_input: " + evidence.Reason);
+			}
+			else if (record.Status == "success"
+				&& evidence.Validity == EvidenceRecord.Unknown
+				&& EvidenceClassification.RequiresEvidence())
+			{
+				record.Status = "evidence_unavailable";
+				record.Logs.Add("evidence_unavailable: " + evidence.Reason);
+			}
+
 			record.FinishedAtUtc = DateTime.UtcNow.ToString("o");
 			TaskJournal.Write(record);
 			TelemetryLog.TaskFinished(record);
 			AgentSessionScheduler.OnTaskFinished(record.AgentSessionId, DateTime.UtcNow);
+			CoordinationGate.ReleaseByRecord(record, record.Status == "success", record.Status);
 
 			// The fingerprint taken before the refresh proves nothing changed while the project
 			// compiled; a mismatch means the result already describes older sources.
 			string startFingerprint = SessionState.GetString(CompileTaskExecutor.PendingCompileFingerprintKey, "");
 			SessionState.EraseString(CompileTaskExecutor.PendingCompileFingerprintKey);
 			if ((record.Status == "success" || record.Status == "compiler_error")
+				&& evidence.Validity != EvidenceRecord.Stale
 				&& !string.IsNullOrEmpty(startFingerprint)
 				&& startFingerprint == CompileFingerprint.Current())
 			{
@@ -234,11 +256,21 @@ namespace AgentBridge
 
 			double now = EditorApplication.timeSinceStartup;
 
+			// The coordinator is the only owner of the editor's half of coordination-v1: one
+			// non-blocking lock attempt per tick, and a window is confirmed only while genuinely free.
+			CoordinationEditorAdapter.Tick(IsEditorFreeForWindow());
+
 			if (_activeTaskId != null)
 			{
 				CheckTimeout(now);
 				RefreshQueueStatus(now);
 				TryServeThrottled(now);
+
+				if (_pendingValidationKind != null)
+				{
+					PollValidationPrepare();
+					return;
+				}
 
 				if (_activeCSharpExecutor != null)
 				{
@@ -568,8 +600,17 @@ namespace AgentBridge
 				pending.Add(info);
 			}
 
+			// What must not run at all is refused here, once, before any consumer sees it. A task
+			// that merely waits for its window stays in the queue: waiting is not a rejection.
+			CoordinationGate.Admit(pending, RejectCoordination);
+
 			EditorTickPump.HasPendingWork = pending.Count > 0;
 			return pending;
+		}
+
+		private static void RejectCoordination(PendingTaskInfo task, string reason)
+		{
+			RejectTaskFile(task.TaskFilePath, task.Id, task.Kind, reason);
 		}
 
 		private static void RefreshQueueStatus(double now)
@@ -653,7 +694,25 @@ namespace AgentBridge
 				return;
 			}
 
+			// Nothing starts inside somebody else's window. The step is reserved with this task id
+			// before any payload runs, so a retry with a different id finds it consumed.
+			string coordinationError;
+			if (!CoordinationGate.TryReserve(request, id, out coordinationError))
+			{
+				if (coordinationError == Coordination.CoordinationCodes.Busy)
+				{
+					// The store was locked this tick; nothing was consumed, so the task simply
+					// stays in the queue and the next scan tries again.
+					return;
+				}
+
+				_rejectedTaskHashes[taskFilePath] = hash;
+				WriteTerminal(id, request.Kind, "rejected", coordinationError, hash);
+				return;
+			}
+
 			_activeTaskId = id;
+			_activeRequest = request;
 			EditorTickPump.HasActiveTask = true;
 			BridgeStatusWriter.Current.ActiveTaskId = id;
 			BridgeStatusWriter.Write();
@@ -669,6 +728,8 @@ namespace AgentBridge
 				Hash = hash,
 				SessionId = BridgeStatusWriter.Current.SessionId,
 				AgentSessionId = task.EffectiveSessionId,
+				CoordinationWindowToken = request.CoordinationWindowToken,
+				CoordinationStepId = request.CoordinationStepId,
 				StartedAtUtc = DateTime.UtcNow.ToString("o")
 			};
 			TaskJournal.Write(_activeRecord);
@@ -754,10 +815,13 @@ namespace AgentBridge
 					RunUiTask(request);
 					break;
 				case "compile":
-					CompileTaskExecutor.Begin(request.Id);
+					// The import has to settle first: a snapshot taken before the refresh would
+					// call the bridge's own expected .meta writes a foreign change.
+					CompileTaskExecutor.BeginImport(request.Id);
+					BeginValidationPrepare(request, "compile");
 					break;
 				case "tests":
-					StartTestsTask(request);
+					BeginValidationPrepare(request, "tests");
 					break;
 				case "sceneshot":
 					StartShotTask(request);
@@ -786,6 +850,23 @@ namespace AgentBridge
 			{
 				FinishTask("success", "not_holder", null, false);
 				return;
+			}
+
+			// In coordinated mode the lease is not the holder's to give away: a window is closed
+			// with coord finish, once its tasks are terminal.
+			Coordination.CoordinationState coordination = CoordinationEditorAdapter.Snapshot;
+			if (coordination != null)
+			{
+				Coordination.CoordinationGrant window = coordination.FindWindowGrant();
+				if (window != null && string.Equals(window.Session, effective, StringComparison.Ordinal))
+				{
+					FinishTask(
+						"rejected",
+						"window_active",
+						new List<string> { "window_active: close the coordination window with 'agentbridge coord finish'" },
+						false);
+					return;
+				}
 			}
 
 			var logs = new List<string>();
@@ -953,6 +1034,81 @@ namespace AgentBridge
 			FinishTask(result.Status, result.ReturnValue, result.Logs, false);
 		}
 
+		// Capture the inputs before the expensive run, not after it. A project that will not hold
+		// still is refused here, where refusing costs a second instead of a whole test run.
+		private static void BeginValidationPrepare(TaskRequest request, string kind)
+		{
+			_pendingValidationKind = kind;
+			string mode = kind == "tests"
+				? (request.TestMode == "PlayMode" ? "PlayMode" : "EditMode")
+				: "compile";
+			ValidationEvidence.BeginPrepare(
+				request.Id,
+				ValidationEvidence.ContextOf(mode, CachedResultServer.FilterOf(request)),
+				EvidenceClassification.WindowId());
+		}
+
+		private static void PollValidationPrepare()
+		{
+			if (_activeRecord == null || _activeRequest == null)
+			{
+				_pendingValidationKind = null;
+				ValidationEvidence.Abort();
+				return;
+			}
+
+			bool ready;
+			string reason;
+			if (!ValidationEvidence.TryFinishPrepare(out ready, out reason))
+			{
+				return;
+			}
+
+			string kind = _pendingValidationKind;
+			_pendingValidationKind = null;
+
+			if (!ready)
+			{
+				if (kind == "compile")
+				{
+					SessionState.EraseString(CompileTaskExecutor.PendingCompileTaskKey);
+				}
+
+				_activeRecord.Evidence = EvidenceRecord.UnknownBecause(reason);
+				FinishTask("evidence_unavailable", null, new List<string> { "evidence_unavailable: " + reason }, false);
+				return;
+			}
+
+			try
+			{
+				if (kind == "compile")
+				{
+					CompileTaskExecutor.RequestCompilation();
+				}
+				else
+				{
+					StartTestsTask(_activeRequest);
+				}
+			}
+			catch (Exception ex)
+			{
+				ValidationEvidence.Abort();
+				FinishTask("runtime_error", null, new List<string> { ex.Message }, false);
+			}
+		}
+
+		// A window is only confirmed when the editor is actually free: no active task, no import,
+		// no compile, no pending PlayMode scene recovery and no play mode of any kind.
+		private static bool IsEditorFreeForWindow()
+		{
+			return _activeTaskId == null
+				&& !EditorApplication.isCompiling
+				&& !EditorApplication.isUpdating
+				&& !EditorApplication.isPlayingOrWillChangePlaymode
+				&& !PlayModeSceneRecovery.IsPending
+				&& AgentBridgeSettingsStore.IsEnabled();
+		}
+
 		private static void StartTestsTask(TaskRequest request)
 		{
 			TestRunResult abortedResult;
@@ -1110,6 +1266,7 @@ namespace AgentBridge
 			TelemetryLog.TaskFinished(_activeRecord);
 			UnsanctionedPlayGuard.RecordTaskFinish(_activeRecord.Id);
 			AgentSessionScheduler.OnTaskFinished(_activeRecord.AgentSessionId, DateTime.UtcNow);
+			CoordinationGate.ReleaseByRecord(_activeRecord, status == "success", status);
 
 			CleanupActive();
 		}
@@ -1132,6 +1289,8 @@ namespace AgentBridge
 			_activeCancellation = null;
 			_activeRecord = null;
 			_activeTaskId = null;
+			_activeRequest = null;
+			_pendingValidationKind = null;
 			_activeCSharpExecutor = null;
 			_activeRestoreLogs = null;
 
@@ -1214,6 +1373,7 @@ namespace AgentBridge
 			TaskJournal.Write(_activeRecord);
 			TelemetryLog.TaskFinished(_activeRecord);
 			AgentSessionScheduler.OnTaskFinished(_activeRecord.AgentSessionId, DateTime.UtcNow);
+			CoordinationGate.ReleaseByRecord(_activeRecord, false, "interrupted_by_domain_reload");
 
 			CleanupActive();
 		}
@@ -1262,6 +1422,8 @@ namespace AgentBridge
 				case "canceled":
 				case "interrupted_by_domain_reload":
 				case "rejected":
+				case "stale_input":
+				case "evidence_unavailable":
 					return true;
 				default:
 					return false;

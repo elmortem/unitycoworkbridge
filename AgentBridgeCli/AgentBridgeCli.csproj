@@ -6,10 +6,19 @@
     <Nullable>enable</Nullable>
     <AssemblyName>agentbridge</AssemblyName>
     <RootNamespace>AgentBridge.Cli</RootNamespace>
-    <Version>1.15.1</Version>
+    <Version>1.16.0</Version>
     <InvariantGlobalization>true</InvariantGlobalization>
     <PublishSingleFile Condition="'$(RuntimeIdentifier)' != ''">true</PublishSingleFile>
     <SelfContained Condition="'$(RuntimeIdentifier)' != ''">true</SelfContained>
     <DebugType>embedded</DebugType>
+    <!-- The linked Coordination sources also compile under Unity 2022.3 and are null-oblivious by
+         design. MSBuild cannot scope Nullable per item, so the reference-nullability warnings they
+         raise are muted project wide; every other analysis stays on. -->
+    <NoWarn>$(NoWarn);CS8600;CS8601;CS8602;CS8603;CS8604;CS8618;CS8625</NoWarn>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- The coordination protocol is one implementation shared by both halves of the bridge.
+         The CLI compiles the package sources; it never keeps a copy of them. -->
+    <Compile Include="../AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/Coordination/**/*.cs" LinkBase="Coordination" />
+  </ItemGroup>
 </Project>

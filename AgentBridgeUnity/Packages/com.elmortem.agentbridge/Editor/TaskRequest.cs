@@ -16,5 +16,10 @@ namespace AgentBridge
 		public string Note;
 		public int PlaySeconds;
 		public bool Fresh;
+
+		// coordination-v1. Absent on a legacy submission, which is still accepted in a project
+		// that has no active registrations.
+		public string CoordinationWindowToken;
+		public string CoordinationStepId;
 	}
 }

@@ -14,6 +14,8 @@ try
 	RunForeignHostTests(root);
 	RunScratchTests(root);
 	RunSessionOptionTests();
+	RunCoordinationOptionTests();
+	RunEvidenceFormattingTests();
 	RunContentionFormattingTests();
 	RunWakePolicyTests();
 	RunBackgroundTickTimerTests();
@@ -281,6 +283,70 @@ static void RunSessionOptionTests()
 
 	var none = CliOptions.Parse(new[] { "csharp", "Task.cs" });
 	Expect(none.Session == null && none.Note == null, "omitted session and note must stay unset");
+}
+
+static void RunCoordinationOptionTests()
+{
+	var coordinated = CliOptions.Parse(new[]
+	{
+		"tests", "--mode", "EditMode", "--session", "AB-1", "--coord-window", "w-abc", "--coord-step", "V1"
+	});
+	Expect(coordinated.Error == null, "coordination flags must parse");
+	Expect(coordinated.CoordinationWindowToken == "w-abc", "the window token must be kept verbatim");
+	Expect(coordinated.CoordinationStepId == "V1", "the step id must be kept verbatim");
+	Expect(
+		coordinated.Arguments.SequenceEqual(new[] { "tests", "--mode", "EditMode" }),
+		"coordination flags must not leak into the positional arguments the tests parser reads");
+
+	var legacy = CliOptions.Parse(new[] { "tests", "--mode", "EditMode" });
+	Expect(legacy.CoordinationWindowToken == null && legacy.CoordinationStepId == null,
+		"a legacy submission must stay free of coordination fields");
+
+	var coord = CliOptions.Parse(new[]
+	{
+		"coord", "register", "--session", "AB-1", "--spec", "tdd_x", "--repo", "D:/repo",
+		"--scope", "scope.json", "--owner", "host/task"
+	});
+	Expect(coord.Error == null, "coord register flags must parse");
+	Expect(coord.SpecId == "tdd_x" && coord.RepoRoot == "D:/repo", "spec and repo must be kept");
+	Expect(coord.ScopeFile == "scope.json" && coord.Owner == "host/task", "scope and owner must be kept");
+	Expect(coord.Arguments.Count == 2, "coord and its subcommand stay positional");
+
+	var wait = CliOptions.Parse(new[] { "coord", "wait", "--after", "42", "--wait", "30" });
+	Expect(wait.Error == null && wait.AfterRevision == 42, "--after must parse a revision");
+	Expect(CliOptions.Parse(new[] { "coord", "wait", "--after", "-1" }).Error != null, "a negative revision must be rejected");
+	Expect(CliOptions.Parse(new[] { "coord", "edit-end", "--token" }).Error != null, "--token without a value must be rejected");
+
+	// A misspelled option must never silently become the name of a task file.
+	Expect(CliOptions.Parse(new[] { "csharp", "Task.cs", "--sesion", "AB-1" }).Error != null,
+		"an unknown option must be a usage error");
+	Expect(CliOptions.Parse(new[] { "--version" }).Error == null, "--version must stay a command");
+	Expect(CliOptions.Parse(new[] { "--help" }).Error == null, "--help must stay a command");
+}
+
+static void RunEvidenceFormattingTests()
+{
+	Expect(
+		BridgeClient.ClassifyResult("""{"Kind":"tests","Status":"stale_input","Tests":{"failed":0}}""") == 1,
+		"a stale result must never exit 0, however green NUnit was");
+	Expect(
+		BridgeClient.ClassifyResult("""{"Kind":"tests","Status":"evidence_unavailable"}""") == 1,
+		"an unverifiable result must not be an acceptance");
+
+	var stale = TaskResultFormatter.FormatHuman(
+		"""{"Id":"Task_t","Kind":"tests","Status":"stale_input","Tests":{"passed":12,"failed":0,"skipped":0,"inconclusive":0,"total":12,"duration":1.5},"Evidence":{"Validity":"stale","InputDigest":"0123456789abcdef0011","EndInputDigest":"ffff","WindowId":"R0007","Reason":"the inputs changed while the validation ran","ArtifactsPresent":true}}""");
+	Expect(stale.Contains("tests: stale_input", StringComparison.Ordinal), "the status must lead the human line");
+	Expect(stale.Contains("Evidence: stale", StringComparison.Ordinal), "validity must be visible without a JSON parser");
+	Expect(stale.Contains("the inputs changed while the validation ran", StringComparison.Ordinal), "the reason must be shown");
+	Expect(stale.Contains("Window: R0007", StringComparison.Ordinal), "the window must be shown");
+	Expect(stale.Contains("Inputs: 0123456789abcdef", StringComparison.Ordinal), "the input digest prefix must be shown");
+
+	var valid = TaskResultFormatter.FormatHuman(
+		"""{"Id":"Task_v","Kind":"compile","Status":"success","Evidence":{"Validity":"valid","InputDigest":"abc","EndInputDigest":"abc","WindowId":"","Reason":"","ArtifactsPresent":true}}""");
+	Expect(valid.Contains("Evidence: valid", StringComparison.Ordinal), "a valid result must say so too");
+
+	var legacy = TaskResultFormatter.FormatHuman("""{"Id":"Task_l","Kind":"compile","Status":"success"}""");
+	Expect(!legacy.Contains("Evidence", StringComparison.Ordinal), "a record without evidence must still format");
 }
 
 static void RunContentionFormattingTests()

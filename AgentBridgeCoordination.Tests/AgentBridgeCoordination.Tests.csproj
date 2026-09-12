@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <AssemblyName>AgentBridgeCoordination.Tests</AssemblyName>
+    <RootNamespace>AgentBridge.Coordination.Tests</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The engine, the store and the client codec exactly as the bridge ships them. The shared
+         sources arrive through the CLI assembly so they are compiled once, not copied. -->
+    <ProjectReference Include="../AgentBridgeCli/AgentBridgeCli.csproj" />
+    <!-- Evidence input hashing and observation are pure System.IO and compile outside Unity, so
+         the digest and the observer are tested here and not only inside the editor. -->
+    <Compile Include="../AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/ValidationInputSnapshot.cs" Link="ValidationInputSnapshot.cs" />
+    <Compile Include="../AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/ValidationInputMonitor.cs" Link="ValidationInputMonitor.cs" />
+    <Compile Include="../AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/TestCacheIndex.cs" Link="TestCacheIndex.cs" />
+    <Compile Include="../AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/TestCacheEntryInfo.cs" Link="TestCacheEntryInfo.cs" />
+  </ItemGroup>
+</Project>

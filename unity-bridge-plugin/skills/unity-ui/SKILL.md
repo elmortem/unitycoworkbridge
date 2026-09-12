@@ -83,6 +83,7 @@ description: "Use this skill for any uGUI layout work in a Unity project via Age
 - Поле `Contention` в результате задачи показывает, сколько чужих сессий ждёт редактор. Закончил серию правок — вызови `agentbridge release --session <id>`, не жди таймаута.
 - Пока чужая сессия держит редактор, команда честно ждёт в очереди и печатает в stderr позицию (`queued <n>s, position <p>/<total>, holder <id>`). Это не зависание — не отменяй команду и не пересоздавай задачу.
 - Открытый Prefab Stage и сцены запоминаются на сессию: когда редактор возвращается к тебе, мост восстанавливает то, в чём ты работал.
+- Если проект координируется по `coordination-v1`, `ui`-задача без токена окна получает `rejected` с `coordination_required`. Это не поломка вёрстки: возьми окно `--kind editor` с шагом `Kind: "ui"` и `PayloadSha256` твоего `*.ui.json`, затем передай `--coord-window <token> --coord-step <id>`. Порядок команд и проверка поддержки (`agentbridge coord capabilities`) описаны в скилле `unity-bridge`; сам решать за протокол и писать в служебные файлы моста нельзя.
 
 ## Открытый Prefab Stage и dirty-сцены
 

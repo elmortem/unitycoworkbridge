@@ -22,6 +22,8 @@ Unity Agent Bridge — мост между ИИ-агентом и живым Uni
 ```
 AgentBridgeCli/                     .NET 8 CLI `agentbridge` — клиент моста
 AgentBridgeCli.Tests/               Тесты CLI: обычная консоль (Program.cs), без xUnit
+AgentBridgeCoordination.Tests/      Тесты coordination-v1/evidence-v1: консоль, `--group state|store|all`,
+                                    дочерние процессы для гонок и обрывов
 AgentBridgeUnity/                   Unity 2022.3.62f2 — хост-проект пакета
   Assets/Tests/Editor/              EditMode-тесты моста (probe, guardrail, arbiter)
   Assets/Tests/PlayMode/            PlayMode-тесты
@@ -29,16 +31,19 @@ AgentBridgeUnity/                   Unity 2022.3.62f2 — хост-проект 
   ProjectSettings/AgentBridge.json  Настройки моста (таймауты, политики сцен, KeepCompletedCount)
 unity-bridge-plugin/                Плагин Claude Code: скиллы unity-bridge и unity-ui
 Docs/                               Шаблоны UNITYAGENT*.md, заметки, TDD-документы
-scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-agentbridge.ps1/.sh
+scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-agentbridge.ps1/.sh,
+                                    verify-coordination.ps1 (живая приёмка coordination-v1 через CLI)
 .github/workflows/                  agentbridge-cli.yml (релиз CLI), release-contract.yml (версии + ZIP)
 ```
 
 ### CLI (`AgentBridgeCli/`)
 
 Команды: `csharp`, `ui`, `sceneshot`, `compile`, `tests`, `play`, `stopplay`, `release`, `wait`,
-`status`, `doctor`. Общие флаги: `--project`, `--wait`, `--format json|human`, `--session`, `--note`.
-Коды выхода: `0` успех, `1` терминальный отказ задачи (включая `test_failure`), `2` ожидание клиента
-исчерпано, `3` проект/мост недоступны или ошибка использования.
+`status`, `doctor`, `coord`. Общие флаги: `--project`, `--wait`, `--format json|human`, `--session`,
+`--note`, `--coord-window`, `--coord-step`. Неизвестный флаг — ошибка использования, а не позиционный
+аргумент. Коды выхода: `0` успех, `1` терминальный отказ задачи (включая `test_failure`,
+`stale_input`, `evidence_unavailable`), `2` ожидание клиента исчерпано, `3` проект/мост недоступны
+или ошибка использования.
 
 - `AgentBridgeApplication.cs` — диспетчер команд
 - `CliOptions.cs` — разбор аргументов и валидация флагов
@@ -51,6 +56,9 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
 - `ManualPlayPolicy.cs` — решение о захвате ничейного плеймода: CLI сам гасит его перед задачей агента
 - `TelemetryLog.cs` — клиентская половина телеметрии в `Logs/AgentBridge-client-*.jsonl`;
   включённость берётся из `status.json`, а не из настроек проекта
+- Координация: `CoordinationCommands.cs` (группа `coord`, диспетчеризуется до требования живого
+  редактора), `CoordinationJsonCodec.cs` (System.Text.Json, строгий разбор scope/plan),
+  `CoordinationResultFormatter.cs`
 
 ### Пакет (`AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/`)
 
@@ -60,8 +68,18 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
   `SceneShot/SceneShotTaskExecutor.cs`, `Ui/UiTaskRunner.cs`
 - Компиляция: `RoslynResolver.cs`, `RoslynCompiler.cs`, `ReferenceCatalog.cs`,
   `SourceGuardrail.cs` (отклонение блокирующих и модальных API до исполнения)
+- Координация: общая папка `Coordination/` (namespace `AgentBridge.Coordination`, без UnityEngine —
+  эти же исходники компилирует CLI): `CoordinationEngine.cs` (чистая машина состояний),
+  `CoordinationFileStore.cs` (межпроцессная транзакция), `CoordinationWaiter.cs`,
+  `CoordinationPathPolicy.cs`, `CoordinationScope.cs`, `CoordinationPlanRules.cs`, DTO по файлам.
+  Адаптеры вне общей папки: `CoordinationUnityCodec.cs` (JsonUtility), `CoordinationEditorAdapter.cs`
+  (одна неблокирующая попытка блокировки за тик, подтверждение окна), `CoordinationGate.cs`
+  (единственный вход для запуска, кэша и присоединения)
+- Достоверность: `EvidenceRecord.cs`, `ValidationInputSnapshot.cs` (SHA-256 содержимого входов),
+  `ValidationInputMonitor.cs`, `ValidationEvidence.cs`, `EvidenceClassification.cs`
 - Кэш: `CompileFingerprint.cs`, `CompileCacheStore.cs`, `TestFingerprint.cs`, `TestCacheQuery.cs`,
-  `TestRunDumpStore.cs`
+  `TestRunDumpStore.cs` (test-cache-v2: отдельные entry-файлы и атомарный индекс),
+  `TestCacheIndex.cs`, `TestCacheEntryInfo.cs`
 - Сцены и плей мод: `SceneSafetyGuard.cs`, `SceneDirtyWatcher.cs`, `AgentSceneManager.cs`,
   `PlaySessionManager.cs`, `PlayModeSceneRecovery.cs`, `UnsanctionedPlayGuard.cs`, `FocusGuard.cs`
 - Тик и пробуждение: `EditorTickPump.cs` (единственный владелец будильника, `ShouldSignal`),
@@ -108,6 +126,9 @@ unity-bridge-plugin.zip             собранный артефакт, зак�
 1. Определи, какие из трёх компонентов задеты (`AgentBridgeCli/*`, `AgentBridgeCli.Tests/*` → CLI;
    `AgentBridgeUnity/Packages/com.elmortem.agentbridge/*` → пакет;
    `unity-bridge-plugin/.claude-plugin/*` или `unity-bridge-plugin/skills/*` → плагин).
+   Особый случай: `AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/Coordination/*` живёт в
+   пакете, но компилируется и в CLI через `<Compile Include>` — правка там задевает **оба**
+   компонента, обе версии поднимаются.
 2. Подними версию каждого задетого компонента в его файле версии (таблица выше). Багфикс — patch,
    новое поведение — minor.
 3. Пересобери плагин — **всегда**, даже если менялся только Unity-пакет или CLI: ZIP закоммичен, и
@@ -127,6 +148,15 @@ unity-bridge-plugin.zip             собранный артефакт, зак�
    dotnet build AgentBridgeCli/AgentBridgeCli.csproj -c Release
    dotnet run --project AgentBridgeCli.Tests/AgentBridgeCli.Tests.csproj -c Release
    ```
+
+5. Прогони тесты координации, если трогал `Editor/Coordination/`, evidence или кэш тестов.
+   Папка `Coordination/` компилируется и Unity, и CLI — правка в ней задевает оба компонента:
+
+   ```bash
+   dotnet run --project AgentBridgeCoordination.Tests/AgentBridgeCoordination.Tests.csproj -c Release -- --group all
+   ```
+
+   Успешный прогон заканчивается `Coordination: PASS` и перечнем покрытых сценариев.
 
 **Никогда не собирай ZIP через `Compress-Archive`.** На Windows он пишет обратные слэши в имена
 записей, и потребитель падает с `Zip file contains path with invalid characters`. Канонический

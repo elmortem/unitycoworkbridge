@@ -87,6 +87,7 @@ internal static class TaskResultFormatter
 			AppendTestDetails(output, tests);
 		}
 
+		AppendEvidence(output, root);
 		AppendLabeledValue(output, "Result", GetString(root, "ReturnValue"));
 		AppendStringArray(output, root, "Logs", "Logs");
 		AppendDiagnostics(output, root);
@@ -137,6 +138,42 @@ internal static class TaskResultFormatter
 			}
 
 			AppendIndented(output, GetString(failure, "stacktrace"));
+		}
+	}
+
+	// The validity of a validation result has to be readable without a JSON parser: an agent that
+	// only reads the human line must not mistake a stale run for an acceptance.
+	private static void AppendEvidence(StringBuilder output, JsonElement root)
+	{
+		if (!root.TryGetProperty("Evidence", out var evidence) || evidence.ValueKind != JsonValueKind.Object)
+		{
+			return;
+		}
+
+		var validity = GetString(evidence, "Validity");
+		if (string.IsNullOrWhiteSpace(validity))
+		{
+			return;
+		}
+
+		output.AppendLine().Append("Evidence: ").Append(validity);
+
+		var reason = GetString(evidence, "Reason");
+		if (!string.IsNullOrWhiteSpace(reason))
+		{
+			output.Append(" (").Append(reason).Append(')');
+		}
+
+		var window = GetString(evidence, "WindowId");
+		if (!string.IsNullOrWhiteSpace(window))
+		{
+			output.AppendLine().Append("Window: ").Append(window);
+		}
+
+		var digest = GetString(evidence, "InputDigest");
+		if (!string.IsNullOrWhiteSpace(digest))
+		{
+			output.AppendLine().Append("Inputs: ").Append(digest[..Math.Min(16, digest.Length)]);
 		}
 	}
 

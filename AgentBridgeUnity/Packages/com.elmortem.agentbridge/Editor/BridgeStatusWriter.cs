@@ -16,7 +16,10 @@ namespace AgentBridge
 
 		private static readonly bool Suspended = Application.isBatchMode;
 
+		private const double CoordinationSyncIntervalSeconds = 2d;
+
 		private static double _lastBeatTime = double.MinValue;
+		private static double _lastCoordinationSync = double.MinValue;
 
 		static BridgeStatusWriter()
 		{
@@ -56,7 +59,8 @@ namespace AgentBridge
 				: null;
 			Current.PlaySessionDeadlineUtc = playSession != null ? playSession.DeadlineUtc : null;
 			Current.QueuedTasks = new QueuedTaskStatus[0];
-			Current.Capabilities = new[] { "csharp", "ui", "sceneshot", "compile", "tests", "release", "play", "stopplay" };
+			Current.Capabilities = BuildCapabilities();
+			RefreshCoordination();
 
 			RoslynLocation location = RoslynResolver.ResolveConfigured();
 			Current.RoslynReady = location.Available;
@@ -122,6 +126,75 @@ namespace AgentBridge
 		{
 			Beat();
 			SyncPlayingFlag();
+			SyncCoordination();
+		}
+
+		// Capabilities are additive and independent: a build may serve tasks without being able to
+		// coordinate, and a client must be able to tell those apart before it offers a command.
+		private static string[] BuildCapabilities()
+		{
+			var capabilities = new System.Collections.Generic.List<string>
+			{
+				"csharp", "ui", "sceneshot", "compile", "tests", "release", "play", "stopplay",
+				"evidence-v1", "test-cache-v2"
+			};
+
+			if (CoordinationEditorAdapter.Available)
+			{
+				capabilities.Add("coordination-v1");
+			}
+
+			return capabilities.ToArray();
+		}
+
+		private static void SyncCoordination()
+		{
+			double now = EditorApplication.timeSinceStartup;
+			if (now - _lastCoordinationSync < CoordinationSyncIntervalSeconds)
+			{
+				return;
+			}
+
+			_lastCoordinationSync = now;
+			bool active = Current.CoordinationActive;
+			int participants = Current.CoordinationParticipants;
+			long revision = Current.CoordinationRevision;
+			string window = Current.CoordinationWindowSession;
+
+			RefreshCoordination();
+
+			if (active == Current.CoordinationActive
+				&& participants == Current.CoordinationParticipants
+				&& revision == Current.CoordinationRevision
+				&& window == Current.CoordinationWindowSession)
+			{
+				return;
+			}
+
+			Write();
+		}
+
+		private static void RefreshCoordination()
+		{
+			Current.CoordinationUnavailable = CoordinationEditorAdapter.Available
+				? null
+				: CoordinationEditorAdapter.UnavailableReason;
+
+			Coordination.CoordinationState state = CoordinationEditorAdapter.Snapshot;
+			if (state == null)
+			{
+				Current.CoordinationActive = false;
+				Current.CoordinationParticipants = 0;
+				Current.CoordinationRevision = 0;
+				Current.CoordinationWindowSession = null;
+				return;
+			}
+
+			Coordination.CoordinationGrant window = state.FindWindowGrant();
+			Current.CoordinationActive = state.Participants.Count > 0;
+			Current.CoordinationParticipants = state.Participants.Count;
+			Current.CoordinationRevision = state.Revision;
+			Current.CoordinationWindowSession = window != null ? window.Session : null;
 		}
 
 		// With Enter Play Mode Options disabling the domain reload, a manual play toggle never

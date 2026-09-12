@@ -9,12 +9,29 @@ internal sealed class CliOptions
 	public string? Session { get; private set; }
 	public string? Note { get; private set; }
 	public bool Fresh { get; private set; }
+
+	// coordination-v1
+	public string? SpecId { get; private set; }
+	public string? RepoRoot { get; private set; }
+	public string? ScopeFile { get; private set; }
+	public string? PlanFile { get; private set; }
+	public string? Owner { get; private set; }
+	public string? RequestUuid { get; private set; }
+	public string? Token { get; private set; }
+	public string? Kind { get; private set; }
+	public string? TargetSession { get; private set; }
+	public string? Reason { get; private set; }
+	public string? CoordinationWindowToken { get; private set; }
+	public string? CoordinationStepId { get; private set; }
+	public long AfterRevision { get; private set; }
+
 	public List<string> Arguments { get; } = new();
 	public string? Error { get; private set; }
 
 	private const string SessionError = "--session must be 1-64 characters of A-Za-z0-9_-";
 	private const string NoteError = "--note must be 1 to 200 characters";
 	private const string SecondsError = "--seconds requires an integer from 1 to 86400";
+	private const string AfterError = "--after requires a non-negative revision number";
 
 	public static CliOptions Parse(string[] args)
 	{
@@ -157,10 +174,231 @@ internal sealed class CliOptions
 				continue;
 			}
 
+			if (TryTakeText(options, args, ref index, argument, "--spec", value => options.SpecId = value, out var handled))
+			{
+				if (!handled)
+				{
+					return options;
+				}
+
+				continue;
+			}
+
+			if (TryTakeText(options, args, ref index, argument, "--repo", value => options.RepoRoot = value, out handled))
+			{
+				if (!handled)
+				{
+					return options;
+				}
+
+				continue;
+			}
+
+			if (TryTakeText(options, args, ref index, argument, "--scope", value => options.ScopeFile = value, out handled))
+			{
+				if (!handled)
+				{
+					return options;
+				}
+
+				continue;
+			}
+
+			if (TryTakeText(options, args, ref index, argument, "--plan", value => options.PlanFile = value, out handled))
+			{
+				if (!handled)
+				{
+					return options;
+				}
+
+				continue;
+			}
+
+			if (TryTakeText(options, args, ref index, argument, "--owner", value => options.Owner = value, out handled))
+			{
+				if (!handled)
+				{
+					return options;
+				}
+
+				continue;
+			}
+
+			if (TryTakeText(options, args, ref index, argument, "--request", value => options.RequestUuid = value, out handled))
+			{
+				if (!handled)
+				{
+					return options;
+				}
+
+				continue;
+			}
+
+			if (TryTakeText(options, args, ref index, argument, "--token", value => options.Token = value, out handled))
+			{
+				if (!handled)
+				{
+					return options;
+				}
+
+				continue;
+			}
+
+			if (TryTakeText(options, args, ref index, argument, "--kind", value => options.Kind = value, out handled))
+			{
+				if (!handled)
+				{
+					return options;
+				}
+
+				continue;
+			}
+
+			if (TryTakeText(options, args, ref index, argument, "--target-session", value => options.TargetSession = value, out handled))
+			{
+				if (!handled)
+				{
+					return options;
+				}
+
+				continue;
+			}
+
+			if (TryTakeText(options, args, ref index, argument, "--reason", value => options.Reason = value, out handled))
+			{
+				if (!handled)
+				{
+					return options;
+				}
+
+				continue;
+			}
+
+			if (TryTakeText(options, args, ref index, argument, "--coord-window",
+					value => options.CoordinationWindowToken = value, out handled))
+			{
+				if (!handled)
+				{
+					return options;
+				}
+
+				continue;
+			}
+
+			if (TryTakeText(options, args, ref index, argument, "--coord-step",
+					value => options.CoordinationStepId = value, out handled))
+			{
+				if (!handled)
+				{
+					return options;
+				}
+
+				continue;
+			}
+
+			if (argument == "--after")
+			{
+				if (!TryTakeValue(args, ref index, out var value) || !TrySetAfter(options, value))
+				{
+					options.Error = AfterError;
+					return options;
+				}
+
+				continue;
+			}
+
+			if (argument.StartsWith("--after=", StringComparison.Ordinal))
+			{
+				if (!TrySetAfter(options, argument[8..]))
+				{
+					options.Error = AfterError;
+					return options;
+				}
+
+				continue;
+			}
+
+			// An unknown flag is a usage error, not a positional argument: a misspelled option must
+			// never become the name of a task file. Two flags that are really commands and the
+			// per-command filters of 'tests' stay positional, because their own parser owns them.
+			if (argument.StartsWith("--", StringComparison.Ordinal) && !IsCommandLocal(argument))
+			{
+				options.Error = "unknown option: " + argument;
+				return options;
+			}
+
 			options.Arguments.Add(argument);
 		}
 
 		return options;
+	}
+
+	// Both spellings of a plain text option in one place. handled=false means the flag matched but
+	// its value was missing, and options.Error already says so.
+	private static bool TryTakeText(
+		CliOptions options,
+		string[] args,
+		ref int index,
+		string argument,
+		string name,
+		Action<string> assign,
+		out bool handled)
+	{
+		handled = true;
+		if (argument == name)
+		{
+			if (!TryTakeValue(args, ref index, out var value))
+			{
+				options.Error = name + " requires a value";
+				handled = false;
+			}
+			else
+			{
+				assign(value);
+			}
+
+			return true;
+		}
+
+		var prefix = name + "=";
+		if (!argument.StartsWith(prefix, StringComparison.Ordinal))
+		{
+			return false;
+		}
+
+		var inline = argument[prefix.Length..];
+		if (string.IsNullOrWhiteSpace(inline))
+		{
+			options.Error = name + " requires a value";
+			handled = false;
+			return true;
+		}
+
+		assign(inline);
+		return true;
+	}
+
+	private static bool IsCommandLocal(string argument)
+	{
+		var name = argument;
+		var equals = argument.IndexOf('=', StringComparison.Ordinal);
+		if (equals > 0)
+		{
+			name = argument[..equals];
+		}
+
+		return name is "--help" or "--version" or "--mode" or "--assembly" or "--test" or "--category";
+	}
+
+	private static bool TrySetAfter(CliOptions options, string value)
+	{
+		if (!long.TryParse(value, out var revision) || revision < 0)
+		{
+			return false;
+		}
+
+		options.AfterRevision = revision;
+		return true;
 	}
 
 	private static bool TryTakeValue(string[] args, ref int index, out string value)

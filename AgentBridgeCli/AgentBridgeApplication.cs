@@ -38,6 +38,14 @@ internal static class AgentBridgeApplication
 
 		var command = options.Arguments[0];
 		var commandArguments = options.Arguments.Skip(1).ToArray();
+
+		// Coordination answers before the editor is asked for anything. Registering, waiting and
+		// reading the queue must work while Unity is busy, reloading, or not even running.
+		if (command == "coord")
+		{
+			return CoordinationCommands.Run(projectRoot, commandArguments, options);
+		}
+
 		var paths = new BridgePaths(projectRoot);
 		paths.EnsureScratch();
 		var health = BridgeInspector.Inspect(projectRoot);
@@ -65,7 +73,11 @@ internal static class AgentBridgeApplication
 		// Whether the bridge keeps telemetry is the editor's setting, and the status file is the
 		// only place the client can read it from.
 		var telemetry = new TelemetryLog(projectRoot, health.Bridge?.TelemetryEnabled ?? false);
-		var client = new BridgeClient(projectRoot, options.Format, options.Session, options.Note, telemetry);
+		var client = new BridgeClient(projectRoot, options.Format, options.Session, options.Note, telemetry)
+		{
+			CoordinationWindowToken = options.CoordinationWindowToken,
+			CoordinationStepId = options.CoordinationStepId
+		};
 		switch (command)
 		{
 			case "csharp":
@@ -348,15 +360,18 @@ internal static class AgentBridgeApplication
 			  play [--seconds N] --note <intent> --session <id>   open a play session; only csharp and sceneshot run inside it
 			  stopplay [--session <id>]  end your play session, or an unsanctioned one anybody left behind
 			  wait <TaskId>
+			  coord <command>            coordination-v1 between several agents; see 'agentbridge coord help'
 
 			global options:
 			  --project <path>   Unity project root; otherwise discovered from cwd
 			  --wait <seconds>   client wait timeout, default 110
-			  --seconds <n>      play session length; defaults to the editor setting (30)
+			  --seconds <n>      play session length, or a coordination grant budget
 			  --format <value>   json (default, machine-readable) or human for every command
 			  --session <id>     agent session for fair scheduling
 			  --note <text>      intent shown to the session holding the editor
-			  --fresh            force a real run for tests/compile, ignore cached results
+			  --fresh            force a real run for tests/compile, ignore cached results and attaching
+			  --coord-window <token>  window token from 'coord request', required once a project is coordinated
+			  --coord-step <id>       the planned step this task executes
 			  --version
 			""");
 	}

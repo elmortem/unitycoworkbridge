@@ -236,6 +236,7 @@ namespace AgentBridge
 			if (!TaskJournal.TryRead(taskId, out record))
 			{
 				TestRunDumpStore.DeletePending(testMode);
+				ValidationEvidence.Abort();
 				TestRunAttachments.Requeue(taskId);
 				return;
 			}
@@ -248,14 +249,35 @@ namespace AgentBridge
 			record.Logs.AddRange(SceneDirtyWatcher.DrainLogs());
 			SceneDirtyWatcher.Disarm(taskId);
 
+			TestRunDump dump;
+			bool hasDump = TestRunDumpStore.TryTakePending(testMode, out dump) && dump.SourceTaskId == taskId;
+			bool ranCleanly = run != null && !run.aborted && string.IsNullOrEmpty(recoveryError);
+
+			// The evidence is computed before the status, because a green NUnit run over inputs
+			// that moved is not a success: it is a result about a project that no longer exists.
+			EvidenceRecord evidence = ValidationEvidence.Complete(taskId, ArtifactsExist(record));
+			record.Evidence = evidence;
 			record.Tests = run;
-			if (run == null || run.aborted || !string.IsNullOrEmpty(recoveryError))
+
+			if (!ranCleanly)
 			{
 				record.Status = "runtime_error";
 				if (!string.IsNullOrEmpty(recoveryError))
 				{
 					record.Logs.Add(recoveryError);
 				}
+			}
+			else if (evidence.Validity == EvidenceRecord.Stale)
+			{
+				record.Status = "stale_input";
+				record.Logs.Add("stale_input: " + evidence.Reason);
+			}
+			else if (evidence.Validity == EvidenceRecord.Unknown && EvidenceClassification.RequiresEvidence())
+			{
+				// Inside a validation window an unknown result is not a new acceptance. The NUnit
+				// numbers stay in the record as diagnostics; the status says they prove nothing.
+				record.Status = "evidence_unavailable";
+				record.Logs.Add("evidence_unavailable: " + evidence.Reason);
 			}
 			else
 			{
@@ -265,11 +287,11 @@ namespace AgentBridge
 			record.FinishedAtUtc = System.DateTime.UtcNow.ToString("o");
 			TaskJournal.Write(record);
 			TelemetryLog.TaskFinished(record);
+			CoordinationGate.ReleaseByRecord(record, record.Status == "success", record.Status);
 
-			TestRunDump dump;
-			bool promoted = TestRunDumpStore.TryTakePending(testMode, out dump)
-				&& dump.SourceTaskId == taskId
-				&& run != null && !run.aborted && string.IsNullOrEmpty(recoveryError)
+			bool promoted = hasDump
+				&& ranCleanly
+				&& evidence.Validity == EvidenceRecord.Valid
 				&& !string.IsNullOrEmpty(startSources)
 				&& startSources == TestFingerprint.Sources();
 
@@ -279,13 +301,52 @@ namespace AgentBridge
 				// PlayMode scene recovery — is done, so this is the state the results describe.
 				dump.Fingerprint = TestFingerprint.Current();
 				dump.SourceFingerprint = startSources;
-				TestRunDumpStore.Write(dump);
-				TestRunAttachments.Resolve(taskId, dump);
+				dump.InputDigest = evidence.InputDigest;
+				dump.Validity = evidence.Validity;
+				dump.Artifacts = new List<string>(record.Artifacts);
+				TestRunDumpStore.Publish(dump, System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+				TestRunAttachments.Resolve(taskId, dump, evidence);
+			}
+			else if (hasDump && ranCleanly)
+			{
+				// The run produced real results that simply cannot be accepted. Everyone attached
+				// to it gets the same verdict instead of being sent around the queue again.
+				TestRunAttachments.Terminate(
+					taskId,
+					record.Status,
+					"the run it joined ended as " + record.Status + ": " + evidence.Reason,
+					evidence);
 			}
 			else
 			{
 				TestRunAttachments.Requeue(taskId);
 			}
+		}
+
+		private static bool ArtifactsExist(TaskRecord record)
+		{
+			if (record.Artifacts == null || record.Artifacts.Count == 0)
+			{
+				return true;
+			}
+
+			foreach (string artifact in record.Artifacts)
+			{
+				if (string.IsNullOrEmpty(artifact))
+				{
+					continue;
+				}
+
+				string path = System.IO.Path.IsPathRooted(artifact)
+					? artifact
+					: System.IO.Path.Combine(BridgePaths.WorkingRoot, artifact);
+				if (!System.IO.File.Exists(path))
+				{
+					return false;
+				}
+			}
+
+			return true;
 		}
 
 		public static void FinalizeRecoveredPlayModeRun(string taskId, TestRunResult run, string recoveryError)

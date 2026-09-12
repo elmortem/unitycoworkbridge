@@ -28,4 +28,9 @@ internal sealed class BridgeStatus
 	public string? PlaySessionDeadlineUtc { get; set; }
 	public QueuedTaskStatus[] QueuedTasks { get; set; } = Array.Empty<QueuedTaskStatus>();
 	public string[] Capabilities { get; set; } = Array.Empty<string>();
+	public bool CoordinationActive { get; set; }
+	public int CoordinationParticipants { get; set; }
+	public long CoordinationRevision { get; set; }
+	public string? CoordinationWindowSession { get; set; }
+	public string? CoordinationUnavailable { get; set; }
 }

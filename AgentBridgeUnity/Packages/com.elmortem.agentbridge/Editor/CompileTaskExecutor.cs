@@ -17,7 +17,10 @@ namespace AgentBridge
 		private static bool _subscribed;
 		private static double _startTime;
 
-		public static void Begin(string taskId)
+		// Split in two so evidence can be captured between them. The refresh writes the .meta files
+		// the import owes, and a snapshot taken before that would call the bridge's own expected
+		// import metadata a foreign change.
+		public static void BeginImport(string taskId)
 		{
 			SessionState.SetString(PendingCompileTaskKey, taskId);
 			_startTime = EditorApplication.timeSinceStartup;
@@ -25,9 +28,13 @@ namespace AgentBridge
 
 			EnsureSubscribed();
 
-			SessionState.SetString(PendingCompileFingerprintKey, CompileFingerprint.Current());
-
 			AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+		}
+
+		public static void RequestCompilation()
+		{
+			_startTime = EditorApplication.timeSinceStartup;
+			SessionState.SetString(PendingCompileFingerprintKey, CompileFingerprint.Current());
 			CompilationPipeline.RequestScriptCompilation();
 		}
 

@@ -23,6 +23,12 @@ namespace AgentBridge
 		public string SessionId;
 		public string AgentSessionId;
 		public ContentionInfo Contention = new ContentionInfo();
+
+		// evidence-v1. Present on every validation result; a record without it is unknown, never
+		// an implicit pass.
+		public EvidenceRecord Evidence;
+		public string CoordinationWindowToken;
+		public string CoordinationStepId;
 		public string StartedAtUtc;
 		public string FinishedAtUtc;
 	}

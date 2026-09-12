@@ -79,6 +79,14 @@ namespace AgentBridge
 					return;
 				}
 
+				// Joining a run consumes the step exactly like starting one: the plan authorises a
+				// result, not a process.
+				string reserveError;
+				if (!CoordinationGate.TryReserve(request, task.Id, out reserveError))
+				{
+					continue;
+				}
+
 				var record = new TaskRecord
 				{
 					Id = task.Id,
@@ -88,6 +96,8 @@ namespace AgentBridge
 					Hash = TaskFileHash.HashOf(task.TaskFilePath, null),
 					SessionId = BridgeStatusWriter.Current.SessionId,
 					AgentSessionId = task.EffectiveSessionId,
+					CoordinationWindowToken = request.CoordinationWindowToken,
+					CoordinationStepId = request.CoordinationStepId,
 					StartedAtUtc = DateTime.UtcNow.ToString("o")
 				};
 

@@ -211,6 +211,26 @@ namespace AgentBridge
 				return true;
 			}
 
+			return IsTestScenePath(normalized, null);
+		}
+
+		// The same answer without touching a single Unity API, so the evidence layer can ask it
+		// from a worker thread and from a file watcher callback. The caller reads the bootstrap
+		// scene path once on the main thread and passes it in.
+		public static bool IsTestScenePath(string path, string bootstrapScenePath)
+		{
+			if (string.IsNullOrEmpty(path))
+			{
+				return false;
+			}
+
+			string normalized = path.Replace('\\', '/');
+			if (!string.IsNullOrEmpty(bootstrapScenePath)
+				&& string.Equals(normalized, bootstrapScenePath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
+			{
+				return true;
+			}
+
 			return normalized.StartsWith("Assets/InitTestScene", StringComparison.Ordinal)
 				&& normalized.EndsWith(".unity", StringComparison.OrdinalIgnoreCase)
 				&& normalized.IndexOf('/', "Assets/".Length) < 0;

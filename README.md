@@ -177,11 +177,14 @@ agentbridge doctor --format human
 agentbridge release --session AB_20260813_1500_a1f
 agentbridge play --seconds 30 --note "game shot of the main menu" --session AB_20260813_1500_a1f
 agentbridge stopplay --session AB_20260813_1500_a1f
+agentbridge coord status --session AB_20260813_1500_a1f --format human
 ```
 
-Every command also accepts `--session <id>` and `--note <text>`, which identify the agent session behind the task; see [Multi-Agent Sessions](#multi-agent-sessions).
+Every command also accepts `--session <id>` and `--note <text>`, which identify the agent session behind the task; see [Multi-Agent Sessions](#multi-agent-sessions). The `coord` group is described in [Coordinating Several Agents](#coordinating-several-agents).
 
-Exit codes: `0` success, `1` a terminal task failure including `test_failure`, `2` client wait exhausted (the task is still running — retry with `agentbridge wait <TaskId>`), `3` project/bridge unavailable, protocol mismatch, or bad usage.
+Exit codes: `0` success, `1` a terminal task failure including `test_failure`, `stale_input` and `evidence_unavailable`, `2` client wait exhausted (the task is still running — retry with `agentbridge wait <TaskId>`), `3` project/bridge unavailable, protocol mismatch, or bad usage.
+
+An unknown option is now a usage error instead of a positional argument, so a misspelled `--sesion` fails loudly rather than becoming the name of a task file.
 
 Typical successful human output is deliberately short, so agents do not need a second JSON parser just to report validation:
 
@@ -324,6 +327,96 @@ Two settings in `ProjectSettings/AgentBridge.json`, both exposed in **Tools → 
 | `ContentionSliceSeconds` | `90` | How long a holder may keep working after another session starts waiting. |
 
 Restarting the Editor drops the lease but keeps the saved session contexts; a domain reload changes nothing.
+
+## Coordinating Several Agents
+
+The session scheduler above serialises *commands*. It does not serialise *file writes*, and it cannot tell whether a green test run describes the project you asked about. `coordination-v1` and `evidence-v1` add both, and only for projects that opt in: with no registered sessions every command behaves exactly as it did before.
+
+Check first — the CLI and the package version their contracts separately:
+
+```bash
+agentbridge coord capabilities --format human
+```
+
+### Rights
+
+| Right | What it allows | How it ends |
+|---|---|---|
+| **Scope** | Reserves an area of the repository. Live scopes never overlap. Registering does *not* allow writing. | `coord leave`, or a new `coord scope` |
+| **Edit grant** | One bounded package of file edits inside your scope. 15–300 s, default 120. | `coord edit-end`, after your writers really stopped |
+| **Window** | A finite plan of Unity operations, for one owner. 15–600 s, default 120. | `coord finish`, after every started task is terminal |
+
+A window is granted only when every edit grant is closed — including the future window owner's — and only when the Editor itself confirms it is free. Requesting a window does not hold your scope hostage: nobody may rewrite your code while you wait.
+
+```bash
+# once per TDD
+agentbridge coord register --session AB_A --spec my_tdd --repo D:/repo \
+  --scope scope.json --owner host/task-17
+
+# before each bounded package of edits
+agentbridge coord edit-begin --session AB_A --request $(uuidgen) --seconds 120
+#   ... write files ...
+agentbridge coord edit-end --session AB_A --token <token>
+
+# then ask for the editor, with the complete plan up front
+agentbridge coord request --session AB_A --request $(uuidgen) \
+  --kind validation --plan plan.json --seconds 300
+agentbridge coord wait --session AB_A --after <revision> --wait 30
+agentbridge tests --mode EditMode --test MyTests \
+  --session AB_A --coord-window <token> --coord-step V1
+agentbridge coord finish --session AB_A --token <token>
+```
+
+`scope.json` is `{ "Paths": ["Game/Core/", "Docs/CORE.md"] }` — repo-relative, forward slashes, a trailing `/` for directories, no globs. `plan.json` lists every step up front: `{ "Steps": [{ "Id": "V1", "Kind": "tests", "Mode": "EditMode", "Tests": ["MyTests"], "Fresh": false }], "ArtifactRoots": [], "FixtureRoots": [] }`. A `validation` window allows `compile`, `tests` and `sceneshot`; an `editor` window allows `csharp`, `ui`, `sceneshot` and `compile`. Play mode is never part of a plan — take a PlayMode test step instead.
+
+Each step is consumed once. Re-submitting the *same* task id after a domain reload rejoins its own reservation; a different task id gets `step_consumed` and needs a new window. A cached or attached result consumes the step too.
+
+While a window is waiting, active writers see `pause_requested` in `status`, `wait` and `renew`. They finish the current package and call `edit-end`. Silence is never a substitute for `edit-end`.
+
+Exit codes for `coord`: `0` success, `1` refusal or conflict, `2` `wait` expired (nothing was cancelled), `3` bad usage, unsupported path, or an unreadable store.
+
+### Recovery
+
+Five different kinds of "it stopped", and they are not interchangeable:
+
+| What happened | What the bridge does |
+|---|---|
+| The client process went away | Nothing. The request and the task live under their own ids; reconnect with `coord status --request <uuid>` or `agentbridge wait <TaskId>`. |
+| A `wait` expired | Nothing. It never cancels a request and never moves the revision. |
+| A domain reload from your own compile or PlayMode | The window, its token and its remaining steps survive. |
+| The Editor process restarted | Registrations, scopes and edit grants survive. Windows become `interrupted`; the recorded tasks are reported failed and the window closes. Ask for a new one. |
+| A writer disappeared with a live grant | The grant becomes `orphaned` and blocks new windows. Only the owner's `edit-end` clears it — the token is accepted for exactly that. |
+
+`coord abandon --target-session S --reason "<text>"` is the emergency exit for the last row. It requires an explicit human decision after that session's writers are confirmed stopped, refuses while that session has a running Unity task, closes only that session's rights, and bumps only its generation. Time passing is never a reason to call it.
+
+State lives in `Library/AgentBridge/Coordination/` behind one persistent `transaction.lock`. `coordination-v1` supports an ordinary local physical tree only: UNC paths, network drives and symlinked project roots are refused rather than falsely declared protected. The lock file is never deleted to "recover"; a damaged `state.json` is reported as `coordination_corrupt`, and a missing state next to a live marker as `coordination_recovery_required`.
+
+The coordinator hands out rights. It is **not** a filesystem sandbox: a tool that ignores the protocol can still write to disk. The defence against that is invalid evidence, below — not a promise to stop every OS write.
+
+### Evidence
+
+Every `tests` and `compile` result now carries an `Evidence` block, and `--format human` prints it as `Evidence: valid|stale|unknown`.
+
+Before a validation the bridge settles the import, hashes the *content* of every input off the main thread, installs file observers, and hashes again to close the gap between looking and watching. The inputs are `Assets/`, `Packages/`, `ProjectSettings/` and every resolved local package, including `.meta` files; `Library/`, `Temp/`, `Logs/`, `obj/` and declared fixture roots that were provably empty are excluded. Unity and package versions, the active build target and the test filter are part of the claim.
+
+This is deliberately stronger than the compile fingerprint, which hashes paths, sizes and write times. A file edited back to the same length with its timestamp restored moves the input digest and does not move the fingerprint.
+
+- **stale** — an input really changed during the run, or was changed and changed back. The NUnit numbers stay in the record as diagnostics, the terminal status becomes `stale_input` (exit 1), nothing is promoted to the cache, and every attached request gets the same verdict instead of being sent around the queue again.
+- **unknown** — the inputs could not be fully hashed or observed: an unreachable package root, an overflowed observer. Outside a coordinated validation window this is advisory and does not turn a green run red. Inside one it is not an acceptance: the status becomes `evidence_unavailable` (exit 1).
+- If the project will not hold still *before* the run, the expensive run is refused up front with `evidence_unavailable` rather than producing a result nobody can interpret.
+
+Two known limits, both reported honestly rather than papered over:
+
+- A PlayMode run reloads the domain in the middle of its own observation. The observer is reinstalled on the far side and the reason line says so; both input digests are still compared end to end, but a change made and reverted inside that reload gap is not detectable. EditMode runs have no such gap.
+- A `compile` that actually has new sources to import is reloaded by its own `AssetDatabase.Refresh` before the snapshot finishes, so it reports `Evidence: unknown (this result was produced without an input snapshot)`. The compile result itself is unaffected, and `compile` on an already-imported project reports `valid`. Acceptance that needs an input digest should rely on a `tests` step, which takes its snapshot with no refresh in front of it.
+
+The bridge's own scratch is never blamed on anybody: the temporary `Assets/InitTestScene*.unity` that the Unity Test Framework creates for a PlayMode run, and that the bridge deletes afterwards, is excluded from both the digest and the observers. An asset that merely shares that prefix is an ordinary input.
+
+### Cached test sets
+
+`test-cache-v2` keeps up to 32 completed sets in `Library/AgentBridge/TestCacheV2/`, evicting the least recently used. Each set stores its own input digest, mode, filter, per-test results and artifacts, so A → B → A on unchanged inputs costs two real runs and one cache hit instead of three runs.
+
+A hit needs an exact input digest match, the same mode, one single set that covers the whole request, a non-empty selection, `Validity = valid`, and every mandatory artifact still on disk — a screenshot that was deleted is never handed back as visual acceptance. Results from different digests are never merged. `--fresh` skips both the cache and attaching. The old single-file-per-mode cache is still readable as legacy diagnostics and is never relabelled as evidence.
 
 ## Custom Project APIs
 
