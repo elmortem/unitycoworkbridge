@@ -8,25 +8,47 @@ namespace AgentBridge
     {
         public static List<PendingTaskInfo> GetQueueSnapshot()
         {
-            var pending = BuildPendingList(_activeTaskId ?? TestRunLifecycle.TaskId);
+            return ReadQueueWindowSnapshot().Pending;
+        }
+
+        public static TaskQueueSnapshot ReadQueueWindowSnapshot()
+        {
+            var snapshot = TaskQueueSnapshot.Read(BridgePaths.Inbox, BridgePaths.Journal,
+                _activeTaskId ?? TestRunLifecycle.TaskId, DateTime.UtcNow);
+            var pending = snapshot.Pending;
             var result = new List<PendingTaskInfo>();
             foreach (var item in AgentSessionScheduler.BuildQueue(pending))
                 result.Add(pending.Find(t => t.Id == item.Id));
-            return result;
+            pending.Clear();
+            pending.AddRange(result);
+            var coordination = CoordinationEditorAdapter.Snapshot;
+            snapshot.IncludeCoordination(coordination);
+            if (!string.IsNullOrEmpty(CoordinationEditorAdapter.UnavailableReason))
+                snapshot.Errors.Add("Coordination: " + CoordinationEditorAdapter.UnavailableReason);
+            return snapshot;
+        }
+
+        public static string CancelCoordinationFromQueueWindow(string id)
+        {
+            var request = CoordinationEditorAdapter.Snapshot?.Requests.Find(r => r.Id == id);
+            if (request == null) return "Coordination request no longer exists.";
+            if (request.State != Coordination.CoordinationLimits.StateWaiting) return "Request is no longer waiting; refresh the queue.";
+            var command = CoordinationEditorAdapter.NewCommand(Coordination.CoordinationEngine.OpCancel);
+            command.Session = request.Session;
+            command.Uuid = request.Uuid;
+            if (!CoordinationEditorAdapter.TryApply(command, out var reply)) return "Coordination store is busy; try again.";
+            return reply.Ok ? null : reply.Code + ": " + reply.Message;
         }
 
         public static List<TaskRecord> GetRunningSnapshot()
         {
-            var result = new List<TaskRecord>();
-            foreach (string file in Directory.GetFiles(BridgePaths.Journal, "*.json"))
-                if (TaskJournal.TryRead(Path.GetFileNameWithoutExtension(file), out var record)
-                    && !IsTerminal(record.Status) && record.Status != "queued") result.Add(record);
-            return result;
+            return ReadQueueWindowSnapshot().Active;
         }
 
         public static bool MoveQueuedTask(string id, string beforeId)
         {
             var queue = GetQueueSnapshot();
+            queue.RemoveAll(t => t.Kind == "cancel" || t.Kind == "stopplay");
             var task = queue.Find(t => t.Id == id);
             if (task == null || id == beforeId) return false;
             if (beforeId != null && !queue.Exists(t => t.Id == beforeId)) return false;
@@ -34,7 +56,7 @@ namespace AgentBridge
             int index = beforeId == null ? queue.Count : queue.FindIndex(t => t.Id == beforeId);
             queue.Insert(index, task);
             TaskQueueOrder.Set(queue.ConvertAll(t => t.Id));
-            UpdateQueueStatus(queue);
+            UpdateQueueStatus(BuildPendingList(_activeTaskId ?? TestRunLifecycle.TaskId));
             return true;
         }
 
