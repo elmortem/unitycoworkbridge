@@ -10,6 +10,8 @@
     <DefineConstants>$(DefineConstants);$(HashPlatform)</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
+	<Compile Include="../AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/CoordinationBatchPump.cs" Link="CoordinationBatchPump.cs" />
+	<Compile Include="../AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/TaskRequest.cs" Link="TaskRequest.cs" />
     <!-- The engine, the store and the client codec exactly as the bridge ships them. The shared
          sources arrive through the CLI assembly so they are compiled once, not copied. -->
     <ProjectReference Include="../AgentBridgeCli/AgentBridgeCli.csproj" />

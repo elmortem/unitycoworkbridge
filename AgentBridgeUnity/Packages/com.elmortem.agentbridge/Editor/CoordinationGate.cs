@@ -93,6 +93,18 @@ namespace AgentBridge
 				reason = CoordinationCodes.StaleToken + ": no live window matches this token";
 				return false;
 			}
+			CoordinationRequest batch = state.FindRequest(grant.RequestId);
+			if (batch != null && batch.Automatic)
+			{
+				int index = batch.Plan.Steps.FindIndex(step => step.Id == request.CoordinationStepId);
+				if (index < 0 || request.Id != CoordinationBatch.TaskId(batch, index)
+					|| request.AgentSessionId != batch.Session
+					|| (request.Kind == "csharp" && request.EntryPointName != batch.Plan.Steps[index].PayloadName))
+				{
+					reason = "batch_owned: tasks are supplied automatically by the editor; do not resubmit planned steps";
+					return false;
+				}
+			}
 
 			return true;
 		}

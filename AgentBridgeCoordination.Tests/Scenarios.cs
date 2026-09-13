@@ -269,7 +269,7 @@ internal static class Scenarios
 		Expect(roundTripped.FindGrantBySession("a", null).Token == state.FindGrantBySession("a", null).Token,
 			"tokens must survive");
 		Expect(roundTripped.FindRequestByUuid("b", "u-b").Plan.Steps.Count == 1, "the plan must survive");
-		Expect(roundTripped.FindRequestByUuid("b", "u-b").Plan.Steps[0].PayloadSha256 == "abc123",
+		Expect(roundTripped.FindRequestByUuid("b", "u-b").Plan.Steps[0].PayloadSha256 == CoordinationDigest.Sha256("frozen source"),
 			"step payload hashes must survive");
 
 		// The same document written by Unity's JsonUtility. Kept as a literal on purpose: it is the
@@ -754,7 +754,8 @@ internal static class Scenarios
 		{
 			Id = "E1",
 			Kind = "csharp",
-			PayloadSha256 = "abc123"
+			Payload = "frozen source", PayloadName = "Task_Example",
+			PayloadSha256 = CoordinationDigest.Sha256("frozen source")
 		});
 		plan.ArtifactRoots = new[] { "Temp/AgentBridge/Artifacts/" };
 		return plan;

@@ -16,6 +16,8 @@ namespace AgentBridge.Coordination
 		// The editor process incarnation that last touched the state. A different value means the
 		// editor restarted: windows are interrupted, edit grants and scopes are not.
 		public string EditorIncarnation = "";
+		public string CompilerCycleId = "";
+		public bool InputRepairPending;
 
 		public List<CoordinationParticipant> Participants = new List<CoordinationParticipant>();
 		public List<CoordinationRequest> Requests = new List<CoordinationRequest>();

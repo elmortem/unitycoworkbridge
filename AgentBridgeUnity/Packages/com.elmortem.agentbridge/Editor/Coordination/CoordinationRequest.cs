@@ -19,6 +19,7 @@ namespace AgentBridge.Coordination
 		public CoordinationPlan Plan = new CoordinationPlan();
 		public string State = CoordinationLimits.StateWaiting;
 		public string Reason = "";
+		public bool Automatic;
 		public int Seconds;
 		public long CreatedAtMs;
 		public long UpdatedAtMs;

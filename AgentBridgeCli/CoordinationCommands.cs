@@ -8,7 +8,7 @@ namespace AgentBridge.Cli;
 // cross-process transaction.
 internal static class CoordinationCommands
 {
-	public const string CliContracts = "coordination-v1,evidence-v1,test-cache-v2";
+	public const string CliContracts = "coordination-v1,coordination-batch-v1,evidence-v1,test-cache-v2";
 	private const int LockBudgetMs = 5000;
 
 	public static int Run(string projectRoot, string[] arguments, CliOptions options)
@@ -41,6 +41,12 @@ internal static class CoordinationCommands
 		{
 			return Capabilities(projectRoot, canonical, options);
 		}
+		if (command is "submit" or "request")
+		{
+			var capabilities = BridgeInspector.Inspect(projectRoot).Bridge?.Capabilities ?? Array.Empty<string>();
+			if (!capabilities.Contains(CoordinationBatch.Capability))
+				return Fail(options, CoordinationCodes.SchemaUnsupported, "package must advertise coordination-batch-v1 before submitting executable packages");
+		}
 
 		var store = new CoordinationFileStore(
 			CoordinationPathPolicy.CoordinationRoot(canonical),
@@ -62,6 +68,7 @@ internal static class CoordinationCommands
 				"renew" => Mutate(store, options, BuildTokenCommand(CoordinationEngine.OpRenew)),
 				"finish" => Mutate(store, options, BuildTokenCommand(CoordinationEngine.OpFinish)),
 				"request" => Mutate(store, options, BuildRequest),
+				"submit" => Mutate(store, options, BuildRequest),
 				"cancel" => Mutate(store, options, BuildCancel),
 				"leave" => Mutate(store, options, BuildLeave),
 				"abandon" => Mutate(store, options, BuildAbandon),
@@ -288,6 +295,33 @@ internal static class CoordinationCommands
 		{
 			return 1;
 		}
+		try
+		{
+			foreach (var step in plan.Steps)
+			{
+				if (!string.IsNullOrEmpty(step.PayloadFile))
+				{
+					if (!string.IsNullOrEmpty(step.Payload)) throw new InvalidDataException("use PayloadFile or Payload, not both");
+					string source = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(options.PlanFile))!, step.PayloadFile));
+					if (new FileInfo(source).Length > CoordinationBatch.MaxPayloadBytes) throw new InvalidDataException("payload exceeds 4 MiB");
+					step.Payload = File.ReadAllText(source);
+					step.PayloadName = step.Kind == "csharp" ? Path.GetFileNameWithoutExtension(source) : "Payload";
+					step.PayloadFile = "";
+				}
+				if (!string.IsNullOrEmpty(step.Payload))
+				{
+					string digest = CoordinationDigest.Sha256(step.Payload);
+					if (!string.IsNullOrEmpty(step.PayloadSha256) && !string.Equals(step.PayloadSha256, digest, StringComparison.OrdinalIgnoreCase))
+						throw new InvalidDataException("payload digest mismatch for " + step.Id);
+					step.PayloadSha256 = digest;
+				}
+			}
+		}
+		catch (Exception exception)
+		{
+			error = "cannot freeze batch payload: " + exception.Message;
+			return 1;
+		}
 
 		command.Session = options.Session;
 		command.Uuid = options.RequestUuid;
@@ -510,6 +544,7 @@ internal static class CoordinationCommands
 			  edit-end --session S --token TOKEN                      confirm the writers finished
 			  renew --session S --token TOKEN [--seconds 120]         extend a still valid edit grant
 			  request --session S --request UUID --kind editor|validation --plan plan.json [--seconds 120]
+			  submit --session S --request UUID --kind editor|validation --plan plan.json [--seconds 120]
 			  finish --session S --token TOKEN                        close the window after terminal tasks
 			  cancel --session S --request UUID                       cancel a request that never started
 			  status [--session S] [--request UUID]                   one snapshot, no editor needed
@@ -519,7 +554,9 @@ internal static class CoordinationCommands
 
 			exit codes: 0 success, 1 refusal or conflict, 2 wait expired, 3 bad usage or unavailable store
 
-			work commands take --coord-window TOKEN --coord-step ID once a window is granted.
+			submit (and its request alias) freezes all payloads and queues an executable package.
+			Payload steps use PayloadFile relative to plan.json, or inline Payload + PayloadName.
+			The editor executes steps in order and closes the package itself. No task submission or finish is needed after enqueue.
 			""");
 	}
 }

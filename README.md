@@ -356,42 +356,39 @@ Check first — the CLI and the package version their contracts separately:
 agentbridge coord capabilities --format human
 ```
 
-### Rights
+### Ready packages and input edits
 
-| Right | What it allows | How it ends |
-|---|---|---|
-| **Scope** | Reserves Unity input paths in the repository. Live scopes never overlap. Writing those inputs requires an edit grant; unrelated work remains independent. | `coord leave`, or a new `coord scope` |
-| **Edit grant** | One bounded package of Unity input edits inside your scope. 15–300 s, default 120. | `coord edit-end`, after your writers really stopped |
-| **Window** | A finite plan of Unity operations, for one owner. 15–600 s, default 120. | `coord finish`, after every started task is terminal |
+Check for `coordination-batch-v1` on both CLI and package. Register a scope containing only Unity input paths. Use `edit-begin` / `edit-end` around bounded writes to those inputs; independent work needs no Bridge permission.
 
-A window is granted only when every edit grant is closed — including the future window owner's — and only when the Editor itself confirms it is free. Requesting a window preserves your scope reservation while you wait. Prepare scripts, JSON payloads and parameters before requesting it. Use event-driven `coord wait` instead of sleeping between status checks, then submit the prepared commands when granted. A `pause_requested` response concerns only coordinated Unity input writes; close that edit grant and continue independent work.
-
+Submit all executable work together:
 ```bash
-# before the first stage requiring Unity coordination
-agentbridge coord register --session AB_A --spec my_tdd --repo D:/repo \
-  --scope scope.json --owner host/task-17
-
-# before each bounded package of Unity input edits
-agentbridge coord edit-begin --session AB_A --request $(uuidgen) --seconds 120
-#   ... write Unity input files ...
-agentbridge coord edit-end --session AB_A --token <token>
-
-# then ask for the editor, with the complete plan up front
-agentbridge coord request --session AB_A --request $(uuidgen) \
-  --kind validation --plan plan.json --seconds 300
-agentbridge coord wait --session AB_A --after <revision> --wait 30
-agentbridge tests --mode EditMode --test MyTests \
-  --session AB_A --coord-window <token> --coord-step V1
-agentbridge coord finish --session AB_A --token <token>
+agentbridge coord register --session AB_A --spec my_tdd --repo D:/repo --scope scope.json --owner host/task-17
+agentbridge coord submit --session AB_A --request <uuid> --kind editor --plan plan.json --seconds 120
 ```
 
-`scope.json` is `{ "Paths": ["UnityProject/Assets/Game/Core/"] }` — repo-relative, forward slashes, a trailing `/` for directories, no globs. `plan.json` lists every step up front: `{ "Steps": [{ "Id": "V1", "Kind": "tests", "Mode": "EditMode", "Tests": ["MyTests"], "Fresh": false }], "ArtifactRoots": [], "FixtureRoots": [] }`. A `validation` window allows `compile`, `tests` and `sceneshot`; an `editor` window allows `csharp`, `ui`, `sceneshot` and `compile`. Play mode is never part of a plan — take a PlayMode test step instead.
+Example plan:
+```json
+{ "Steps": [
+  { "Id": "Build", "Kind": "csharp", "PayloadFile": "Task_Build.cs" },
+  { "Id": "Layout", "Kind": "ui", "PayloadFile": "screen.ui.json" }
+] }
+```
 
-Each step is consumed once. Re-submitting the *same* task id after a domain reload rejoins its own reservation; a different task id gets `step_consumed` and needs a new window. A cached or attached result consumes the step too.
+PayloadFile is relative to the plan file. Submission freezes UTF-8 content and its hash in the store; changing the original file cannot change queued work. Inline Payload plus PayloadName is also supported. For C#, PayloadName is the class name; file-based submission derives it from the source filename. A hash alone is not executable work and is refused before entering FIFO. Limits: 64 steps, 4 MiB total payload, 15–600 seconds of editor time (default 120).
 
-While a window is waiting, active writers see `pause_requested` in `status`, `wait` and `renew`. They finish the current package and call `edit-end`. Silence is never a substitute for `edit-end`.
+`coord request` is an alias for this complete submission. It no longer reserves an empty window. The response contains RequestId and deterministic TaskIds for every planned step, including steps that may later be skipped. Unity waits for input writers and editor recovery, executes the steps in order, stops the package on its first failed step, and closes the window automatically. No subsequent agent dispatch, polling, or `finish` is needed. A continuation requiring agent reasoning is a new package.
 
-Exit codes for `coord`: `0` success, `1` refusal or conflict, `2` `wait` expired (nothing was cancelled), `3` bad usage, unsupported path, or an unreadable store.
+Use `coord status --session AB_A --request <uuid>` or event-driven `coord wait --session AB_A --request <uuid> --after <revision> --wait 30` to observe progress. State=closed with Reason=completed means the package succeeded; failed:<step>:<reason>, expired, and interruption reasons are not success. Read an executed task with `agentbridge wait <TaskId>`. Repeating a submission with the same uuid and frozen content returns the existing request, including after completion, without repeating its effects. A different payload with the same uuid is refused.
+
+A validation plan supports compile, tests, sceneshot; an editor plan supports csharp, ui, sceneshot, compile. Test steps declare Mode (EditMode or PlayMode) and a nonempty Tests, Assemblies or Categories filter. For example: `{ "Steps": [{ "Id": "V1", "Kind": "tests", "Mode": "EditMode", "Tests": ["MyTests"] }] }`. Optional ArtifactRoots and FixtureRoots retain their evidence-v1 meaning.
+
+Scope paths are repo-relative, with forward slashes, a trailing slash for directories and no globs: `{ "Paths": ["UnityProject/Assets/Game/Core/"] }`. Edit grants last 15–300 seconds (default 120). While a ready package waits, writers see pause_requested: finish only the current Unity input edits, call edit-end, and continue independent work. Close registration with coord leave when its Unity work is done.
+
+Upgrading rejects old waiting permission-only requests with batch_required. Already running old windows drain safely; their tasks are not interrupted merely to migrate. Ordinary task commands without tokens remain supported and wait while a window is occupied. Older packages without the batch capability require the old manual request/wait/dispatch/finish workflow.
+
+Exit codes for coord: 0 operation accepted/read succeeded, 1 refusal or conflict, 2 observation wait expired, 3 bad usage or unsupported package/store. Read the package outcome and task results; a successful submission is not successful execution.
+
+Known Unity compiler errors set `input_repair_pending`. New validation packages remain queued without holding the editor; input edits can pass older blocked validations. An idle validation window closes automatically, while a running task retains ownership until it stops and recovery finishes. The owner of a compiler error requests edit-begin, fixes the input, and calls edit-end without asking neighboring agents to cancel their runs. A completed edit or a new successful compiler cycle restores validation eligibility. Temporary C# task errors do not put the Unity project into this state. If the owner already has a waiting validation request, it can cancel that own request before requesting its edit grant.
 
 ### Recovery
 
@@ -666,4 +663,4 @@ Open **Tools → Agent Bridge → Task Queue** to see active, canceling, attache
 
 **Cancel** removes a waiting task by recording a terminal `canceled` result, leaving its request intact for the waiting CLI. Running C# and tests stop cooperatively; attached requests can be canceled without stopping the shared test run. During editor phases that cannot be stopped the window reports that limitation. A blocked editor main thread cannot process window input. Human cancellation has the same authority as the existing Cancel Running Task menu.
 
-The queue window also shows **Coordination requests** from the coordination store, in ticket order: `Rxxxx` requests can be waiting or granted before any test/script TaskId exists in Inbox. These requests remain visible after permission is granted. Waiting permission requests have their own Cancel button; granted windows and coordination ticket order are not changed by task drag-and-drop. The header identifies the Unity project and last refresh time. **Recent results** keeps up to 20 results from the last 10 minutes, so quick completions and rejections do not vanish between refreshes. Snapshot reads never admit or reject work; individual unreadable files produce a warning while other rows keep updating.
+The queue window also shows **Ready packages and input edits** in ticket order. A ready package already contains every step and its frozen payload; individual Inbox entries are materialized by the editor just before execution. Rows show the ready step count and automatic execution. Waiting requests have their own Cancel button; granted windows and coordination ticket order are not changed by task drag-and-drop. The header identifies the Unity project and last refresh time. **Recent results** keeps up to 20 results from the last 10 minutes, so quick completions and rejections do not vanish between refreshes. Snapshot reads never admit or reject work; individual unreadable files produce a warning while other rows keep updating.

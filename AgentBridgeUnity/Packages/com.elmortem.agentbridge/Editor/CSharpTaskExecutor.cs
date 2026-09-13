@@ -11,15 +11,15 @@ namespace AgentBridge
 
 		private readonly Task<CSharpTaskOutcome> _task;
 
-		private CSharpTaskExecutor(string source, string sourcePath, string taskId, CancellationToken cancellationToken)
+		private CSharpTaskExecutor(string source, string sourcePath, string taskId, CancellationToken cancellationToken, string entryPointName)
 		{
 			StatusHint = "compiling";
-			_task = RunAsync(source, sourcePath, taskId, cancellationToken);
+			_task = RunAsync(source, sourcePath, taskId, cancellationToken, entryPointName);
 		}
 
-		public static CSharpTaskExecutor Begin(string source, string sourcePath, string taskId, CancellationToken cancellationToken)
+		public static CSharpTaskExecutor Begin(string source, string sourcePath, string taskId, CancellationToken cancellationToken, string entryPointName = null)
 		{
-			return new CSharpTaskExecutor(source, sourcePath, taskId, cancellationToken);
+			return new CSharpTaskExecutor(source, sourcePath, taskId, cancellationToken, entryPointName);
 		}
 
 		public bool IsCompleted
@@ -47,7 +47,7 @@ namespace AgentBridge
 			return _task.Result;
 		}
 
-		private async Task<CSharpTaskOutcome> RunAsync(string source, string sourcePath, string taskId, CancellationToken cancellationToken)
+		private async Task<CSharpTaskOutcome> RunAsync(string source, string sourcePath, string taskId, CancellationToken cancellationToken, string entryPointName)
 		{
 			CompileResult compileResult = await Task.Run(() => RoslynCompiler.Compile(source, sourcePath, taskId, cancellationToken), cancellationToken);
 
@@ -63,7 +63,7 @@ namespace AgentBridge
 			MethodInfo method;
 			bool needsToken;
 			string error;
-			if (!TaskMethodResolver.TryResolve(compileResult.Assembly, taskId, out method, out needsToken, out error))
+			if (!TaskMethodResolver.TryResolve(compileResult.Assembly, string.IsNullOrEmpty(entryPointName) ? taskId : entryPointName, out method, out needsToken, out error))
 			{
 				return new CSharpTaskOutcome
 				{

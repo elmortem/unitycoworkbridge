@@ -16,6 +16,8 @@ namespace AgentBridge.Coordination
 		public string Token = "";
 		public string[] Blockers = new string[0];
 		public string Message = "";
+		public string[] TaskIds = new string[0];
+		public string Reason = "";
 
 		// True when the engine mutated the state and the caller must commit the transaction.
 		// Never serialized into the command answer: it is a store detail, not part of the contract.

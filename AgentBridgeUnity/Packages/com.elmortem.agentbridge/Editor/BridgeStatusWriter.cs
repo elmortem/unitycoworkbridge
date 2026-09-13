@@ -151,6 +151,7 @@ namespace AgentBridge
 			if (CoordinationEditorAdapter.Available)
 			{
 				capabilities.Add("coordination-v1");
+				capabilities.Add(Coordination.CoordinationBatch.Capability);
 			}
 
 			return capabilities.ToArray();

@@ -27,6 +27,7 @@ namespace AgentBridge.Coordination
 		public const string OpStepFail = "step-fail";
 		public const string OpIncarnation = "editor-incarnation";
 		public const string OpSweep = "sweep";
+		public const string OpCompilerState = "compiler-state";
 
 		public CoordinationReply Apply(CoordinationState state, CoordinationCommand command, long nowMs)
 		{
@@ -133,6 +134,17 @@ namespace AgentBridge.Coordination
 					return Renew(state, command, nowMs);
 				case OpRequest:
 					return RequestWindow(state, command, nowMs);
+				case OpCompilerState:
+					if (string.IsNullOrEmpty(command.TaskId) || (command.Reason != "success" && command.Reason != "compiler_error"))
+						return CoordinationReply.Fail(CoordinationCodes.BadUsage, "compiler-state requires a completed cycle id and status");
+					var compilerReply = CoordinationReply.Success(CoordinationCodes.Ok);
+					compilerReply.Changed = state.CompilerCycleId != command.TaskId;
+					if (compilerReply.Changed)
+					{
+						state.CompilerCycleId = command.TaskId;
+						state.InputRepairPending = command.Reason == "compiler_error";
+					}
+					return compilerReply;
 				case OpCancel:
 					return Cancel(state, command, nowMs);
 				case OpFinish:
@@ -456,6 +468,7 @@ namespace AgentBridge.Coordination
 			}
 
 			CloseGrant(state, grant, "edit_end", nowMs);
+			state.InputRepairPending = false;
 			AddTombstone(state, grant.Session, TokenKey(command.Token, OpEditEnd), "",
 				grant.RequestId, CoordinationLimits.StateClosed, CoordinationCodes.AlreadyClosed, "edit_end", nowMs);
 
@@ -559,6 +572,8 @@ namespace AgentBridge.Coordination
 			{
 				return CoordinationReply.Fail(CoordinationCodes.PlanInvalid, planError);
 			}
+			if (!CoordinationBatch.Validate(command.Plan, out planError))
+				return CoordinationReply.Fail(CoordinationCodes.PlanInvalid, planError);
 
 			string digest = CoordinationPlanRules.Digest(command.Kind, seconds, command.Plan);
 			CoordinationReply replay = ReplayOf(state, command.Session, command.Uuid, digest);
@@ -600,6 +615,7 @@ namespace AgentBridge.Coordination
 				PayloadDigest = digest,
 				Token = "w-" + command.Nonce,
 				Plan = command.Plan,
+				Automatic = true,
 				State = CoordinationLimits.StateWaiting,
 				Seconds = seconds,
 				CreatedAtMs = nowMs,
@@ -735,7 +751,7 @@ namespace AgentBridge.Coordination
 				return draining;
 			}
 
-			CloseGrant(state, grant, "finish", nowMs);
+			CloseGrant(state, grant, string.IsNullOrEmpty(command.Reason) ? "finish" : command.Reason, nowMs);
 			AddTombstone(state, grant.Session, TokenKey(command.Token, OpFinish), "",
 				grant.RequestId, CoordinationLimits.StateClosed, CoordinationCodes.AlreadyClosed, "finish", nowMs);
 
@@ -785,6 +801,7 @@ namespace AgentBridge.Coordination
 
 			request.State = CoordinationLimits.StateCanceled;
 			request.Reason = "canceled";
+			foreach (CoordinationStep step in request.Plan.Steps) step.Payload = "";
 			request.UpdatedAtMs = nowMs;
 			AddTombstone(state, command.Session, UuidKey(command.Uuid), request.PayloadDigest,
 				request.Id, CoordinationLimits.StateCanceled, CoordinationCodes.AlreadyClosed, "canceled", nowMs);
@@ -965,6 +982,10 @@ namespace AgentBridge.Coordination
 			bool changed = used.State != stepState || CoordinationText.Contains(grant.ActiveTaskIds, used.TaskId);
 			used.State = stepState;
 			used.Reason = command.Reason;
+			CoordinationRequest batch = state.FindRequest(grant.RequestId);
+			CoordinationStep failedStep = batch == null ? null : batch.Plan.Find(command.StepId);
+			if (stepState == CoordinationLimits.StepFailed && command.Reason == "compiler_error"
+				&& failedStep != null && (failedStep.Kind == "compile" || failedStep.Kind == "tests")) state.InputRepairPending = true;
 			grant.ActiveTaskIds = CoordinationText.Remove(grant.ActiveTaskIds, used.TaskId);
 
 			CoordinationReply reply = CoordinationReply.Success(CoordinationCodes.Ok);
@@ -1016,6 +1037,18 @@ namespace AgentBridge.Coordination
 		{
 			bool changed = false;
 
+			// Old permission-only requests cannot pause writers or reserve an empty editor.
+			foreach (CoordinationRequest request in state.Requests)
+			{
+				if (!request.Automatic && CoordinationLimits.IsWindowKind(request.Kind) && request.State == CoordinationLimits.StateWaiting)
+				{
+					request.State = CoordinationLimits.StateRejected;
+					request.Reason = "batch_required: resubmit a complete executable package";
+					request.UpdatedAtMs = nowMs;
+					changed = true;
+				}
+			}
+
 			for (int i = state.Grants.Count - 1; i >= 0; i--)
 			{
 				CoordinationGrant grant = state.Grants[i];
@@ -1030,6 +1063,12 @@ namespace AgentBridge.Coordination
 					continue;
 				}
 
+				CoordinationRequest batch = state.FindRequest(grant.RequestId);
+				if (batch != null && !batch.Automatic && grant.State == CoordinationLimits.GrantActive)
+				{
+					grant.State = CoordinationLimits.GrantDraining;
+					changed = true;
+				}
 				if (grant.State == CoordinationLimits.GrantActive && nowMs > grant.DeadlineMs)
 				{
 					grant.State = CoordinationLimits.GrantDraining;
@@ -1062,7 +1101,7 @@ namespace AgentBridge.Coordination
 				return false;
 			}
 
-			long windowTicket = FirstWaitingWindowTicket(state);
+			long windowTicket = state.InputRepairPending ? -1 : FirstWaitingWindowTicket(state);
 			List<CoordinationRequest> waiting = WaitingEdits(state);
 			bool changed = false;
 
@@ -1168,6 +1207,8 @@ namespace AgentBridge.Coordination
 			{
 				request.State = CoordinationLimits.StateClosed;
 				request.Reason = reason;
+				// Terminal summaries keep ids, hashes and outcome, not megabytes of executable source.
+				foreach (CoordinationStep step in request.Plan.Steps) step.Payload = "";
 				request.UpdatedAtMs = nowMs;
 				AddTombstone(state, request.Session, UuidKey(request.Uuid), request.PayloadDigest,
 					request.Id, CoordinationLimits.StateClosed, CoordinationCodes.AlreadyClosed, reason, nowMs);
@@ -1219,7 +1260,7 @@ namespace AgentBridge.Coordination
 				}
 
 				CoordinationReply reply = CoordinationReply.Success(
-					existing.State == CoordinationLimits.StateGranted ? CoordinationCodes.Granted : CoordinationCodes.Waiting);
+					existing.IsTerminal ? CoordinationCodes.AlreadyClosed : existing.State == CoordinationLimits.StateGranted ? CoordinationCodes.Granted : CoordinationCodes.Waiting);
 				reply.Session = session;
 				reply.RequestId = existing.Id;
 				reply.State = existing.State;
@@ -1399,6 +1440,7 @@ namespace AgentBridge.Coordination
 			CoordinationRequest head = null;
 			foreach (CoordinationRequest request in state.Requests)
 			{
+				if (state.InputRepairPending && request.Kind == CoordinationLimits.KindValidation) continue;
 				if (!CoordinationLimits.IsWindowKind(request.Kind) || request.State != CoordinationLimits.StateWaiting)
 				{
 					continue;
@@ -1421,6 +1463,8 @@ namespace AgentBridge.Coordination
 		public static string[] BuildBlockers(CoordinationState state, string session, CoordinationRequest request)
 		{
 			var blockers = new List<string>();
+			if (state.InputRepairPending && (request == null || request.Kind == CoordinationLimits.KindValidation))
+				blockers.Add("input_repair_pending: known compiler errors; input edits have priority over validation packages");
 
 			foreach (CoordinationGrant grant in state.Grants)
 			{
@@ -1554,6 +1598,13 @@ namespace AgentBridge.Coordination
 			reply.Epoch = state.Epoch;
 			reply.Revision = state.Revision;
 			reply.Blockers = CoordinationText.Safe(reply.Blockers);
+			CoordinationRequest request = state.FindRequest(reply.RequestId);
+			if (request != null && request.Automatic)
+			{
+				reply.TaskIds = new string[request.Plan.Steps.Count];
+				for (int i = 0; i < reply.TaskIds.Length; i++) reply.TaskIds[i] = CoordinationBatch.TaskId(request, i);
+				reply.Reason = request.Reason;
+			}
 			return reply;
 		}
 	}

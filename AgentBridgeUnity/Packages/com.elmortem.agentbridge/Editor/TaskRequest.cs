@@ -9,6 +9,7 @@ namespace AgentBridge
 		public string Kind;
 		public string TargetTaskId;
 		public string PayloadFile;
+		public string EntryPointName;
 		public string TestMode;
 		public string[] AssemblyNames;
 		public string[] TestNames;

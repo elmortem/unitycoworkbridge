@@ -143,8 +143,28 @@ namespace AgentBridge
 			}
 
 			_finalizingCompile = true;
-			EvidenceRecord evidence;
-			if (!ValidationEvidence.TryComplete(taskId, true, out evidence))
+			EvidenceRecord evidence = null;
+			// The initial synchronous import can reload the domain BEFORE BeginPrepare runs.
+			// Resume that phase instead of finalizing an unobserved compile as a result.
+			if (!ValidationEvidence.IsObserving(taskId))
+			{
+				if (ValidationEvidence.PreparingTaskId != taskId)
+				{
+					ValidationEvidence.BeginPrepare(taskId, ValidationEvidence.ContextOf("compile", ""), EvidenceClassification.WindowId());
+					return;
+				}
+				bool ready;
+				string reason;
+				if (!ValidationEvidence.TryFinishPrepare(out ready, out reason)) return;
+				if (ready)
+				{
+					CompileTaskExecutor.RequestCompilation();
+					return;
+				}
+				evidence = EvidenceRecord.UnknownBecause(reason);
+			}
+			if (evidence == null && !CompileTaskExecutor.HasCompleted() && !CompileTaskExecutor.IsTimedOut()) return;
+			if (evidence == null && !ValidationEvidence.TryComplete(taskId, true, out evidence))
 			{
 				return;
 			}
@@ -999,7 +1019,7 @@ namespace AgentBridge
 			}
 
 			string source = File.ReadAllText(sourcePath);
-			_activeCSharpExecutor = CSharpTaskExecutor.Begin(source, sourcePath, request.Id, _activeCancellation.Token);
+			_activeCSharpExecutor = CSharpTaskExecutor.Begin(source, sourcePath, request.Id, _activeCancellation.Token, request.EntryPointName);
 		}
 
 		private static void RunUiTask(TaskRequest request)

@@ -33,7 +33,9 @@ internal static class CoordinationResultFormatter
 			reply.State,
 			reply.Token,
 			reply.Blockers,
-			reply.Message
+			reply.Message,
+			reply.TaskIds,
+			reply.Reason
 		}, JsonSupport.Task);
 	}
 
@@ -71,7 +73,9 @@ internal static class CoordinationResultFormatter
 			output.AppendLine().Append("Blocked by: ").Append(blocker);
 		}
 
-		var next = NextStep(reply);
+		if (reply.TaskIds.Length > 0) output.AppendLine().Append("Tasks: ").Append(string.Join(", ", reply.TaskIds));
+		if (!string.IsNullOrEmpty(reply.Reason)) output.AppendLine().Append("Outcome: ").Append(reply.Reason);
+		var next = reply.TaskIds.Length > 0 ? (reply.State == "waiting" || reply.State == "granted" ? "package runs automatically; continue independent work, read results when needed" : null) : NextStep(reply);
 		if (next != null)
 		{
 			output.AppendLine().Append("Next: ").Append(next);

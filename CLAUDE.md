@@ -63,6 +63,8 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
 - Координация: `CoordinationCommands.cs` (группа `coord`, диспетчеризуется до требования живого
   редактора), `CoordinationJsonCodec.cs` (System.Text.Json, строгий разбор scope/plan),
   `CoordinationResultFormatter.cs`
+- Готовые пакеты: `coord submit` (синоним `coord request`) сохраняет содержимое PayloadFile при подаче и возвращает TaskIds; требует capability `coordination-batch-v1`. `CoordinationBatch.cs` проверяет готовность и выдаёт стабильные id, `CoordinationBatchPump.cs` публикует шаги из сохранённого пакета, сверяет журнал после обрывов и автоматически закрывает окно после восстановления редактора. `scripts/verify-coordination-batches.ps1` проверяет три пакета без действий клиентов, frozen payload, fail-fast и compile/EditMode/PlayMode/compile через реальную Unity.
+- Известная ошибка Unity compiler включает `InputRepairPending`: input edits проходят перед заблокированными validation-пакетами; `edit-end` или новый успешный цикл снимает блокировку. Та же живая проверка воспроизводит double→float и проверяет исправление перед двумя уже ожидающими соседними прогонами без их отмены.
 
 ### Пакет (`AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/`)
 

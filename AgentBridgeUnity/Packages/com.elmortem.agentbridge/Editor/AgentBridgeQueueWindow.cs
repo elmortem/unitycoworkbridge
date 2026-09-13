@@ -81,8 +81,8 @@ namespace AgentBridge
             if (_pending.Count == 0 && _running.Count == 0) GUILayout.Label("No submitted tasks in this project's queue.");
             if (_coordinationRequests.Count > 0)
             {
-                GUILayout.Label("Coordination requests — ticket order", EditorStyles.boldLabel);
-                EditorGUILayout.HelpBox("These agents are requesting permission before submitting tasks. Waiting requests keep their coordination order; granted requests hold permission and may not have submitted a task yet.", MessageType.None);
+                GUILayout.Label("Ready packages and input edits — ticket order", EditorStyles.boldLabel);
+                EditorGUILayout.HelpBox("Ready packages contain their tasks already. Unity runs their steps and releases the editor automatically; agents do not need to poll or submit another command. Input edits wait separately for a safe writing interval.", MessageType.None);
                 foreach (var request in _coordinationRequests)
                 {
                     using (new EditorGUILayout.HorizontalScope(EditorStyles.helpBox))
@@ -91,6 +91,7 @@ namespace AgentBridge
                         {
                             GUILayout.Label(request.Id + " · " + request.Session, EditorStyles.boldLabel);
                             GUILayout.Label(request.Kind + " · " + request.State + " · " + request.Reason);
+							if (request.Automatic) GUILayout.Label(request.Plan.Steps.Count + " ready steps · automatic execution");
                         }
                         using (new EditorGUI.DisabledScope(request.State != Coordination.CoordinationLimits.StateWaiting))
                             if (GUILayout.Button("Cancel", GUILayout.Width(65)))

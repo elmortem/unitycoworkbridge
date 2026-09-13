@@ -12,6 +12,9 @@ namespace AgentBridge.Coordination
 		public string[] Tests = new string[0];
 		public string[] Categories = new string[0];
 		public string PayloadSha256 = "";
+		public string PayloadFile = "";
+		public string Payload = "";
+		public string PayloadName = "";
 		public bool Fresh;
 
 		public void Normalize()
@@ -23,6 +26,9 @@ namespace AgentBridge.Coordination
 			Tests = CoordinationText.Safe(Tests);
 			Categories = CoordinationText.Safe(Categories);
 			PayloadSha256 = CoordinationText.Safe(PayloadSha256);
+			PayloadFile = CoordinationText.Safe(PayloadFile);
+			Payload = CoordinationText.Safe(Payload);
+			PayloadName = CoordinationText.Safe(PayloadName);
 		}
 	}
 }

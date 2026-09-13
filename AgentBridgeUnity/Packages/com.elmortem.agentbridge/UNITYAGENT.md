@@ -136,15 +136,34 @@ agentbridge coord capabilities --format human
 
 Если `Package supports coordination-v1: no` — работай по-старому, не пытайся обойти это записью в служебные файлы напрямую. В проекте без активных регистраций все прежние команды работают как раньше.
 
-### Порядок работы, когда координация доступна
+### Подача готового пакета
 
-1. `agentbridge coord register --session S --spec <твоё ТДД> --repo <корень> --scope scope.json --owner <адрес задачи>` — резервирует твою область входных данных Unity. Запись в неё требует edit grant; независимая работа остаётся свободной.
-2. Перед небольшим пакетом изменений входных данных Unity: `coord edit-begin --session S --request <uuid> --seconds 120`. После завершения этих записей: `coord edit-end --session S --token <token>`.
-3. Для проверок в Unity: `coord request --session S --request <uuid> --kind validation --plan plan.json`. План конечный и заранее полный. Скрипты, JSON и параметры подготовь до запроса окна. Дальше `coord wait --after <revision> --wait 30`, пока не появится `granted` с токеном, затем подавай готовые команды. Этот wait возвращается при изменении состояния; не заменяй его сном между опросами.
-4. Рабочие команды внутри окна: `--coord-window <token> --coord-step <id>`. Шаг тратится один раз — включая случай, когда ответ пришёл из кэша.
-5. `coord finish --session S --token <token>` — после того как все задачи окна терминальны.
+Свою известную ошибку компиляции исправляй сразу через edit-begin → правка → edit-end. При input_repair_pending новые проверки не занимают редактор, а изменения входных данных имеют приоритет перед ожидающими проверками. Соседям не нужно вручную отменять окна. Выполняющаяся задача сначала завершается и восстанавливает редактор. После edit-end или нового успешного цикла компиляции проверки возобновляются. Ошибка во временном скрипте вне входов Unity не требует edit grant.
 
-`scope.json`: `{ "Paths": ["UnityProject/Assets/Game/Core/"] }` — пути от корня репозитория, прямые слэши, каталог с конечным `/`, без масок. `plan.json`: `{ "Steps": [{ "Id": "V1", "Kind": "tests", "Mode": "EditMode", "Tests": ["MyTests"], "Fresh": false }], "ArtifactRoots": [], "FixtureRoots": [] }`. Окно `validation` разрешает `compile`, `tests`, `sceneshot`; окно `editor` — `csharp`, `ui`, `sceneshot`, `compile`. Плей мод в план не входит: делай PlayMode-тест шагом.
+При поддержке `coordination-batch-v1` очередь принимает готовые пакеты, а редактор сам выполняет их и освобождает окно. Агенту не нужно получать токен, подавать шаги после выдачи окна или вызывать `finish`.
+
+1. Перед первым согласуемым этапом: `agentbridge coord register --session S --spec <ТДД> --repo <корень> --scope scope.json --owner <адрес>`. Scope содержит только затрагиваемые входные данные Unity.
+2. Для их записи: `coord edit-begin --session S --request <uuid> --seconds 120`, затем `coord edit-end --session S --token <token>`, когда эти записи завершены. Независимая работа разрешений моста не требует.
+3. Подготовь полный конечный пакет. `agentbridge coord submit --session S --request <uuid> --kind editor|validation --plan plan.json --seconds 120` сохраняет содержимое файлов и возвращает RequestId и TaskIds. `coord request` — синоним подачи готового пакета, а не бронь пустого окна.
+4. Продолжай независимую работу. Для результата используй `coord status --session S --request <uuid>` или `coord wait --session S --request <uuid> --after <revision> --wait 30`. Чтение результата не влияет на исполнение. У завершённого пакета State=closed, Reason=completed; failed:<шаг>:<причина>, expired и другие причины не означают успех. Подробности выполненного шага: `agentbridge wait <TaskId>`.
+5. После окончания работы с входными данными Unity закрой регистрацию через `coord leave --session S`.
+
+`scope.json`: `{ "Paths": ["UnityProject/Assets/Game/Core/"] }` — пути от корня репозитория, каталог с конечным `/`, без масок.
+
+Пример `plan.json` для редактора:
+```json
+{ "Steps": [
+  { "Id": "Build", "Kind": "csharp", "PayloadFile": "Task_Build.cs" },
+  { "Id": "Layout", "Kind": "ui", "PayloadFile": "screen.ui.json" }
+] }
+```
+PayloadFile считается от каталога plan.json. CLI копирует содержимое при подаче; последующие правки исходника не меняют пакет. Для C# имя класса совпадает с именем исходного файла. Вместо файла можно передать Payload и PayloadName (имя C# класса; для JSON — безопасное имя вроде Payload). Одного PayloadSha256 недостаточно. Общий объём содержимого — до 4 МиБ, не более 64 шагов.
+
+Для проверок: `{ "Steps": [{ "Id": "V1", "Kind": "tests", "Mode": "EditMode", "Tests": ["MyTests"], "Fresh": false }], "ArtifactRoots": [], "FixtureRoots": [] }`. Пакет validation разрешает compile, tests, sceneshot; editor — csharp, ui, sceneshot, compile. Для Play Mode используй шаг tests с Mode=PlayMode.
+
+Шаги исполняются по порядку. Ошибка останавливает оставшиеся шаги; после остановки задачи и восстановления редактора мост закрывает окно. Если продолжение требует анализа результата агентом, подай его отдельным новым пакетом: окно на время размышлений не удерживается. Повтор подачи с тем же uuid и тем же содержимым не повторяет выполнение.
+
+Если пакет поддерживает только старый coordination-v1, команды submit ещё нет: используй старый порядок request → coord wait → готовые команды с токеном → finish. Не отправляй новый контракт до объявления capability. Обычные команды без токена остаются доступны и ждут занятого окна.
 
 Увидел в `status`, `wait` или `renew` код `pause_requested` — закончи текущий пакет изменений входных данных Unity и вызови `edit-end`; продолжай независимую работу. Не нужно доводить до конца всё ТДД и не нужно, чтобы код уже компилировался: если он ещё не собирается, укажи это блокером в своём ТДД. Молчание никогда не заменяет `edit-end`.
 

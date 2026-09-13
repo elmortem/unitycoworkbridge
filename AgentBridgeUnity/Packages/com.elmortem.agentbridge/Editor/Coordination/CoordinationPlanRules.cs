@@ -157,6 +157,7 @@ namespace AgentBridge.Coordination
 					.Append(Join(step.Tests)).Append('|')
 					.Append(Join(step.Categories)).Append('|')
 					.Append(step.PayloadSha256).Append('|')
+					.Append(step.PayloadName).Append('|')
 					.Append(step.Fresh ? "1" : "0").Append('\n');
 			}
 

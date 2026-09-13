@@ -164,6 +164,22 @@ namespace AgentBridge
 			}
 
 			ReleaseLeaseOfClosedWindow(state);
+			string cycle = CompileTaskExecutor.LastCycleId;
+			string compilation = CompileTaskExecutor.LastCycleStatus;
+			if (!string.IsNullOrEmpty(cycle) && cycle != state.CompilerCycleId && (compilation == "success" || compilation == "compiler_error"))
+			{
+				CoordinationCommand compiler = NewCommand(CoordinationEngine.OpCompilerState);
+				compiler.TaskId = cycle; compiler.Reason = compilation;
+				CoordinationReply compilerReply;
+				if (!TryApply(compiler, out compilerReply)) return;
+				state = Snapshot;
+			}
+			if (editorFree && state.FindWindowGrant() != null)
+			{
+				CoordinationBatchPump.Tick();
+				state = Snapshot;
+				ReleaseLeaseOfClosedWindow(state);
+			}
 
 			bool wantsSweep = NeedsSweep(state, CoordinationSystemClock.Instance.UtcNowMs);
 			bool wantsWindow = editorFree && HasWaitingWindow(state) && state.FindWindowGrant() == null;
@@ -177,6 +193,7 @@ namespace AgentBridge
 			TryApply(NewCommand(wantsWindow ? CoordinationEngine.OpWindowConfirm : CoordinationEngine.OpSweep), out result);
 			if (result != null && result.Ok && result.Code == CoordinationCodes.Granted)
 			{
+				CoordinationBatchPump.Tick();
 				TelemetryLog.Write("coord_window", result.Session, result.RequestId, new[]
 				{
 					TelemetryField.Text("What", "granted"),
@@ -313,6 +330,8 @@ namespace AgentBridge
 		{
 			foreach (CoordinationGrant grant in state.Grants)
 			{
+				CoordinationRequest request = state.FindRequest(grant.RequestId);
+				if (CoordinationLimits.IsWindowKind(grant.Kind) && request != null && !request.Automatic) return true;
 				if (grant.State == CoordinationLimits.GrantActive && nowMs > grant.DeadlineMs)
 				{
 					return true;
