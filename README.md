@@ -648,6 +648,8 @@ The same script validates every `skills/<name>/SKILL.md` frontmatter before pack
 
 Do not use `Compress-Archive` for this artifact. On Windows it can store backslashes in ZIP central-directory entry names and consumers then report `Zip file contains path with invalid characters`. The canonical script writes explicit forward-slash names, rejects `\`, absolute paths, `..`, duplicates and Windows-invalid characters, then compares every archived file hash with its source. A successful build ends with `invalid_entries=0` and `zip_validation=PASS`.
 
+Before packaging, the script normalizes CRLF to LF in the plugin's UTF-8 Markdown and JSON sources, matching `.gitattributes` and fresh Git checkouts. `-ValidateOnly` never rewrites files: it rejects CRLF sources with an instruction to rebuild. Archive validation remains a strict byte comparison, including actual text changes.
+
 Only the CLI has a publishing pipeline. Bumping `<Version>` in the csproj and pushing is the entire release procedure: the workflow runs the tests, sees that no `agentbridge-v<version>` release exists yet, creates the tag and release at that commit, then builds and attaches the six self-contained binaries with checksums. Pushing without a version bump only runs the tests — the release step is skipped because the tag already exists, so no tags are created by hand.
 
 `workflow_dispatch` re-packages an existing tag; use it to repair a release whose assets failed to upload.

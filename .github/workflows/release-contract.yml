@@ -8,6 +8,7 @@ on:
       - AgentBridgeUnity/Packages/com.elmortem.agentbridge/**
       - unity-bridge-plugin/**
       - scripts/build-plugin.ps1
+      - scripts/verify-plugin-line-endings.ps1
       - .github/workflows/release-contract.yml
   push:
     branches:
@@ -19,6 +20,7 @@ on:
       - AgentBridgeUnity/Packages/com.elmortem.agentbridge/**
       - unity-bridge-plugin/**
       - scripts/build-plugin.ps1
+      - scripts/verify-plugin-line-endings.ps1
       - .github/workflows/release-contract.yml
 
 jobs:
@@ -51,6 +53,10 @@ jobs:
       - name: Validate committed versions and plugin ZIP
         shell: pwsh
         run: ./scripts/build-plugin.ps1 -BaseRef $env:RELEASE_BASE_REF -ValidateOnly
+
+      - name: Verify line-ending regression protection
+        shell: pwsh
+        run: ./scripts/verify-plugin-line-endings.ps1
 
       - name: Build validated plugin artifact
         shell: pwsh

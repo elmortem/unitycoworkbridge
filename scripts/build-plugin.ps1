@@ -200,6 +200,25 @@ function Get-Sha256 {
 	}
 }
 
+function Set-PluginTextLineEndings {
+	param([object[]]$Items, [switch]$CheckOnly)
+	# Git enforces LF on checkout, but an editor can write CRLF into the working
+	# tree afterwards. Package exactly the bytes that a fresh checkout will have.
+	$utf8 = [System.Text.UTF8Encoding]::new($false, $true)
+	foreach ($item in $Items) {
+		if ([System.IO.Path]::GetExtension($item.Source) -notin @('.md', '.json')) { continue }
+		$bytes = [System.IO.File]::ReadAllBytes($item.Source)
+		$text = $utf8.GetString($bytes)
+		if (-not $text.Contains("`r`n")) { continue }
+		if ($CheckOnly) {
+			throw "Plugin source has CRLF line endings: $($item.Entry). Run build-plugin.ps1 to normalize sources and rebuild the ZIP before committing."
+		}
+		# GetString/GetBytes preserves an existing UTF-8 BOM as a character.
+		[System.IO.File]::WriteAllBytes($item.Source, $utf8.GetBytes($text.Replace("`r`n", "`n")))
+		Write-Output "normalized_lf=$($item.Entry)"
+	}
+}
+
 function Get-StreamSha256 {
 	param([System.IO.Stream]$Stream)
 	$sha = [System.Security.Cryptography.SHA256]::Create()
@@ -281,6 +300,7 @@ if (-not $SkipVersionCheck) {
 }
 
 $items = Get-PluginFiles
+Set-PluginTextLineEndings -Items $items -CheckOnly:$ValidateOnly
 Assert-SkillFrontmatter $items
 if (-not $ValidateOnly) {
 	$archiveDirectory = Split-Path -Parent $archivePath
