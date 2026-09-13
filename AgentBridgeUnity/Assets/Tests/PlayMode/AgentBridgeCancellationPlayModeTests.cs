@@ -7,6 +7,13 @@ using UnityEngine.TestTools;
 public class AgentBridgeCancellationPlayModeTests
 {
 	[UnityTest]
+	public IEnumerator ShortSuccessfulRun()
+	{
+		yield return null;
+		Assert.IsTrue(UnityEngine.Application.isPlaying);
+	}
+
+	[UnityTest]
 	[Explicit("Run through CLI with a short task deadline to verify cancellation across domain reload")]
 	public IEnumerator ResponsiveLongRun()
 	{

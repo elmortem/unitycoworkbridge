@@ -11,6 +11,7 @@ namespace AgentBridge
 	{
 		private static bool _started;
 		private static bool _recoveryScheduled;
+		private static bool _recovering;
 
 		public static bool IsPending
 		{
@@ -245,6 +246,17 @@ namespace AgentBridge
 
 		private static void CompleteRecovery()
 		{
+			// Restoring scenes invokes editor callbacks synchronously. Those callbacks and
+			// the coordinator may re-enter recovery before the outer invocation finishes.
+			if (_recovering) return;
+			_recovering = true;
+			try { CompleteRecoveryCore(); }
+			finally { _recovering = false; }
+		}
+
+		private static void CompleteRecoveryCore()
+		{
+			EditorApplication.delayCall -= CompleteRecovery;
 			_recoveryScheduled = false;
 			if (!IsPending)
 			{
@@ -261,12 +273,51 @@ namespace AgentBridge
 			}
 
 			PlayModeSceneState state = Read();
+			// RunFinished is a result callback, not proof that the framework has finished
+			// its own scene cleanup. Never restore scenes underneath that cleanup.
+			if (TestRunnerCancellation.IsRunning()) return;
 			if (state == null)
 			{
 				RecoverCorruptState();
 				return;
 			}
+			// Startup/EnteredEditMode may arrive while a test is still being prepared.
+			// Tick handles abandoned owners by recording an explicit aborted result.
+			if (!state.HasResult) return;
 
+			string recoveryError = state.RecoveryError;
+			if (!state.ScenesRestored)
+			{
+				recoveryError = RestoreScenes(state);
+				state.RecoveryError = recoveryError;
+				state.ScenesRestored = true;
+				Write(state);
+			}
+
+			try
+			{
+				AgentTestRunner.FinalizeRecoveredPlayModeRun(state.TaskId, state.Result, recoveryError);
+				TaskRecord finalized;
+				if (TaskJournal.TryRead(state.TaskId, out finalized) && !TaskCoordinator.IsTerminal(finalized.Status)
+					&& !TestRunLifecycle.IsStopping(state.TaskId))
+				{
+					// Finalization may defer work. Keep its owner without restoring scenes again.
+					ScheduleRecovery();
+					return;
+				}
+				DeleteStateFile();
+			}
+			catch (Exception ex)
+			{
+				Debug.LogException(ex);
+				try { RecordRecoveryError("Failed to finalize PlayMode recovery: " + ex.GetBaseException().Message); }
+				catch { }
+				ScheduleRecovery();
+			}
+		}
+
+		private static string RestoreScenes(PlayModeSceneState state)
+		{
 			string recoveryError = state.RecoveryError;
 			try
 			{
@@ -312,23 +363,7 @@ namespace AgentBridge
 				recoveryError = AppendError(recoveryError, tailError);
 			}
 
-			try
-			{
-				AgentTestRunner.FinalizeRecoveredPlayModeRun(state.TaskId, state.HasResult ? state.Result : null, recoveryError);
-				DeleteStateFile();
-			}
-			catch (Exception ex)
-			{
-				Debug.LogException(ex);
-				try
-				{
-					RecordRecoveryError("Failed to finalize PlayMode recovery: " + ex.GetBaseException().Message);
-				}
-				catch
-				{
-				}
-				ScheduleRecovery();
-			}
+			return recoveryError;
 		}
 
 		private static void RecoverCorruptState()

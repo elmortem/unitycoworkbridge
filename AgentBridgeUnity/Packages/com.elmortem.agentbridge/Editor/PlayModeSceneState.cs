@@ -10,6 +10,7 @@ namespace AgentBridge
 		public string BootstrapScenePath;
 		public TestRunResult Result;
 		public bool HasResult;
+		public bool ScenesRestored;
 		public string RecoveryError;
 	}
 

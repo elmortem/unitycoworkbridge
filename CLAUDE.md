@@ -22,6 +22,8 @@ Unity Agent Bridge — мост между ИИ-агентом и живым Uni
 ```
 AgentBridgeCli/                     .NET 8 CLI `agentbridge` — клиент моста
 AgentBridgeCli.Tests/               Тесты CLI: обычная консоль (Program.cs), без xUnit
+AgentBridgeRecovery.Tests/          Настоящий код восстановления сцен с управляемыми Unity callbacks;
+                                    регрессии повторного входа, ожидания cleanup и повторной финализации
 AgentBridgeCoordination.Tests/      Тесты coordination-v1/evidence-v1: консоль, `--group state|store|all`,
                                     дочерние процессы для гонок и обрывов
 AgentBridgeUnity/                   Unity 2022.3.62f2 — хост-проект пакета
@@ -68,6 +70,7 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
   `SceneShot/SceneShotTaskExecutor.cs`, `Ui/UiTaskRunner.cs`
 - Отмена тестов: `TestRunLifecycle.cs` хранит владельца, дедлайн и состояние остановки сквозь domain reload; `TestRunnerCancellation.cs` изолирует совместимость с API разных версий Test Framework. `scripts/verify-test-cancellation.ps1` проверяет живую отмену, восстановление и запуск следующей задачи.
   `scripts/verify-inert-test-controller.ps1` проверяет вне NUnit, что оставшийся PlayMode-контроллер не блокирует свободный Edit Mode. Внутри NUnit такую проверку делать нельзя: сам проверочный прогон делает TestRunner активным.
+  После правок восстановления запускай `dotnet run --project AgentBridgeRecovery.Tests -c Release` (входит в Release Contract) и `scripts/verify-scene-recovery.ps1` в свободном Unity-хосте. Живая проверка требует продвижения очереди после двух успешных PlayMode-прогонов, а не только зелёного результата NUnit.
 - Компиляция: `RoslynResolver.cs`, `RoslynCompiler.cs`, `ReferenceCatalog.cs`,
   `SourceGuardrail.cs` (отклонение блокирующих и модальных API до исполнения)
 - Координация: общая папка `Coordination/` (namespace `AgentBridge.Coordination`, без UnityEngine —

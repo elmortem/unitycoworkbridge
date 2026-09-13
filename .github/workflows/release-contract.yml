@@ -5,6 +5,7 @@ on:
     paths:
       - AgentBridgeCli/**
       - AgentBridgeCli.Tests/**
+      - AgentBridgeRecovery.Tests/**
       - AgentBridgeUnity/Packages/com.elmortem.agentbridge/**
       - unity-bridge-plugin/**
       - scripts/build-plugin.ps1
@@ -17,6 +18,7 @@ on:
     paths:
       - AgentBridgeCli/**
       - AgentBridgeCli.Tests/**
+      - AgentBridgeRecovery.Tests/**
       - AgentBridgeUnity/Packages/com.elmortem.agentbridge/**
       - unity-bridge-plugin/**
       - scripts/build-plugin.ps1
@@ -57,6 +59,15 @@ jobs:
       - name: Verify line-ending regression protection
         shell: pwsh
         run: ./scripts/verify-plugin-line-endings.ps1
+
+      - name: Setup .NET for scene recovery regression tests
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Verify scene recovery lifecycle
+        shell: pwsh
+        run: dotnet run --project AgentBridgeRecovery.Tests -c Release
 
       - name: Build validated plugin artifact
         shell: pwsh
