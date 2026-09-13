@@ -85,6 +85,8 @@ namespace AgentBridge
 				{
 					continue;
 				}
+				// Control requests resume independently after the exit's domain reload.
+				if (record.Kind == "stopplay" && record.Status == "running") continue;
 
 				// An attachment only means something while its run is alive. If the run did not
 				// survive the reload, the record goes away and the task returns to the queue.
@@ -263,6 +265,7 @@ namespace AgentBridge
 			// The coordinator is the only owner of the editor's half of coordination-v1: one
 			// non-blocking lock attempt per tick, and a window is confirmed only while genuinely free.
 			CoordinationEditorAdapter.Tick(IsEditorFreeForWindow());
+			TryServeThrottled(now);
 			RefreshQueueStatus(now);
 			PublishBlockReason();
 
@@ -370,7 +373,8 @@ namespace AgentBridge
 			}
 
 			_lastServeTime = now;
-			List<PendingTaskInfo> pending = BuildPendingList(_activeTaskId);
+			if (EditorApplication.isCompiling || EditorApplication.isUpdating) return;
+			List<PendingTaskInfo> pending = BuildPendingList(_activeTaskId ?? TestRunLifecycle.TaskId);
 			CachedResultServer.TryServePending(pending);
 			TestRunCoalescer.TryAttachPending(pending);
 		}
@@ -594,7 +598,7 @@ namespace AgentBridge
 					TaskRequest request = JsonUtility.FromJson<TaskRequest>(File.ReadAllText(file));
 					if (request != null)
 					{
-						if (request.Kind == "cancel") continue;
+						if (request.Kind == "cancel" || request.Kind == "stopplay") continue;
 						info.EffectiveSessionId = AgentSessionScheduler.EffectiveSessionId(request.AgentSessionId, id);
 						info.Note = request.Note ?? "";
 						info.Kind = request.Kind ?? "";
@@ -1498,7 +1502,13 @@ namespace AgentBridge
 			foreach (string path in Directory.GetFiles(BridgePaths.Inbox, "*.task.json"))
 			{
 				TaskRequest request;
-				if (!TaskRequestReader.TryRead(path, out request) || request.Kind != "cancel") continue;
+				if (!TaskRequestReader.TryRead(path, out request)) continue;
+				if (request.Kind == "stopplay")
+				{
+					ProcessImmediateStop(request, path);
+					continue;
+				}
+				if (request.Kind != "cancel") continue;
 				TaskRecord answer;
 				if (TaskJournal.TryRead(request.Id, out answer)) continue;
 				string target = request.TargetTaskId ?? "";
@@ -1540,6 +1550,35 @@ namespace AgentBridge
 				}
 				WriteTerminal(request.Id, "cancel", ok ? "success" : "rejected", result, TaskFileHash.HashOf(path, null));
 			}
+		}
+
+		private static void ProcessImmediateStop(TaskRequest request, string path)
+		{
+			TaskRecord record;
+			if (TaskJournal.TryRead(request.Id, out record) && IsTerminal(record.Status)) return;
+			if (record == null)
+			{
+				record = new TaskRecord { Id = request.Id, Kind = "stopplay", Status = "running",
+					Hash = TaskFileHash.HashOf(path, null), AgentSessionId = request.AgentSessionId,
+					SessionId = BridgeStatusWriter.Current.SessionId, StartedAtUtc = DateTime.UtcNow.ToString("o") };
+				TaskJournal.Write(record);
+			}
+			string testId = TestRunLifecycle.TaskId;
+			if (!string.IsNullOrEmpty(testId) && (EditorApplication.isPlayingOrWillChangePlaymode || PlayModeSceneRecovery.IsPending))
+			{
+				TestRunLifecycle.RequestStop(testId, "canceled", "Stopped through stopplay by " + (request.AgentSessionId ?? "manual"));
+				PlayModeSceneRecovery.CompleteAbandonedRun(testId, "Stopped through stopplay");
+			}
+			// No scheduler ownership is transferred, and no active executor is forgotten.
+			PlaySessionManager.BeginStop("", "stopplay");
+			if (EditorApplication.isPlayingOrWillChangePlaymode) return;
+			BridgeStatusWriter.Current.IsPlaying = false;
+			BridgeStatusWriter.Write();
+			record.Status = "success";
+			record.FinishedAtUtc = DateTime.UtcNow.ToString("o");
+			record.ReturnValue = "Play Mode stopped; test cleanup, if any, is tracked separately.";
+			TaskJournal.Write(record);
+			TelemetryLog.TaskFinished(record);
 		}
 
 		public static bool IsTerminal(string status)

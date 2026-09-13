@@ -35,7 +35,13 @@ namespace AgentBridge
 				builder.Append(file.Substring(projectRoot.Length))
 					.Append('|').Append(info.Length)
 					.Append('|').Append(info.LastWriteTimeUtc.Ticks)
-					.Append('\n');
+					.Append('|');
+				// Timestamps and sizes can be preserved by external tools. Cache reuse must
+				// still notice different source bytes in that case.
+				using (SHA256 contentHash = SHA256.Create())
+				using (FileStream stream = File.OpenRead(file))
+					builder.Append(Convert.ToBase64String(contentHash.ComputeHash(stream)));
+				builder.Append('\n');
 			}
 
 			using (SHA256 sha = SHA256.Create())

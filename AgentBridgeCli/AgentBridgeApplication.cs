@@ -367,7 +367,7 @@ internal static class AgentBridgeApplication
 			  tests [--mode EditMode|PlayMode] [--assembly A] [--test T] [--category C] [--fresh]
 			  release --session <id>     give the editor back to the other agent sessions
 			  play [--seconds N] --note <intent> --session <id>   open a play session; only csharp and sceneshot run inside it
-			  stopplay [--session <id>]  end your play session, or an unsanctioned one anybody left behind
+			  stopplay [--session <id>]  immediately stop Play Mode, including an active PlayMode test
 			  wait <TaskId>
 			  coord <command>            coordination-v1 between several agents; see 'agentbridge coord help'
 

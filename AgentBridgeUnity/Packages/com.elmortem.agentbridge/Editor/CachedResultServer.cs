@@ -10,7 +10,6 @@ namespace AgentBridge
 			// Both kinds key on the same cheap source hash, and it is the expensive part of the
 			// first check, so it is computed once per scan and only if a cacheable task waits.
 			string sourceFingerprint = null;
-			string inputDigest = null;
 			long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
 			for (int i = pending.Count - 1; i >= 0; i--)
@@ -40,6 +39,7 @@ namespace AgentBridge
 
 				if (task.Kind == "tests")
 				{
+					string inputDigest = null;
 					// The content digest is only ever computed once a cheap candidate exists, and
 					// it is computed fresh: a memo keyed on sizes and times would hand out a hit
 					// for a file that was edited back to its old size.
@@ -65,7 +65,8 @@ namespace AgentBridge
 
 					// A served result consumes its step exactly once, just like a real run.
 					string reserveError;
-					if (!CoordinationGate.TryReserve(request, task.Id, out reserveError))
+					if (inputDigest != CurrentInputDigest(request) || sourceFingerprint != TestFingerprint.Sources()) continue;
+					if (!TryReserveCache(request, task.Id, out reserveError))
 					{
 						continue;
 					}
@@ -99,7 +100,8 @@ namespace AgentBridge
 					}
 
 					string reserveError;
-					if (!CoordinationGate.TryReserve(request, task.Id, out reserveError))
+					if (sourceFingerprint != TestFingerprint.Sources()) continue;
+					if (!TryReserveCache(request, task.Id, out reserveError))
 					{
 						continue;
 					}
@@ -119,6 +121,15 @@ namespace AgentBridge
 
 				pending.RemoveAt(i);
 			}
+		}
+
+		private static bool TryReserveCache(TaskRequest request, string taskId, out string reason)
+		{
+			reason = "";
+			// Uncoordinated readers do not acquire editor ownership. Explicit coordinated
+			// steps still need validation and accounting, including cache hits.
+			return string.IsNullOrEmpty(request.CoordinationWindowToken)
+				|| CoordinationGate.TryReserve(request, taskId, out reason);
 		}
 
 		public static string CurrentInputDigest(TaskRequest request)
