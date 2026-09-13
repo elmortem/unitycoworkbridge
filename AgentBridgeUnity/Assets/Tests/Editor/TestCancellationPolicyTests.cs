@@ -3,6 +3,16 @@ using NUnit.Framework;
 
 public class TestCancellationPolicyTests
 {
+	private class Job { public string guid; public bool isRunning; }
+	[Test]
+	public void LegacyCancellationRecoversOnlyTheSingleRunningJob()
+	{
+		Assert.AreEqual("live", TestRunnerCancellation.UniqueRunningJobId(new[] {
+			new Job { guid = "old", isRunning = false }, new Job { guid = "live", isRunning = true } }));
+		Assert.AreEqual("", TestRunnerCancellation.UniqueRunningJobId(new Job[0]));
+		Assert.Throws<System.InvalidOperationException>(() => TestRunnerCancellation.UniqueRunningJobId(new[] {
+			new Job { guid = "one", isRunning = true }, new Job { guid = "two", isRunning = true } }));
+	}
 	[TestCase(3600, 300)]
 	[TestCase(300, 300)]
 	[TestCase(10, 10)]

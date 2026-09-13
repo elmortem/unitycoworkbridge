@@ -11,7 +11,7 @@ namespace AgentBridge
 		private const string Key = "AgentBridge_TestRunLifecycle";
 		[Serializable] private class State
 		{
-			public string Id, JobId, Outcome, Reason;
+			public string Id, JobId, Outcome, Reason, CancellationDiagnostic;
 			public long Deadline, StopRequested;
 			public bool Submitted;
 		}
@@ -93,7 +93,21 @@ namespace AgentBridge
 					return;
 				}
 				if (EditorApplication.isPlayingOrWillChangePlaymode) return;
-				if (state.Submitted) TestRunnerCancellation.Request(state.JobId);
+				if (state.Submitted)
+				{
+					string diagnostic = TestRunnerCancellation.Request(state.JobId);
+					if (now - state.StopRequested >= 30000)
+						diagnostic += " Waiting: " + TestRunnerCancellation.RunningReason();
+					if (!string.IsNullOrEmpty(diagnostic) && diagnostic != state.CancellationDiagnostic)
+					{
+						state.CancellationDiagnostic = diagnostic; Save(state);
+						if (hasRecord)
+						{
+							if (record.Logs == null) record.Logs = new List<string>();
+							record.Logs.Add("Cancellation: " + diagnostic); TaskJournal.Write(record);
+						}
+					}
+				}
 				if (state.Submitted && TestRunnerCancellation.IsRunning()) return;
 				if (PlayModeSceneRecovery.IsPending)
 				{
