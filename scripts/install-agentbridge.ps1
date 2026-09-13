@@ -47,7 +47,7 @@ function Get-ReleaseAsset {
 
 	$uri = "$releaseBase/$Name"
 	try {
-		Invoke-WebRequest $uri -OutFile $Destination
+		Invoke-WebRequest $uri -UseBasicParsing -OutFile $Destination
 	} catch {
 		$statusCode = $null
 		if ($null -ne $_.Exception.Response -and $null -ne $_.Exception.Response.StatusCode) {
@@ -72,7 +72,19 @@ try {
 	Get-ReleaseAsset "$assetName.sha256" $checksumPath
 
 	$expectedHash = ((Get-Content $checksumPath -Raw).Trim() -split "\s+")[0].ToLowerInvariant()
-	$actualHash = (Get-FileHash $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+	# Unity can inherit a PSModulePath that hides Windows PowerShell modules.
+	# Use .NET directly so integrity checking does not depend on Get-FileHash.
+	$sha256 = [System.Security.Cryptography.SHA256]::Create()
+	try {
+		$archiveStream = [System.IO.File]::OpenRead($archivePath)
+		try {
+			$actualHash = [BitConverter]::ToString($sha256.ComputeHash($archiveStream)).Replace("-", "").ToLowerInvariant()
+		} finally {
+			$archiveStream.Dispose()
+		}
+	} finally {
+		$sha256.Dispose()
+	}
 	if ($actualHash -ne $expectedHash) {
 		throw "Checksum mismatch for $assetName"
 	}
@@ -81,7 +93,8 @@ try {
 	New-Item -ItemType Directory -Force -Path $expandedPath | Out-Null
 
 	if ($assetName -like "*.zip") {
-		Expand-Archive $archivePath -DestinationPath $expandedPath -Force
+		Add-Type -AssemblyName System.IO.Compression.FileSystem
+		[System.IO.Compression.ZipFile]::ExtractToDirectory($archivePath, $expandedPath)
 	} else {
 		& tar -xzf $archivePath -C $expandedPath
 		if ($LASTEXITCODE -ne 0) {
