@@ -47,6 +47,7 @@ try
 		Scenarios.C12_InputDigest(root, covered);
 		Scenarios.C13_ObserverVerdict(root, covered);
 		Scenarios.C18_CacheEviction(covered);
+		HashingScenarios.Run(root, covered);
 	}
 
 	if (group is "all" or "store")
