@@ -25,6 +25,8 @@ namespace AgentBridge
 		public int LoadedTaskAssemblies;
 		public int ExecutedTasks;
 		public string ActiveTaskId;
+		public string QueueBlockReason;
+		public string QueueBlockedSinceUtc;
 		public string HolderAgentSessionId;
 		public bool IsPlaying;
 		public string PlaySessionAgentId;

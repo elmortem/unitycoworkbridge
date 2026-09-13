@@ -1,0 +1,52 @@
+{
+    "Id": "Task_20260913_061851_404_92c5feee",
+    "Kind": "tests",
+    "Status": "timeout",
+    "Hash": "f09df4e2075eff59bf269e42118b544ef809d69e43d3858a5c8b53d75546b059",
+    "ReturnValue": "",
+    "Logs": [
+        "task exceeded timeout: 10s"
+    ],
+    "Diagnostics": [],
+    "ForeignErrors": false,
+    "Cached": false,
+    "SourceTaskId": "",
+    "AttachedToTaskId": "",
+    "Artifacts": [],
+    "Tests": {
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0,
+        "inconclusive": 0,
+        "total": 0,
+        "duration": 0.0,
+        "aborted": false,
+        "message": "",
+        "failures": []
+    },
+    "Timing": {
+        "QueuedMs": 0,
+        "CompileMs": 0,
+        "ExecuteMs": 0,
+        "TotalMs": 10021
+    },
+    "SessionId": "55e4d13845b54877892cd6fc390b3c98",
+    "AgentSessionId": "anon:Task_20260913_061851_404_92c5feee",
+    "Contention": {
+        "WaitingSessions": 1,
+        "OldestWaitSeconds": 8,
+        "Notes": []
+    },
+    "Evidence": {
+        "Validity": "unknown",
+        "InputDigest": "",
+        "EndInputDigest": "",
+        "WindowId": "",
+        "Reason": "",
+        "ArtifactsPresent": false
+    },
+    "CoordinationWindowToken": "",
+    "CoordinationStepId": "",
+    "StartedAtUtc": "2026-09-13T06:18:51.6305079Z",
+    "FinishedAtUtc": "2026-09-13T06:19:01.6521644Z"
+}

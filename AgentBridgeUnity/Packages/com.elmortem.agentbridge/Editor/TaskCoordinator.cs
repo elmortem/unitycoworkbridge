@@ -20,7 +20,6 @@ namespace AgentBridge
 		private static double _lastQueueRefreshTime;
 		private static double _lastServeTime;
 		private static readonly Dictionary<string, string> _rejectedTaskHashes = new Dictionary<string, string>();
-		private static bool _pendingTimeoutReload;
 
 		private static string _activeTaskId;
 		private static CancellationTokenSource _activeCancellation;
@@ -34,6 +33,9 @@ namespace AgentBridge
 		private static TaskRequest _activeRequest;
 		private static string _pendingValidationKind;
 		private static string _queueSignature = "";
+		private static string _cancelOutcome;
+		private static double _cancelSince;
+		private static double _nextControlScan;
 
 		public static void Start()
 		{
@@ -97,7 +99,7 @@ namespace AgentBridge
 					continue;
 				}
 
-				if (record.Id == compileTaskId || record.Id == testTaskId)
+				if (record.Id == compileTaskId || record.Id == testTaskId || record.Id == TestRunLifecycle.TaskId)
 				{
 					continue;
 				}
@@ -221,6 +223,12 @@ namespace AgentBridge
 
 		public static void CancelActive()
 		{
+			if (TestRunLifecycle.RequestStop(TestRunLifecycle.TaskId, "canceled", "Canceled by user")) return;
+			if (_activeRecord != null && _activeRecord.Kind == "csharp")
+			{
+				RequestCSharpStop("canceled");
+				return;
+			}
 			if (_activeRecord == null)
 			{
 				return;
@@ -243,28 +251,27 @@ namespace AgentBridge
 
 		private static void OnUpdate()
 		{
+			ProcessCancelRequests();
+			TestRunLifecycle.Tick();
+			if (_activeRecord != null && _activeRecord.Kind == "tests") PollExternallyFinalizedTask();
 			PlayModeSceneRecovery.Tick();
 			UnsanctionedPlayGuard.Tick();
 			PlaySessionManager.Reconcile();
-
-			if (_pendingTimeoutReload && _activeTaskId == null)
-			{
-				_pendingTimeoutReload = false;
-				EditorUtility.RequestScriptReload();
-				return;
-			}
 
 			double now = EditorApplication.timeSinceStartup;
 
 			// The coordinator is the only owner of the editor's half of coordination-v1: one
 			// non-blocking lock attempt per tick, and a window is confirmed only while genuinely free.
 			CoordinationEditorAdapter.Tick(IsEditorFreeForWindow());
+			RefreshQueueStatus(now);
+			PublishBlockReason();
 
 			if (_activeTaskId != null)
 			{
 				CheckTimeout(now);
 				RefreshQueueStatus(now);
 				TryServeThrottled(now);
+				if (TestRunLifecycle.IsStopping(_activeTaskId)) return;
 
 				if (_pendingValidationKind != null)
 				{
@@ -310,7 +317,7 @@ namespace AgentBridge
 				return;
 			}
 
-			if (PlayModeSceneRecovery.IsPending)
+			if (PlayModeSceneRecovery.IsPending || !string.IsNullOrEmpty(TestRunLifecycle.TaskId))
 			{
 				TryServeThrottled(now);
 				return;
@@ -399,6 +406,7 @@ namespace AgentBridge
 
 			UpdateQueueStatus(pending);
 
+			pending.RemoveAll(task => !CoordinationGate.CanSchedule(task));
 			PendingTaskInfo next;
 			bool holderChanged;
 			string previousHolder;
@@ -586,6 +594,7 @@ namespace AgentBridge
 					TaskRequest request = JsonUtility.FromJson<TaskRequest>(File.ReadAllText(file));
 					if (request != null)
 					{
+						if (request.Kind == "cancel") continue;
 						info.EffectiveSessionId = AgentSessionScheduler.EffectiveSessionId(request.AgentSessionId, id);
 						info.Note = request.Note ?? "";
 						info.Kind = request.Kind ?? "";
@@ -623,7 +632,7 @@ namespace AgentBridge
 			}
 
 			_lastQueueRefreshTime = now;
-			UpdateQueueStatus(BuildPendingList(null));
+			UpdateQueueStatus(BuildPendingList(_activeTaskId ?? TestRunLifecycle.TaskId));
 		}
 
 		private static void UpdateQueueStatus(List<PendingTaskInfo> pending)
@@ -733,6 +742,7 @@ namespace AgentBridge
 				StartedAtUtc = DateTime.UtcNow.ToString("o")
 			};
 			TaskJournal.Write(_activeRecord);
+			if (request.Kind == "tests") TestRunLifecycle.Begin(id);
 
 			if (holderChanged && !string.IsNullOrEmpty(previousHolder) && !AgentSessionScheduler.IsAnonymous(previousHolder))
 			{
@@ -1102,6 +1112,7 @@ namespace AgentBridge
 		private static bool IsEditorFreeForWindow()
 		{
 			return _activeTaskId == null
+				&& string.IsNullOrEmpty(TestRunLifecycle.TaskId)
 				&& !EditorApplication.isCompiling
 				&& !EditorApplication.isUpdating
 				&& !EditorApplication.isPlayingOrWillChangePlaymode
@@ -1119,7 +1130,7 @@ namespace AgentBridge
 				try
 				{
 					// Discovery can finish after cancellation or timeout. Never start that old task.
-					if (_activeTaskId != request.Id || _activeRequest != request) return;
+					if (_activeTaskId != request.Id || _activeRequest != request || TestRunLifecycle.IsStopping(request.Id)) return;
 					string[] resolved;
 					string status;
 					string message;
@@ -1264,7 +1275,7 @@ namespace AgentBridge
 				BridgeStatusWriter.Write();
 			}
 
-			FinishTask(outcome.Status, outcome.ReturnValue, extraLogs, false);
+			FinishTask(_cancelOutcome ?? outcome.Status, outcome.ReturnValue, extraLogs, false);
 		}
 
 		private static void FinishTask(string status, string returnValue, List<string> extraLogs, bool foreignErrors)
@@ -1322,6 +1333,7 @@ namespace AgentBridge
 			}
 
 			_activeCancellation = null;
+			_cancelOutcome = null;
 			_activeRecord = null;
 			_activeTaskId = null;
 			_activeRequest = null;
@@ -1352,7 +1364,7 @@ namespace AgentBridge
 
 			// A play session has its own deadline and a stopplay task waits for the editor to
 			// finish leaving play mode; the task timeout would cut both short.
-			if (_activeRecord.Kind == "play" || _activeRecord.Kind == "stopplay")
+			if (_activeRecord.Kind == "play" || _activeRecord.Kind == "stopplay" || _activeRecord.Kind == "tests")
 			{
 				return;
 			}
@@ -1362,15 +1374,15 @@ namespace AgentBridge
 			{
 				return;
 			}
+			if (_activeRecord.Kind == "csharp")
+			{
+				RequestCSharpStop("timeout");
+				return;
+			}
 
 			if (_activeCancellation != null)
 			{
 				_activeCancellation.Cancel();
-			}
-
-			if (_activeRecord.Kind == "csharp")
-			{
-				_pendingTimeoutReload = true;
 			}
 
 			TelemetryLog.Write("watchdog", _activeRecord.AgentSessionId, _activeRecord.Id, new[]
@@ -1445,7 +1457,92 @@ namespace AgentBridge
 			TelemetryLog.TaskFinished(record);
 		}
 
-		private static bool IsTerminal(string status)
+		private static void RequestCSharpStop(string outcome)
+		{
+			if (_cancelOutcome != null) return;
+			_cancelOutcome = outcome;
+			_cancelSince = EditorApplication.timeSinceStartup;
+			if (_activeCancellation != null) _activeCancellation.Cancel();
+			_activeRecord.Status = "canceling";
+			TaskJournal.Write(_activeRecord);
+		}
+
+		private static void PublishBlockReason()
+		{
+			string reason = TestRunLifecycle.BlockReason;
+			if (reason.Length == 0 && PlayModeSceneRecovery.IsPending) reason = "scene_recovery";
+			if (reason.Length == 0 && _activeTaskId != null) reason = "active_task:" + _activeTaskId;
+			if (_cancelOutcome != null) reason = (EditorApplication.timeSinceStartup - _cancelSince >= 30 ? "cancel_blocked:" : "canceling:") + _activeTaskId;
+			if (reason.Length == 0 && EditorApplication.isCompiling) reason = "compiling";
+			if (reason.Length == 0 && EditorApplication.isPlayingOrWillChangePlaymode) reason = "play_mode";
+			if (reason.Length == 0)
+			{
+				var snapshot = CoordinationEditorAdapter.Snapshot;
+				var window = snapshot == null ? null : snapshot.FindWindowGrant();
+				if (window != null) reason = "coordination_window:" + window.Session;
+			}
+			BridgeStatus status = BridgeStatusWriter.Current;
+			string visibleTask = _activeTaskId ?? TestRunLifecycle.TaskId;
+			if (status.QueueBlockReason == reason && status.ActiveTaskId == visibleTask) return;
+			status.ActiveTaskId = visibleTask;
+			status.QueueBlockReason = reason;
+			status.QueueBlockedSinceUtc = reason.Length == 0 ? "" : DateTime.UtcNow.ToString("o");
+			BridgeStatusWriter.Write();
+		}
+
+		private static void ProcessCancelRequests()
+		{
+			if (EditorApplication.timeSinceStartup < _nextControlScan) return;
+			_nextControlScan = EditorApplication.timeSinceStartup + 0.25;
+			if (!Directory.Exists(BridgePaths.Inbox)) return;
+			foreach (string path in Directory.GetFiles(BridgePaths.Inbox, "*.task.json"))
+			{
+				TaskRequest request;
+				if (!TaskRequestReader.TryRead(path, out request) || request.Kind != "cancel") continue;
+				TaskRecord answer;
+				if (TaskJournal.TryRead(request.Id, out answer)) continue;
+				string target = request.TargetTaskId ?? "";
+				string result = "task_not_found";
+				bool ok = false;
+				if (target.Length > 0 && target.IndexOfAny(Path.GetInvalidFileNameChars()) < 0 && target != "." && target != "..")
+				{
+					TaskRecord record;
+					bool exists = TaskJournal.TryRead(target, out record);
+					string targetPath = Path.Combine(BridgePaths.Inbox, target + ".task.json");
+					TaskRequest targetRequest;
+					bool queued = TaskRequestReader.TryRead(targetPath, out targetRequest);
+					if (exists && IsTerminal(record.Status)) { ok = true; result = "already_finished"; }
+					else if (exists || queued)
+					{
+						string owner = exists ? record.AgentSessionId : targetRequest.AgentSessionId;
+						string token = exists ? record.CoordinationWindowToken : targetRequest.CoordinationWindowToken;
+						var state = CoordinationEditorAdapter.Snapshot;
+						var grant = state == null || string.IsNullOrEmpty(token) ? null : state.FindGrantByToken(token);
+						if (IsCancellationProtected(grant, owner, request.AgentSessionId, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())) result = "coordinated_window_held:" + owner;
+						else if (TestRunLifecycle.RequestStop(target, "canceled", "Canceled through CLI by " + (request.AgentSessionId ?? "manual"))) { ok = true; result = "cancel_requested"; }
+						else if (_activeTaskId == target && _activeRecord.Kind == "csharp") { RequestCSharpStop("canceled"); ok = true; result = "cancel_requested"; }
+						else if (exists && record.Status == "attached")
+						{
+							record.Status = "canceled";
+							record.FinishedAtUtc = DateTime.UtcNow.ToString("o");
+							TaskJournal.Write(record);
+							TelemetryLog.TaskFinished(record);
+							CoordinationGate.ReleaseByRecord(record, false, "canceled");
+							ok = true; result = "canceled_attachment";
+						}
+						else if (!exists && queued)
+						{
+							WriteTerminal(target, targetRequest.Kind, "canceled", "Canceled before execution", TaskFileHash.HashOf(targetPath, PayloadPathOf(targetPath)));
+							ok = true; result = "canceled";
+						}
+						else result = "cancel_not_supported_for_running_task";
+					}
+				}
+				WriteTerminal(request.Id, "cancel", ok ? "success" : "rejected", result, TaskFileHash.HashOf(path, null));
+			}
+		}
+
+		public static bool IsTerminal(string status)
 		{
 			switch (status)
 			{
@@ -1465,6 +1562,12 @@ namespace AgentBridge
 				default:
 					return false;
 			}
+		}
+
+		public static bool IsCancellationProtected(Coordination.CoordinationGrant grant, string owner, string requester, long now)
+		{
+			return grant != null && grant.State == Coordination.CoordinationLimits.GrantActive
+				&& grant.DeadlineMs > now && owner != requester;
 		}
 
 		private static string IdOf(string taskFilePath)

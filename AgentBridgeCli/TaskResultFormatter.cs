@@ -93,6 +93,8 @@ internal static class TaskResultFormatter
 		}
 
 		AppendEvidence(output, root);
+		AppendLabeledValue(output, "Reason", GetString(root, "Reason"));
+		AppendLabeledValue(output, "Resume", GetString(root, "Resume"));
 		AppendLabeledValue(output, "Result", GetString(root, "ReturnValue"));
 		AppendStringArray(output, root, "Logs", "Logs");
 		AppendDiagnostics(output, root);

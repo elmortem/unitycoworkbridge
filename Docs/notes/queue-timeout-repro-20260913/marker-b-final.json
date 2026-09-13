@@ -1,0 +1,50 @@
+{
+    "Id": "Task_20260913_repro_marker_b",
+    "Kind": "csharp",
+    "Status": "success",
+    "Hash": "52701ad648722da384b5de3d83c1b6cb02dcacec1c07b9fc6934a1745435f022",
+    "ReturnValue": "marker B executed",
+    "Logs": [],
+    "Diagnostics": [],
+    "ForeignErrors": false,
+    "Cached": false,
+    "SourceTaskId": "",
+    "AttachedToTaskId": "",
+    "Artifacts": [],
+    "Tests": {
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0,
+        "inconclusive": 0,
+        "total": 0,
+        "duration": 0.0,
+        "aborted": false,
+        "message": "",
+        "failures": []
+    },
+    "Timing": {
+        "QueuedMs": 0,
+        "CompileMs": 0,
+        "ExecuteMs": 0,
+        "TotalMs": 147
+    },
+    "SessionId": "55e4d13845b54877892cd6fc390b3c98",
+    "AgentSessionId": "repro-follower",
+    "Contention": {
+        "WaitingSessions": 0,
+        "OldestWaitSeconds": 0,
+        "Notes": []
+    },
+    "Evidence": {
+        "Validity": "unknown",
+        "InputDigest": "",
+        "EndInputDigest": "",
+        "WindowId": "",
+        "Reason": "",
+        "ArtifactsPresent": false
+    },
+    "CoordinationWindowToken": "",
+    "CoordinationStepId": "",
+    "StartedAtUtc": "2026-09-13T06:20:52.8466818Z",
+    "FinishedAtUtc": "2026-09-13T06:20:52.9943055Z"
+}

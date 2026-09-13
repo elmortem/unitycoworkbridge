@@ -1,0 +1,7 @@
+2026-09-13T06:18:54.7360379Z plain begin
+2026-09-13T06:19:03.2267317Z marker A executed
+2026-09-13T06:19:29.7366119Z plain end; active=
+2026-09-13T06:19:52.6090028Z recovery begin
+2026-09-13T06:20:27.6318010Z recovery test end; pending=True; active=
+2026-09-13T06:20:52.6235832Z injected recovery result; active=
+2026-09-13T06:20:52.9913044Z marker B executed

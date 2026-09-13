@@ -10,7 +10,7 @@ namespace AgentBridge
 	public static class CoordinationGate
 	{
 		private static readonly string[] StepKinds = { "csharp", "ui", "sceneshot", "compile", "tests" };
-		private static readonly string[] FreeKinds = { "release", "stopplay" };
+		private static readonly string[] FreeKinds = { "release", "stopplay", "cancel" };
 
 		public static bool Coordinated
 		{
@@ -74,6 +74,7 @@ namespace AgentBridge
 
 			if (string.IsNullOrEmpty(request.CoordinationWindowToken) || string.IsNullOrEmpty(request.CoordinationStepId))
 			{
+				if (string.IsNullOrEmpty(request.CoordinationWindowToken) && string.IsNullOrEmpty(request.CoordinationStepId)) return true;
 				reason = CoordinationCodes.Required
 					+ ": this project has active coordination registrations; submit with --coord-window and --coord-step";
 				return false;
@@ -96,6 +97,16 @@ namespace AgentBridge
 			return true;
 		}
 
+		public static bool CanSchedule(PendingTaskInfo task)
+		{
+			if (!Coordinated || CoordinationText.Contains(FreeKinds, task.Kind)) return true;
+			CoordinationState state = CoordinationEditorAdapter.Snapshot;
+			CoordinationGrant window = state == null ? null : state.FindWindowGrant();
+			if (window == null) return true;
+			TaskRequest request;
+			return TaskRequestReader.TryRead(task.TaskFilePath, out request) && request.CoordinationWindowToken == window.Token;
+		}
+
 		// Reserves the step and records the task id before any payload runs. The same task id may
 		// re-enter after a domain reload; a different one finds the step consumed.
 		public static bool TryReserve(TaskRequest request, string taskId, out string reason)
@@ -114,8 +125,13 @@ namespace AgentBridge
 
 			if (string.IsNullOrEmpty(request.CoordinationWindowToken))
 			{
-				reason = CoordinationCodes.Required + ": no window token on this task";
-				return false;
+				CoordinationState state = CoordinationEditorAdapter.Snapshot;
+				if (state != null && state.FindWindowGrant() != null)
+				{
+					reason = CoordinationCodes.Busy;
+					return false;
+				}
+				return true;
 			}
 
 			CoordinationCommand command = CoordinationEditorAdapter.NewCommand(CoordinationEngine.OpStepBegin);

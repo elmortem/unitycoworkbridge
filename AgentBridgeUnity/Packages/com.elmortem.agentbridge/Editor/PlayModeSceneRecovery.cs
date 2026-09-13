@@ -16,6 +16,7 @@ namespace AgentBridge
 		{
 			get { return File.Exists(BridgePaths.PlayModeSceneStateFile); }
 		}
+		public static string PendingTaskId { get { PlayModeSceneState state = Read(); return state == null ? "" : state.TaskId; } }
 
 		public static void Start()
 		{
@@ -73,8 +74,16 @@ namespace AgentBridge
 			}
 
 			PlayModeSceneState state = Read();
-			if (state == null || !state.HasResult)
+			if (state == null)
 			{
+				if (!TestRunnerCancellation.IsRunning() && !EditorApplication.isPlayingOrWillChangePlaymode) ScheduleRecovery();
+				return;
+			}
+			if (!state.HasResult)
+			{
+				TaskRecord owner;
+				bool ended = !TaskJournal.TryRead(state.TaskId, out owner) || TaskCoordinator.IsTerminal(owner.Status);
+				if (ended && !TestRunnerCancellation.IsRunning()) CompleteAbandonedRun(state.TaskId, "Recovered abandoned test scene state");
 				return;
 			}
 
@@ -154,6 +163,14 @@ namespace AgentBridge
 			PlayModeSceneState state = Read();
 			SceneDirtyWatcher.Disarm(state != null ? state.TaskId : "");
 			DeleteStateFile();
+		}
+
+		public static void CompleteAbandonedRun(string taskId, string reason)
+		{
+			PlayModeSceneState state = Read();
+			if (state == null || state.TaskId != taskId) return;
+			if (!state.HasResult) RecordResult(new TestRunResult { aborted = true, message = reason });
+			else ScheduleRecovery();
 		}
 
 		// Read once on the main thread by the evidence layer, which then has to answer the same

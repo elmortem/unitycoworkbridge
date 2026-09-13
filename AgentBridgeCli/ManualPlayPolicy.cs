@@ -9,7 +9,9 @@ internal static class ManualPlayPolicy
 
 	public static bool IsManualPlaying(BridgeStatus? bridge)
 	{
-		return bridge != null && bridge.IsPlaying && string.IsNullOrEmpty(bridge.PlaySessionAgentId);
+		return bridge != null && bridge.IsPlaying && string.IsNullOrEmpty(bridge.PlaySessionAgentId)
+			&& !(bridge.QueueBlockReason?.StartsWith("test_run:", StringComparison.Ordinal) ?? false)
+			&& !(bridge.QueueBlockReason?.StartsWith("cancel", StringComparison.Ordinal) ?? false);
 	}
 
 	public static bool ShouldStop(BridgeHealth? health, string kind, int stopsSoFar)
@@ -19,7 +21,7 @@ internal static class ManualPlayPolicy
 			return false;
 		}
 
-		if (kind == "stopplay")
+		if (kind == "stopplay" || kind == "cancel")
 		{
 			return false;
 		}

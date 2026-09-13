@@ -39,7 +39,7 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
 ### CLI (`AgentBridgeCli/`)
 
 Команды: `csharp`, `ui`, `sceneshot`, `compile`, `tests`, `play`, `stopplay`, `release`, `wait`,
-`status`, `doctor`, `coord`. Общие флаги: `--project`, `--wait`, `--format json|human`, `--session`,
+`status`, `doctor`, `coord`, `cancel <TaskId>`. Общие флаги: `--project`, `--wait`, `--format json|human`, `--session`,
 `--note`, `--coord-window`, `--coord-step`. Неизвестный флаг — ошибка использования, а не позиционный
 аргумент. Коды выхода: `0` успех, `1` терминальный отказ задачи (включая `test_failure`,
 `stale_input`, `evidence_unavailable`), `2` ожидание клиента исчерпано, `3` проект/мост недоступны
@@ -66,6 +66,7 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
   самый крупный файл), `AgentSessionScheduler.cs` (ротация между агентскими сессиями)
 - Исполнители: `CSharpTaskExecutor.cs`, `CompileTaskExecutor.cs`, `AgentTestRunner.cs`,
   `SceneShot/SceneShotTaskExecutor.cs`, `Ui/UiTaskRunner.cs`
+- Отмена тестов: `TestRunLifecycle.cs` хранит владельца, дедлайн и состояние остановки сквозь domain reload; `TestRunnerCancellation.cs` изолирует совместимость с API разных версий Test Framework. `scripts/verify-test-cancellation.ps1` проверяет живую отмену, восстановление и запуск следующей задачи.
 - Компиляция: `RoslynResolver.cs`, `RoslynCompiler.cs`, `ReferenceCatalog.cs`,
   `SourceGuardrail.cs` (отклонение блокирующих и модальных API до исполнения)
 - Координация: общая папка `Coordination/` (namespace `AgentBridge.Coordination`, без UnityEngine —

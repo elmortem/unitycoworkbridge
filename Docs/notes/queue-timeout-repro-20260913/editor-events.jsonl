@@ -1,0 +1,17 @@
+{"T":1789280331632,"W":"editor","E":"lease_grant","S":"anon:Task_20260913_061851_404_92c5feee","Id":"Task_20260913_061851_404_92c5feee","Reason":"first","Prev":""}
+{"T":1789280331633,"W":"editor","E":"task_start","S":"anon:Task_20260913_061851_404_92c5feee","Id":"Task_20260913_061851_404_92c5feee","Kind":"tests","WaitedMs":220,"QueueDepth":1,"Rotated":true,"Note":""}
+{"T":1789280341651,"W":"editor","E":"watchdog","S":"anon:Task_20260913_061851_404_92c5feee","Id":"Task_20260913_061851_404_92c5feee","What":"task_timeout","Kind":"tests","LimitS":10}
+{"T":1789280341659,"W":"editor","E":"task_finish","S":"anon:Task_20260913_061851_404_92c5feee","Id":"Task_20260913_061851_404_92c5feee","Kind":"tests","Status":"timeout","TotalMs":10021,"Cached":false,"Waiting":1,"OldestWaitS":8}
+{"T":1789280341696,"W":"editor","E":"lease_grant","S":"repro-follower","Id":"Task_20260913_repro_marker_a","Reason":"first","Prev":""}
+{"T":1789280341696,"W":"editor","E":"task_start","S":"repro-follower","Id":"Task_20260913_repro_marker_a","Kind":"csharp","WaitedMs":8240,"QueueDepth":1,"Rotated":true,"Note":""}
+{"T":1789280343237,"W":"editor","E":"task_finish","S":"repro-follower","Id":"Task_20260913_repro_marker_a","Kind":"csharp","Status":"success","TotalMs":1536,"Cached":false,"Waiting":0,"OldestWaitS":0}
+{"T":1789280370493,"W":"editor","E":"task_finish","S":"anon:Task_20260913_061851_404_92c5feee","Id":"Task_20260913_061851_404_92c5feee","Kind":"tests","Status":"stale_input","TotalMs":10021,"Cached":false,"Waiting":1,"OldestWaitS":8}
+{"T":1789280390665,"W":"editor","E":"lease_grant","S":"anon:Task_20260913_061950_400_99b310e7","Id":"Task_20260913_061950_400_99b310e7","Reason":"rotation","Prev":"repro-follower"}
+{"T":1789280390665,"W":"editor","E":"task_start","S":"anon:Task_20260913_061950_400_99b310e7","Id":"Task_20260913_061950_400_99b310e7","Kind":"tests","WaitedMs":258,"QueueDepth":1,"Rotated":true,"Note":""}
+{"T":1789280400685,"W":"editor","E":"watchdog","S":"anon:Task_20260913_061950_400_99b310e7","Id":"Task_20260913_061950_400_99b310e7","What":"task_timeout","Kind":"tests","LimitS":10}
+{"T":1789280400693,"W":"editor","E":"task_finish","S":"anon:Task_20260913_061950_400_99b310e7","Id":"Task_20260913_061950_400_99b310e7","Kind":"tests","Status":"timeout","TotalMs":10026,"Cached":false,"Waiting":0,"OldestWaitS":0}
+{"T":1789280428637,"W":"editor","E":"task_finish","S":"anon:Task_20260913_061950_400_99b310e7","Id":"Task_20260913_061950_400_99b310e7","Kind":"tests","Status":"success","TotalMs":10026,"Cached":false,"Waiting":0,"OldestWaitS":0}
+{"T":1789280452706,"W":"editor","E":"task_finish","S":"anon:Task_20260913_061950_400_99b310e7","Id":"Task_20260913_061950_400_99b310e7","Kind":"tests","Status":"runtime_error","TotalMs":10026,"Cached":false,"Waiting":0,"OldestWaitS":0}
+{"T":1789280452848,"W":"editor","E":"lease_grant","S":"repro-follower","Id":"Task_20260913_repro_marker_b","Reason":"first","Prev":""}
+{"T":1789280452849,"W":"editor","E":"task_start","S":"repro-follower","Id":"Task_20260913_repro_marker_b","Kind":"csharp","WaitedMs":44896,"QueueDepth":1,"Rotated":true,"Note":""}
+{"T":1789280452999,"W":"editor","E":"task_finish","S":"repro-follower","Id":"Task_20260913_repro_marker_b","Kind":"csharp","Status":"success","TotalMs":147,"Cached":false,"Waiting":0,"OldestWaitS":0}

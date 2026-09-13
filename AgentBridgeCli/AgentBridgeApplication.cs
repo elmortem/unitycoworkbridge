@@ -129,6 +129,13 @@ internal static class AgentBridgeApplication
 				return await client.SubmitTestsAsync(mode, assemblies, tests, categories, options.WaitSeconds, options.Fresh);
 
 			case "release":
+			case "cancel":
+				if (command == "cancel")
+				{
+					if (commandArguments.Length != 1) return WriteError("bad_usage", "usage: agentbridge cancel <TaskId> [--session S] [--wait seconds]", options.Format);
+					if (health.Bridge?.Capabilities.Contains("cancel-v1") != true) return WriteError("cancel_not_supported", "Update the Unity bridge package to use cancel.", options.Format);
+					return await client.SubmitCancelAsync(commandArguments[0], options.WaitSeconds);
+				}
 				if (commandArguments.Length != 0 || options.Session == null)
 				{
 					return WriteError("bad_usage", "usage: agentbridge release --session <id> [--project <path>] [--wait <seconds>]", options.Format);
@@ -266,6 +273,8 @@ internal static class AgentBridgeApplication
 					+ (health.Bridge.WakeTimerInstalled ? (health.Bridge.WakeTimerKind ?? "installed") : "missing"));
 				Console.Out.WriteLine("Interaction mode: " + (health.Bridge.InteractionMode ?? "unknown"));
 				Console.Out.WriteLine("Active task: " + (health.Bridge.ActiveTaskId ?? "none"));
+				if (!string.IsNullOrEmpty(health.Bridge.QueueBlockReason))
+					Console.Out.WriteLine("Queue blocked: " + health.Bridge.QueueBlockReason + " since " + health.Bridge.QueueBlockedSinceUtc);
 
 				var playing = health.Bridge.IsPlaying ? "yes" : "no";
 				if (!string.IsNullOrEmpty(health.Bridge.PlaySessionAgentId))
@@ -364,7 +373,8 @@ internal static class AgentBridgeApplication
 
 			global options:
 			  --project <path>   Unity project root; otherwise discovered from cwd
-			  --wait <seconds>   client wait timeout, default 110
+			  cancel <TaskId>    cancel a queued task or request a running test/script to stop
+			  --wait <seconds>   total client wait budget including queue, default 110
 			  --seconds <n>      play session length, or a coordination grant budget
 			  --format <value>   json (default, machine-readable) or human for every command
 			  --session <id>     agent session for fair scheduling

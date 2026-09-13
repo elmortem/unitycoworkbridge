@@ -1,0 +1,60 @@
+{
+    "Id":  "Task_20260913_094743_060_orphan",
+    "Kind":  "csharp",
+    "Status":  "success",
+    "Hash":  "d51119ce028a7b3b5eae2ff80ee58b415f8bea828cfce17c8d38eec7fdc5f5a0",
+    "ReturnValue":  "Previous executor stopped; scenes recovered",
+    "Logs":  [
+
+             ],
+    "Diagnostics":  [
+
+                    ],
+    "ForeignErrors":  false,
+    "Cached":  false,
+    "SourceTaskId":  "",
+    "AttachedToTaskId":  "",
+    "Artifacts":  [
+
+                  ],
+    "Tests":  {
+                  "passed":  0,
+                  "failed":  0,
+                  "skipped":  0,
+                  "inconclusive":  0,
+                  "total":  0,
+                  "duration":  0.0,
+                  "aborted":  false,
+                  "message":  "",
+                  "failures":  [
+
+                               ]
+              },
+    "Timing":  {
+                   "QueuedMs":  0,
+                   "CompileMs":  0,
+                   "ExecuteMs":  0,
+                   "TotalMs":  151
+               },
+    "SessionId":  "4ff762970bed4feb82960f309ce2255a",
+    "AgentSessionId":  "cancellation-verifier",
+    "Contention":  {
+                       "WaitingSessions":  0,
+                       "OldestWaitSeconds":  0,
+                       "Notes":  [
+
+                                 ]
+                   },
+    "Evidence":  {
+                     "Validity":  "unknown",
+                     "InputDigest":  "",
+                     "EndInputDigest":  "",
+                     "WindowId":  "",
+                     "Reason":  "",
+                     "ArtifactsPresent":  false
+                 },
+    "CoordinationWindowToken":  "",
+    "CoordinationStepId":  "",
+    "StartedAtUtc":  "2026-09-13T06:48:25.7962064Z",
+    "FinishedAtUtc":  "2026-09-13T06:48:25.9486263Z"
+}

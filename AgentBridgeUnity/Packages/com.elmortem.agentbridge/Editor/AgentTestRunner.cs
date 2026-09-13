@@ -114,7 +114,7 @@ namespace AgentBridge
 					FocusGuard.BeginPlayEntryGuard();
 				}
 
-				api.Execute(new ExecutionSettings(filter));
+				TestRunLifecycle.Submitted(api.Execute(new ExecutionSettings(filter)));
 			}
 			catch
 			{
@@ -236,6 +236,9 @@ namespace AgentBridge
 
 		private static void FinalizeCoordinatorRun(string taskId, TestRunResult run, string recoveryError)
 		{
+			TaskRecord prior;
+			if (TaskJournal.TryRead(taskId, out prior) && TaskCoordinator.IsTerminal(prior.Status)) return;
+			if (TestRunLifecycle.IsStopping(taskId)) return;
 			string requestedFilter = SessionState.GetString(CoordinatorTestFilterKey, "");
 			string testMode = SessionState.GetString(CoordinatorTestModeKey, "");
 			string startSources = SessionState.GetString(CoordinatorTestSourceKey, "");
@@ -428,6 +431,37 @@ namespace AgentBridge
 			}
 		}
 
+		public static void FinalizeCancellation(string taskId, string outcome, string reason)
+		{
+			string mode = SessionState.GetString(CoordinatorTestModeKey, "");
+			if (SessionState.GetString(CoordinatorTestTaskKey, "") == taskId)
+			{
+				SessionState.EraseString(CoordinatorTestTaskKey);
+				SessionState.EraseString(CoordinatorTestModeKey);
+				SessionState.EraseString(CoordinatorTestSourceKey);
+				SessionState.EraseString(CoordinatorTestFilterKey);
+				SessionState.EraseString(CoordinatorTestCatalogKey);
+			}
+			SceneDirtyWatcher.Disarm(taskId);
+			ValidationEvidence.Abort();
+			if (!string.IsNullOrEmpty(mode)) TestRunDumpStore.DeletePending(mode);
+			TaskRecord record;
+			if (!TaskJournal.TryRead(taskId, out record) || TaskCoordinator.IsTerminal(record.Status)) return;
+			record.Status = outcome;
+			record.FinishedAtUtc = System.DateTime.UtcNow.ToString("o");
+			System.DateTime started;
+			if (System.DateTime.TryParse(record.StartedAtUtc, out started)) record.Timing.TotalMs = (int)(System.DateTime.UtcNow - started.ToUniversalTime()).TotalMilliseconds;
+			record.Tests = new TestRunResult { aborted = true, message = reason };
+			if (record.Logs == null) record.Logs = new List<string>();
+			record.Logs.Add(reason);
+			record.Logs.AddRange(SceneDirtyWatcher.DrainLogs());
+			TaskJournal.Write(record);
+			TelemetryLog.TaskFinished(record);
+			TestRunAttachments.Terminate(taskId, outcome, reason, record.Evidence);
+			AgentSessionScheduler.OnTaskFinished(record.AgentSessionId, System.DateTime.UtcNow);
+			CoordinationGate.ReleaseByRecord(record, false, outcome);
+		}
+
 		private class TestCallbacks : ICallbacks
 		{
 			public void RunStarted(ITestAdaptor testsToRun)
@@ -451,6 +485,14 @@ namespace AgentBridge
 				string coordinatorTaskId = SessionState.GetString(CoordinatorTestTaskKey, "");
 				if (!string.IsNullOrEmpty(coordinatorTaskId))
 				{
+					if (TestRunLifecycle.IsStopping(coordinatorTaskId))
+					{
+						if (PlayModeSceneRecovery.IsPending)
+							PlayModeSceneRecovery.RecordResult(new TestRunResult { aborted = true, message = "Test run canceled" });
+						return;
+					}
+					TaskRecord completed;
+					if (TaskJournal.TryRead(coordinatorTaskId, out completed) && TaskCoordinator.IsTerminal(completed.Status)) return;
 					TestRunResult run = BuildResult(result);
 					WritePendingDump(coordinatorTaskId, result);
 					if (SessionState.GetString(CoordinatorTestModeKey, "") == TestMode.PlayMode.ToString()

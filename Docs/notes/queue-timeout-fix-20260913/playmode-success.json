@@ -1,0 +1,50 @@
+{
+    "Id": "Task_20260913_064934_824_ba4cb45a",
+    "Kind": "tests",
+    "Status": "success",
+    "Hash": "55f09e5fdc8fa8fc70661a3a395d544967447a3653ee1b463e61297fef5eb3b9",
+    "ReturnValue": "",
+    "Logs": [],
+    "Diagnostics": [],
+    "ForeignErrors": false,
+    "Cached": false,
+    "SourceTaskId": "",
+    "AttachedToTaskId": "",
+    "Artifacts": [],
+    "Tests": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "inconclusive": 0,
+        "total": 1,
+        "duration": 0.043075,
+        "aborted": false,
+        "message": "",
+        "failures": []
+    },
+    "Timing": {
+        "QueuedMs": 0,
+        "CompileMs": 0,
+        "ExecuteMs": 0,
+        "TotalMs": 0
+    },
+    "SessionId": "7ff569dd318d4a5ebe42e1fc7fc35cc3",
+    "AgentSessionId": "anon:Task_20260913_064934_824_ba4cb45a",
+    "Contention": {
+        "WaitingSessions": 0,
+        "OldestWaitSeconds": 0,
+        "Notes": []
+    },
+    "Evidence": {
+        "Validity": "valid",
+        "InputDigest": "b43eead0a8039cdfe9212148e4d60f19a7adcbf7e73371d813e8b2c90dfdc708",
+        "EndInputDigest": "b43eead0a8039cdfe9212148e4d60f19a7adcbf7e73371d813e8b2c90dfdc708",
+        "WindowId": "",
+        "Reason": "observer reinstalled after 1 domain reload(s); both input digests match",
+        "ArtifactsPresent": true
+    },
+    "CoordinationWindowToken": "",
+    "CoordinationStepId": "",
+    "StartedAtUtc": "2026-09-13T06:49:35.2389253Z",
+    "FinishedAtUtc": "2026-09-13T06:49:40.1952868Z"
+}

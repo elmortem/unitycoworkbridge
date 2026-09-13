@@ -1,0 +1,52 @@
+{
+    "Id": "Task_20260913_061950_400_99b310e7",
+    "Kind": "tests",
+    "Status": "success",
+    "Hash": "5f1c55f93265f16731601f3b9265193a49d9f414ca1b0685808191c04cf7386f",
+    "ReturnValue": "",
+    "Logs": [
+        "task exceeded timeout: 10s"
+    ],
+    "Diagnostics": [],
+    "ForeignErrors": false,
+    "Cached": false,
+    "SourceTaskId": "",
+    "AttachedToTaskId": "",
+    "Artifacts": [],
+    "Tests": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "inconclusive": 0,
+        "total": 1,
+        "duration": 35.1387531,
+        "aborted": false,
+        "message": "",
+        "failures": []
+    },
+    "Timing": {
+        "QueuedMs": 0,
+        "CompileMs": 0,
+        "ExecuteMs": 0,
+        "TotalMs": 10026
+    },
+    "SessionId": "55e4d13845b54877892cd6fc390b3c98",
+    "AgentSessionId": "anon:Task_20260913_061950_400_99b310e7",
+    "Contention": {
+        "WaitingSessions": 0,
+        "OldestWaitSeconds": 0,
+        "Notes": []
+    },
+    "Evidence": {
+        "Validity": "valid",
+        "InputDigest": "686484ed5cb982e528a9ee8f180eabf3e281f4a0e5e5c85ae890fc8d77f04bd9",
+        "EndInputDigest": "686484ed5cb982e528a9ee8f180eabf3e281f4a0e5e5c85ae890fc8d77f04bd9",
+        "WindowId": "",
+        "Reason": "",
+        "ArtifactsPresent": true
+    },
+    "CoordinationWindowToken": "",
+    "CoordinationStepId": "",
+    "StartedAtUtc": "2026-09-13T06:19:50.6601704Z",
+    "FinishedAtUtc": "2026-09-13T06:20:28.6351015Z"
+}

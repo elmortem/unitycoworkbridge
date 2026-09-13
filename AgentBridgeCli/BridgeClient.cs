@@ -22,7 +22,6 @@ internal sealed class BridgeClient
 		"evidence_unavailable"
 	};
 
-	private const int QueueWaitCapSeconds = 3600;
 
 	// Leaving play mode drags a domain reload behind it, and on a heavy project that is slow.
 	private const int StopManualPlaySeconds = 120;
@@ -125,6 +124,12 @@ internal sealed class BridgeClient
 			Note = _note ?? ""
 		};
 		return await SubmitRequestAsync(request, waitSeconds);
+	}
+
+	public Task<int> SubmitCancelAsync(string taskId, int waitSeconds)
+	{
+		if (!IsSafeTaskId(taskId)) return Task.FromResult(WriteError("invalid_task_id", "Invalid target task id."));
+		return SubmitRequestAsync(new TaskRequest { Id = TaskIdGenerator.NewId(), Kind = "cancel", TargetTaskId = taskId }, waitSeconds);
 	}
 
 	public async Task<int> SubmitPlayAsync(int seconds, int waitSeconds)
@@ -292,13 +297,12 @@ internal sealed class BridgeClient
 				}
 			}
 
-			// The client budget covers the task itself. Time spent behind another agent session
-			// in the editor queue is waited out separately, against the queue cap.
+			// One budget covers both queueing and execution. Expiry never resubmits or cancels.
 			if (hasRecord)
 			{
 				runningSince ??= now;
 				var running = now - runningSince.Value;
-				if (running.TotalSeconds >= waitSeconds)
+				if ((now - queuedSince).TotalSeconds >= waitSeconds)
 				{
 					WriteResult(json);
 					return Complete(2, "running");
@@ -326,25 +330,27 @@ internal sealed class BridgeClient
 			// A play mode nobody owns outranks nothing: the coordinator only takes stopplay out of
 			// the queue while it runs, so the task would sit here until the cap. Clearing the last
 			// health forces a fresh status read before another takeover can be decided.
-			if (ManualPlayPolicy.ShouldStop(lastHealth, kind, manualStops))
+			if ((now - queuedSince).TotalSeconds < waitSeconds && ManualPlayPolicy.ShouldStop(lastHealth, kind, manualStops))
 			{
 				manualStops++;
 				Console.Error.WriteLine("[agentbridge] " + taskId
 					+ " editor is in play mode without an agent session; stopping it (stopplay #" + manualStops + ")");
-				await StopManualPlayAsync(taskId);
+				await StopManualPlayAsync(taskId, queuedSince.AddSeconds(waitSeconds));
 				lastHealth = null;
 				nextHealthPoll = DateTime.MinValue;
 				continue;
 			}
 
 			var queued = now - queuedSince;
-			if (queued.TotalSeconds >= QueueWaitCapSeconds)
+			if (queued.TotalSeconds >= waitSeconds)
 			{
 				var payload = new Dictionary<string, object?>
 				{
 					["Id"] = taskId,
 					["Status"] = "queued"
 				};
+				payload["Reason"] = lastHealth?.Bridge?.QueueBlockReason ?? "queued";
+				payload["Resume"] = "agentbridge wait " + taskId;
 				if (ManualPlayPolicy.IsManualPlaying(lastHealth?.Bridge))
 				{
 					payload["Reason"] = "editor_playing_manual";
@@ -366,7 +372,7 @@ internal sealed class BridgeClient
 
 	// The stopplay is an implementation detail of waiting for the original task, so it keeps its
 	// whole life on stderr: stdout carries exactly one result, and that result is the agent's task.
-	private async Task StopManualPlayAsync(string forTaskId)
+	private async Task StopManualPlayAsync(string forTaskId, DateTime clientDeadline)
 	{
 		var stopId = TaskIdGenerator.NewId();
 		var request = new TaskRequest
@@ -384,6 +390,7 @@ internal sealed class BridgeClient
 
 		var journalFile = Path.Combine(_paths.Journal, stopId + ".json");
 		var deadline = DateTime.UtcNow.AddSeconds(StopManualPlaySeconds);
+		if (clientDeadline < deadline) deadline = clientDeadline;
 		var status = "timeout";
 		while (DateTime.UtcNow < deadline)
 		{
@@ -440,6 +447,7 @@ internal sealed class BridgeClient
 		var suffix = ManualPlayPolicy.IsManualPlaying(health.Bridge)
 			? ", editor playing (manual), run 'agentbridge stopplay' to take over"
 			: "";
+		if (!string.IsNullOrEmpty(health.Bridge?.QueueBlockReason)) suffix += ", blocked: " + health.Bridge.QueueBlockReason;
 		foreach (var entry in queue)
 		{
 			if (!string.Equals(entry.Id, taskId, StringComparison.Ordinal))

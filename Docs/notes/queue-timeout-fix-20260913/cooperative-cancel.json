@@ -1,0 +1,60 @@
+{
+    "Id":  "Task_20260913_094743_060_cooperative",
+    "Kind":  "csharp",
+    "Status":  "canceled",
+    "Hash":  "efaecf01cdacdc0658e22ea7fab7e4a65c07d182f452791344d17b758a188b1e",
+    "ReturnValue":  "",
+    "Logs":  [
+
+             ],
+    "Diagnostics":  [
+
+                    ],
+    "ForeignErrors":  false,
+    "Cached":  false,
+    "SourceTaskId":  "",
+    "AttachedToTaskId":  "",
+    "Artifacts":  [
+
+                  ],
+    "Tests":  {
+                  "passed":  0,
+                  "failed":  0,
+                  "skipped":  0,
+                  "inconclusive":  0,
+                  "total":  0,
+                  "duration":  0.0,
+                  "aborted":  false,
+                  "message":  "",
+                  "failures":  [
+
+                               ]
+              },
+    "Timing":  {
+                   "QueuedMs":  0,
+                   "CompileMs":  0,
+                   "ExecuteMs":  0,
+                   "TotalMs":  1160
+               },
+    "SessionId":  "4ff762970bed4feb82960f309ce2255a",
+    "AgentSessionId":  "anon:Task_20260913_094743_060_cooperative",
+    "Contention":  {
+                       "WaitingSessions":  0,
+                       "OldestWaitSeconds":  0,
+                       "Notes":  [
+
+                                 ]
+                   },
+    "Evidence":  {
+                     "Validity":  "unknown",
+                     "InputDigest":  "",
+                     "EndInputDigest":  "",
+                     "WindowId":  "",
+                     "Reason":  "",
+                     "ArtifactsPresent":  false
+                 },
+    "CoordinationWindowToken":  "",
+    "CoordinationStepId":  "",
+    "StartedAtUtc":  "2026-09-13T06:48:33.3472178Z",
+    "FinishedAtUtc":  "2026-09-13T06:48:34.5070774Z"
+}

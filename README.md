@@ -137,6 +137,18 @@ unity-bridge-plugin/
 
 After installation, just ask Claude to do something inside the Unity Editor (e.g. "list all prefabs using shader X" or "add a Rigidbody to all enemies") — the `unity-bridge` skill auto-triggers on such requests. You can also invoke it explicitly via `/unity-bridge`. If the plugin is installed correctly, Claude will start generating a script.
 
+## Cancellation and bounded test runs
+
+`agentbridge cancel <TaskId> [--session S]` addresses one task. Waiting tasks are canceled before execution; running tests and cooperative C# scripts receive a stop request. A repeated request for a completed task is harmless. An unexpired coordinated window protects its tasks from another session's cancellation; uncoordinated tasks may be canceled by a waiting agent. Canceling one attached follower does not stop the shared test run.
+
+Cancellation is serviced outside the execution queue. `cancel_requested` acknowledges the request; use `wait <TaskId>` for the actual outcome. While stopping, the target remains `canceling` and retains the editor until its executor stops and test scene recovery completes. After 30 seconds without completion, status reports `cancel_blocked:<TaskId>`; inspect Unity rather than deleting queue files or restarting the process. Other running task kinds currently return `cancel_not_supported_for_running_task`.
+
+Test runs, including whole selected suites, cannot exceed 300 seconds even if project settings allow longer tasks. A shorter configured timeout or coordinated window also applies. Split longer runs. Ordinary CLI commands without sessions or window tokens remain supported; they wait while a coordinated window is occupied.
+
+`ready` describes bridge availability. `QueueBlockReason` and `QueueBlockedSinceUtc` describe execution blockers, including test execution, cancellation, scene recovery and coordinated windows. Client `--wait` covers both queueing and execution, including automatic stopplay waiting, and leaves the original task intact on exit 2.
+
+For a repeatable live acceptance run in the idle bridge test project, build the CLI and run `powershell -File scripts/verify-test-cancellation.ps1`. It temporarily shortens the test timeout, runs explicit cancellation fixtures through the CLI, checks real executor/recovery state in subsequent tasks, and restores the original settings.
+
 ## Usage
 
 ### Starting Bridge
@@ -321,7 +333,7 @@ Pass `--session <id>` (1–64 characters of `A-Za-z0-9_-`) with every command to
 - Every result carries a `Contention` block — how many foreign sessions are waiting, for how long, and their `--note` texts. `--format human` prints it as `Contention: 2 waiting, oldest 47s`.
 - `tests` and `compile` on an unchanged project skip the queue entirely: they are answered from the result cache or attach to a compatible run already in flight, without taking the lease or switching scene contexts. Only a run after real changes costs editor time; `--fresh` opts out of the cache.
 - `agentbridge release --session <id>` hands the editor back early instead of waiting for the idle timeout. It answers `released` when the session held the lease, `not_holder` otherwise, and never interrupts another session's slice.
-- While a task waits behind another session, the client waits in the queue and reports `queued <n>s, position <p>/<total>, holder <id>` on stderr; `--wait` starts counting only when the task actually starts in Unity, with a hard queue ceiling of 3600 seconds. If the bridge dies while the task is queued, the client exits 3 with `bridge_unavailable`.
+- `--wait` limits the entire client wait, including queueing. Exit 2 preserves the same task; resume with `agentbridge wait <TaskId>`. Status exposes `QueueBlockReason` and `QueueBlockedSinceUtc`; a live heartbeat does not imply that the queue is advancing. If the bridge dies while queued, the client exits 3 with `bridge_unavailable`.
 
 Two settings in `ProjectSettings/AgentBridge.json`, both exposed in **Tools → Agent Bridge → Setup...**:
 
@@ -608,7 +620,7 @@ Telemetry never fails a task: a write that cannot happen is dropped silently.
 
 - Works in Unity Editor. Play Mode is reachable only through an owned play session (`agentbridge play`), and only `csharp` and `sceneshot` run inside one; `tests --mode PlayMode` enters Play Mode on its own and is unaffected. See [Play Mode](#play-mode).
 - Tasks are processed strictly one at a time — Bridge does not start a new task while one is in flight. Order is oldest first within an agent session; between sessions the scheduler rotates the editor on task boundaries (see [Multi-Agent Sessions](#multi-agent-sessions))
-- `Run()` is invoked on Unity's main thread; awaited continuations resume there too, so heavy synchronous work still blocks the Editor — offload it via `await Task.Run(...)`. Bridge caps a task at `TaskTimeoutSeconds` (default 300, configurable in `ProjectSettings/AgentBridge.json`); on timeout it writes `Status: "timeout"` and unblocks the queue
+- `Run()` is invoked on Unity's main thread; awaited continuations resume there too. Use cancellation-aware asynchronous code. A C# timeout requests cancellation and keeps the queue held until the executor stops. Test runs have a hard maximum of 300 seconds, or a shorter configured timeout/window; split longer suites and individual tests. Terminal `timeout` is published after execution stops and test scenes are restored.
 - A running task can be aborted via **Tools → Agent Bridge → Cancel Running Task**
 - `csharp` tasks compile against whatever assemblies are already loaded in the domain — they cannot reference project code that has compilation errors, since the broken assembly itself would never have loaded. Use a `compile` task first to confirm the project builds.
 - Background execution uses a private Unity API with a native Windows fallback. macOS/Linux behavior has not been runtime-validated, and a blocked main thread still requires intervention. See [Running While the Editor Is in the Background](#running-while-the-editor-is-in-the-background).

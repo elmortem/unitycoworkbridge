@@ -1,0 +1,60 @@
+{
+    "Id":  "Task_20260913_064758_625_648ebddb",
+    "Kind":  "tests",
+    "Status":  "timeout",
+    "Hash":  "23c3b576daad1db995ffe40a24897e3aa130fe81e3bfcf27f8a8073a14545188",
+    "ReturnValue":  "",
+    "Logs":  [
+                 "Test run exceeded its deadline (maximum 10 seconds, or the coordinated window). Split long tests and suites into smaller runs."
+             ],
+    "Diagnostics":  [
+
+                    ],
+    "ForeignErrors":  false,
+    "Cached":  false,
+    "SourceTaskId":  "",
+    "AttachedToTaskId":  "",
+    "Artifacts":  [
+
+                  ],
+    "Tests":  {
+                  "passed":  0,
+                  "failed":  0,
+                  "skipped":  0,
+                  "inconclusive":  0,
+                  "total":  0,
+                  "duration":  0.0,
+                  "aborted":  true,
+                  "message":  "Test run exceeded its deadline (maximum 10 seconds, or the coordinated window). Split long tests and suites into smaller runs.",
+                  "failures":  [
+
+                               ]
+              },
+    "Timing":  {
+                   "QueuedMs":  0,
+                   "CompileMs":  0,
+                   "ExecuteMs":  0,
+                   "TotalMs":  10253
+               },
+    "SessionId":  "7570ec26a2af48ed9db0bc57da6edd30",
+    "AgentSessionId":  "anon:Task_20260913_064758_625_648ebddb",
+    "Contention":  {
+                       "WaitingSessions":  0,
+                       "OldestWaitSeconds":  0,
+                       "Notes":  [
+
+                                 ]
+                   },
+    "Evidence":  {
+                     "Validity":  "unknown",
+                     "InputDigest":  "",
+                     "EndInputDigest":  "",
+                     "WindowId":  "",
+                     "Reason":  "",
+                     "ArtifactsPresent":  false
+                 },
+    "CoordinationWindowToken":  "",
+    "CoordinationStepId":  "",
+    "StartedAtUtc":  "2026-09-13T06:47:58.6793588Z",
+    "FinishedAtUtc":  "2026-09-13T06:48:08.9326343Z"
+}

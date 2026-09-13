@@ -1,0 +1,50 @@
+{
+    "Id": "Task_20260913_064929_218_383ff5e8",
+    "Kind": "tests",
+    "Status": "success",
+    "Hash": "ecd6fe499d2c5e83f7bee05d152fdc0a84134f4e12a94acc3eeaeef79babba0f",
+    "ReturnValue": "",
+    "Logs": [],
+    "Diagnostics": [],
+    "ForeignErrors": false,
+    "Cached": false,
+    "SourceTaskId": "",
+    "AttachedToTaskId": "",
+    "Artifacts": [],
+    "Tests": {
+        "passed": 19,
+        "failed": 0,
+        "skipped": 0,
+        "inconclusive": 0,
+        "total": 19,
+        "duration": 1.4437291,
+        "aborted": false,
+        "message": "",
+        "failures": []
+    },
+    "Timing": {
+        "QueuedMs": 0,
+        "CompileMs": 0,
+        "ExecuteMs": 0,
+        "TotalMs": 0
+    },
+    "SessionId": "7ff569dd318d4a5ebe42e1fc7fc35cc3",
+    "AgentSessionId": "anon:Task_20260913_064929_218_383ff5e8",
+    "Contention": {
+        "WaitingSessions": 0,
+        "OldestWaitSeconds": 0,
+        "Notes": []
+    },
+    "Evidence": {
+        "Validity": "valid",
+        "InputDigest": "202041aa1cbfb81df0001bce90075c35c7dc2585c9470d81adccd894d225f213",
+        "EndInputDigest": "202041aa1cbfb81df0001bce90075c35c7dc2585c9470d81adccd894d225f213",
+        "WindowId": "",
+        "Reason": "",
+        "ArtifactsPresent": true
+    },
+    "CoordinationWindowToken": "",
+    "CoordinationStepId": "",
+    "StartedAtUtc": "2026-09-13T06:49:29.7106892Z",
+    "FinishedAtUtc": "2026-09-13T06:49:34.5871303Z"
+}

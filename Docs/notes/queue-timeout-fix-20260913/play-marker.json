@@ -1,0 +1,60 @@
+{
+    "Id":  "Task_20260913_094743_060_play",
+    "Kind":  "csharp",
+    "Status":  "success",
+    "Hash":  "3c326072fdd6d7a6ff9f6aab514982285dad0b6b9e94eaae7b45349d528c01c9",
+    "ReturnValue":  "Previous executor stopped; scenes recovered",
+    "Logs":  [
+
+             ],
+    "Diagnostics":  [
+
+                    ],
+    "ForeignErrors":  false,
+    "Cached":  false,
+    "SourceTaskId":  "",
+    "AttachedToTaskId":  "",
+    "Artifacts":  [
+
+                  ],
+    "Tests":  {
+                  "passed":  0,
+                  "failed":  0,
+                  "skipped":  0,
+                  "inconclusive":  0,
+                  "total":  0,
+                  "duration":  0.0,
+                  "aborted":  false,
+                  "message":  "",
+                  "failures":  [
+
+                               ]
+              },
+    "Timing":  {
+                   "QueuedMs":  0,
+                   "CompileMs":  0,
+                   "ExecuteMs":  0,
+                   "TotalMs":  1447
+               },
+    "SessionId":  "4ff762970bed4feb82960f309ce2255a",
+    "AgentSessionId":  "cancellation-verifier",
+    "Contention":  {
+                       "WaitingSessions":  0,
+                       "OldestWaitSeconds":  0,
+                       "Notes":  [
+
+                                 ]
+                   },
+    "Evidence":  {
+                     "Validity":  "unknown",
+                     "InputDigest":  "",
+                     "EndInputDigest":  "",
+                     "WindowId":  "",
+                     "Reason":  "",
+                     "ArtifactsPresent":  false
+                 },
+    "CoordinationWindowToken":  "",
+    "CoordinationStepId":  "",
+    "StartedAtUtc":  "2026-09-13T06:48:19.8310211Z",
+    "FinishedAtUtc":  "2026-09-13T06:48:21.2778369Z"
+}

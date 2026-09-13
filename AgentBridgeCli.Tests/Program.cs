@@ -20,6 +20,7 @@ try
 	RunWakePolicyTests();
 	RunBackgroundTickTimerTests();
 	await RunStaleSubmissionTests(root);
+	await RunQueueBudgetTests(root);
 	RunManualPlayPolicyTests();
 	RunTelemetryTests(root);
 	Console.WriteLine("AgentBridgeCli.Tests: PASS");
@@ -497,6 +498,47 @@ static async Task RunStaleSubmissionTests(string temporaryRoot)
 	}
 }
 
+static async Task RunQueueBudgetTests(string temporaryRoot)
+{
+	var project = Path.Combine(temporaryRoot, "QueueBudget");
+	CreateProject(project);
+	var paths = new BridgePaths(project);
+	Directory.CreateDirectory(paths.WorkingRoot);
+	File.WriteAllText(paths.StatusFile, JsonSerializer.Serialize(new BridgeStatus
+	{
+		ProtocolVersion = 1, ProjectPath = project, EditorPid = Environment.ProcessId,
+		Enabled = true, RoslynReady = true, HostOs = HostPlatform.Current,
+		QueueBlockReason = "scene_recovery", Capabilities = new[] { "cancel-v1" }
+	}));
+	WriteHeartbeat(paths.WorkingRoot, 0);
+	var stdout = Console.Out;
+	var stderr = Console.Error;
+	using var output = new StringWriter();
+	using var errors = new StringWriter();
+	Console.SetOut(output); Console.SetError(errors);
+	try
+	{
+		var elapsed = System.Diagnostics.Stopwatch.StartNew();
+		int code = await AgentBridgeApplication.RunAsync(new[] { "compile", "--project", project, "--wait", "1" }).WaitAsync(TimeSpan.FromSeconds(5));
+		Expect(code == 2 && elapsed.Elapsed.TotalSeconds < 4, "--wait must bound queue waiting, not wait an hour");
+		using var result = JsonDocument.Parse(output.ToString());
+		string id = result.RootElement.GetProperty("Id").GetString()!;
+		Expect(result.RootElement.GetProperty("Status").GetString() == "queued", "queue expiry is not terminal task timeout");
+		Expect(result.RootElement.GetProperty("Reason").GetString() == "scene_recovery", "queue expiry must expose its blocker");
+		Expect(File.Exists(Path.Combine(paths.Inbox, id + ".task.json")), "client timeout preserves the exact queued task");
+		output.GetStringBuilder().Clear();
+		WriteHeartbeat(paths.WorkingRoot, 0);
+		var cancel = AgentBridgeApplication.RunAsync(new[] { "cancel", id, "--project", project, "--session", "observer", "--wait", "1" });
+		var requests = Directory.GetFiles(paths.Inbox, "*.task.json");
+		Expect(requests.Length == 2, "cancel submits one control request and does not duplicate the target");
+		using var control = JsonDocument.Parse(File.ReadAllText(requests.Single(path => !path.EndsWith(id + ".task.json"))));
+		Expect(control.RootElement.GetProperty("TargetTaskId").GetString() == id, "cancel must address the exact task");
+		Expect(control.RootElement.GetProperty("Kind").GetString() == "cancel", "control request uses cancel kind");
+		Expect(await cancel.WaitAsync(TimeSpan.FromSeconds(5)) == 2, "an unconsumed cancellation obeys the client budget too");
+	}
+	finally { Console.SetOut(stdout); Console.SetError(stderr); }
+}
+
 static void RunManualPlayPolicyTests()
 {
 	static BridgeHealth Health(bool ready, bool playing, string? owner)
@@ -509,6 +551,10 @@ static void RunManualPlayPolicyTests()
 	}
 
 	Expect(ManualPlayPolicy.ShouldStop(Health(true, true, null), "csharp", 0), "manual play must be stopped for a queued task");
+	var testing = Health(true, true, null);
+	testing.Bridge!.QueueBlockReason = "test_run:Task_test";
+	Expect(!ManualPlayPolicy.ShouldStop(testing, "csharp", 0), "a PlayMode test is not manual play");
+	Expect(!ManualPlayPolicy.ShouldStop(Health(true, true, null), "cancel", 0), "cancel must not submit an unrelated stopplay");
 	Expect(!ManualPlayPolicy.ShouldStop(Health(true, true, "agent-a"), "csharp", 0), "an owned play session must not be touched");
 	Expect(!ManualPlayPolicy.ShouldStop(Health(true, true, null), "stopplay", 0), "stopplay must not stop play for itself");
 	Expect(!ManualPlayPolicy.ShouldStop(Health(true, true, null), "csharp", ManualPlayPolicy.MaxStops), "exhausted attempts must fall back to waiting");
