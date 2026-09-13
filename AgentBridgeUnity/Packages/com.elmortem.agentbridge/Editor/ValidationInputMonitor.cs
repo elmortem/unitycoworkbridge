@@ -89,6 +89,9 @@ namespace AgentBridge
 
 		private void OnChanged(object sender, FileSystemEventArgs args)
 		{
+			// Directory timestamps are not snapshot inputs. Unity touches package directories
+			// during reload; the file events and directory create/delete/rename events remain.
+			if (args.ChangeType == WatcherChangeTypes.Changed && Directory.Exists(args.FullPath)) return;
 			Record(args.FullPath);
 		}
 

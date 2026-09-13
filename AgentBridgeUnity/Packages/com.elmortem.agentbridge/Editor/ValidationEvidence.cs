@@ -33,6 +33,14 @@ namespace AgentBridge
 
 		private static ValidationInputMonitor _monitor;
 		private static Task<ValidationInputSnapshot> _work;
+		private static Task<string> _sourceWork;
+		private static InputHashJob _job;
+		private static Task<ValidationInputSnapshot> _completion;
+		private static Task<string> _completionSources;
+		private static string _completingId;
+		public const string SourceKey = "AgentBridge_EvidenceSources";
+		public static string PreparedSources { get { return SessionState.GetString(SourceKey, ""); } }
+		public static string CompletedSources { get; private set; }
 		private static string _preparingTaskId = "";
 		private static int _retries;
 		private static ValidationInputSnapshot _first;
@@ -102,12 +110,10 @@ namespace AgentBridge
 			SessionState.SetString(ScratchKey, bootstrap);
 			_ignore = BuildIgnore(bootstrap);
 
-			_work = Task.Run(() => Capture());
-		}
-
-		private static ValidationInputSnapshot Capture()
-		{
-			return ValidationInputSnapshot.Capture(_roots, _excluded, _context, _ignore);
+			_job = new InputHashJob(_roots, _excluded, _context, _ignore);
+			string projectRoot = BridgePaths.ProjectRoot;
+			_sourceWork = Task.Run(() => CompileFingerprint.Capture(projectRoot));
+			_work = _job.Start();
 		}
 
 		// The temporary scenes the Unity Test Framework creates for a PlayMode run, and which the
@@ -155,7 +161,10 @@ namespace AgentBridge
 				return true;
 			}
 
-			if (!_work.IsCompleted)
+			// Fast native hashing can finish before the refresh that queued this preparation.
+			// Keep the completed work until Unity settles instead of turning speed into failure.
+			if (EditorApplication.isCompiling || EditorApplication.isUpdating) return false;
+			if (!_work.IsCompleted || (_sourceWork != null && !_sourceWork.IsCompleted))
 			{
 				return false;
 			}
@@ -187,7 +196,7 @@ namespace AgentBridge
 				// looking and watching.
 				_first = snapshot;
 				InstallMonitor();
-				_work = Task.Run(() => Capture());
+				_work = _job.Start();
 				return false;
 			}
 
@@ -198,7 +207,7 @@ namespace AgentBridge
 					_retries++;
 					_first = null;
 					DisposeMonitor();
-					_work = Task.Run(() => Capture());
+					_work = _job.Start();
 					return false;
 				}
 
@@ -218,6 +227,7 @@ namespace AgentBridge
 				return true;
 			}
 
+			SessionState.SetString(SourceKey, _sourceWork != null && _sourceWork.Status == TaskStatus.RanToCompletion ? _sourceWork.Result : "");
 			SessionState.SetString(TaskKey, _preparingTaskId);
 			SessionState.SetString(DigestKey, snapshot.Digest);
 			SessionState.SetString(ContextKey, _context);
@@ -235,7 +245,32 @@ namespace AgentBridge
 
 		// Main thread, after the run finished. Hashes once more and turns the two snapshots plus
 		// the observer verdict into the record that travels with the result.
-		public static EvidenceRecord Complete(string taskId, bool artifactsPresent)
+		public static bool TryComplete(string taskId, bool artifactsPresent, out EvidenceRecord result)
+		{
+			result = null;
+			if (_completion == null || _completingId != taskId)
+			{
+				_completingId = taskId;
+				var job = new InputHashJob(Split(SessionState.GetString(RootsKey, "")),
+					Split(SessionState.GetString(ExcludedKey, "")), SessionState.GetString(ContextKey, ""),
+					BuildIgnore(SessionState.GetString(ScratchKey, "")));
+				string projectRoot = BridgePaths.ProjectRoot;
+				_completionSources = Task.Run(() => CompileFingerprint.Capture(projectRoot));
+				_completion = job.Measure("validation_complete", taskId);
+				return false;
+			}
+			if (!_completion.IsCompleted || !_completionSources.IsCompleted) return false;
+			var end = _completion.Status == TaskStatus.RanToCompletion ? _completion.Result
+				: ValidationInputSnapshot.Incomplete("final input snapshot failed");
+			CompletedSources = _completionSources.Status == TaskStatus.RanToCompletion ? _completionSources.Result : "";
+			_completion = null;
+			_completionSources = null;
+			_completingId = null;
+			result = Complete(taskId, artifactsPresent, end);
+			return true;
+		}
+
+		private static EvidenceRecord Complete(string taskId, bool artifactsPresent, ValidationInputSnapshot end)
 		{
 			string observed = SessionState.GetString(TaskKey, "");
 			if (observed != taskId)
@@ -244,9 +279,6 @@ namespace AgentBridge
 			}
 
 			string startDigest = SessionState.GetString(DigestKey, "");
-			string[] roots = Split(SessionState.GetString(RootsKey, ""));
-			string[] excluded = Split(SessionState.GetString(ExcludedKey, ""));
-			string context = SessionState.GetString(ContextKey, "");
 			string windowId = SessionState.GetString(WindowKey, "");
 			int reloads = SessionState.GetInt(ReloadsKey, 0);
 			int events = SessionState.GetInt(EventsKey, 0);
@@ -255,15 +287,17 @@ namespace AgentBridge
 
 			if (_monitor != null)
 			{
+				if (_monitor.EventCount > 0)
+				{
+					TelemetryLog.Write("input_changes", "", taskId, new[] {
+						TelemetryField.Number("Events", _monitor.EventCount),
+						TelemetryField.Text("Paths", string.Join(";", _monitor.Paths)) });
+				}
 				events += _monitor.EventCount;
 				observerOk = observerOk && _monitor.Observed;
 				observerFailure = _monitor.Failure;
 			}
-
-			// The same ignore rule as the starting snapshot, rebuilt from the scratch path recorded
-			// before the run: a different rule at either end would compare two different projects.
-			Func<string, bool> ignore = BuildIgnore(SessionState.GetString(ScratchKey, ""));
-			ValidationInputSnapshot end = ValidationInputSnapshot.Capture(roots, excluded, context, ignore);
+			// The observer remains alive until the worker finishes and we evaluate its events.
 			Cleanup();
 
 			var record = new EvidenceRecord
@@ -442,6 +476,11 @@ namespace AgentBridge
 		{
 			DisposeMonitor();
 			_work = null;
+			_sourceWork = null;
+			_completion = null;
+			_completionSources = null;
+			_completingId = null;
+			_job = null;
 			_first = null;
 			_preparingTaskId = "";
 			SessionState.EraseString(TaskKey);

@@ -17,7 +17,12 @@ namespace AgentBridge
 		// waiting, and it costs a fraction of the run it saves.
 		public static string Current()
 		{
-			string projectRoot = BridgePaths.ProjectRoot;
+			return Capture(BridgePaths.ProjectRoot);
+		}
+
+		// The caller captures the Unity-derived project path before dispatching to a worker.
+		public static string Capture(string projectRoot)
+		{
 			var files = new List<string>();
 
 			Collect(Path.Combine(projectRoot, "Assets"), files);
@@ -38,13 +43,13 @@ namespace AgentBridge
 					.Append('|');
 				// Timestamps and sizes can be preserved by external tools. Cache reuse must
 				// still notice different source bytes in that case.
-				using (SHA256 contentHash = SHA256.Create())
+				using (SHA256 contentHash = ContentHash.Create())
 				using (FileStream stream = File.OpenRead(file))
 					builder.Append(Convert.ToBase64String(contentHash.ComputeHash(stream)));
 				builder.Append('\n');
 			}
 
-			using (SHA256 sha = SHA256.Create())
+			using (SHA256 sha = ContentHash.Create())
 			{
 				byte[] hash = sha.ComputeHash(Encoding.UTF8.GetBytes(builder.ToString()));
 				var hex = new StringBuilder(hash.Length * 2);

@@ -9,10 +9,8 @@ namespace AgentBridge
 	// A content digest of everything a validation result depends on: imported sources, assets and
 	// their .meta, project settings, package manifests and every resolved local package.
 	//
-	// Deliberately not the compile fingerprint. That one hashes paths, sizes and write times of a
-	// few extensions, which is enough to decide whether to reuse a compile and nowhere near enough
-	// to claim a test run describes a known project. A file edited back to its original size with
-	// its timestamp restored moves this digest and not that one.
+	// Unlike the source-only compile fingerprint, this includes assets, metadata and all
+	// project settings. Both fingerprints hash actual bytes, even when size and time are preserved.
 	[Serializable]
 	public class ValidationInputSnapshot
 	{
@@ -54,9 +52,10 @@ namespace AgentBridge
 				ExcludedRoots = excludedRoots ?? new string[0]
 			};
 
-			using (var sha = SHA256.Create())
+			using (var sha = ContentHash.Create())
 			using (var stream = new CryptoStream(Stream.Null, sha, CryptoStreamMode.Write))
 			{
+				var buffer = new byte[64 * 1024];
 				Append(stream, "context\n" + (context ?? "") + "\n");
 
 				for (int index = 0; index < snapshot.Roots.Length; index++)
@@ -82,10 +81,23 @@ namespace AgentBridge
 					foreach (string file in files)
 					{
 						string relative = prefix + "/" + RelativeTo(root, file);
-						byte[] content;
 						try
 						{
-							content = File.ReadAllBytes(file);
+							using (var input = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read, buffer.Length, FileOptions.SequentialScan))
+							{
+								long length = input.Length;
+								Append(stream, "file\n" + relative + "\n" + length + "\n");
+								long read = 0;
+								int count;
+								while ((count = input.Read(buffer, 0, buffer.Length)) != 0)
+								{
+									stream.Write(buffer, 0, count);
+									read += count;
+								}
+								if (read != length) return Incomplete("input changed size while reading: " + relative);
+								snapshot.FileCount++;
+								snapshot.TotalBytes += read;
+							}
 						}
 						catch (FileNotFoundException)
 						{
@@ -106,10 +118,6 @@ namespace AgentBridge
 							return snapshot;
 						}
 
-						Append(stream, "file\n" + relative + "\n" + content.Length + "\n");
-						stream.Write(content, 0, content.Length);
-						snapshot.FileCount++;
-						snapshot.TotalBytes += content.Length;
 					}
 				}
 

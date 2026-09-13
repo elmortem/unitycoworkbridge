@@ -106,7 +106,7 @@ public class AgentBridgeTestCacheTests
 	{
 		TestRunDump dump = Dump("digest-stale", "EditMode", "Task_stale", "Suite.One");
 		dump.Validity = EvidenceRecord.Stale;
-		string id = TestRunDumpStore.Publish(dump, 1000);
+		string id = TestRunDumpStore.Publish(dump, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
 		_published.Add(id);
 
 		TestCacheEntryInfo entry = TestRunDumpStore.ReadIndex().Find(id);
@@ -118,7 +118,7 @@ public class AgentBridgeTestCacheTests
 
 	private string Publish(string digest, string mode, string taskId, params string[] tests)
 	{
-		string id = TestRunDumpStore.Publish(Dump(digest, mode, taskId, tests), 1000);
+		string id = TestRunDumpStore.Publish(Dump(digest, mode, taskId, tests), DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
 		_published.Add(id);
 		return id;
 	}

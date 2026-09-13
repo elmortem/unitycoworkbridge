@@ -60,7 +60,8 @@ public class AgentBridgeEvidenceTests
 		StringAssert.Contains("unity=" + Application.unityVersion, context);
 		StringAssert.Contains("platform=" + EditorUserBuildSettings.activeBuildTarget, context);
 		StringAssert.Contains("mode=EditMode", context);
-		StringAssert.Contains("filter=AgentBridgeEvidenceTests", context);
+		Assert.AreEqual(context, ValidationEvidence.ContextOf("EditMode", "OtherSubset"),
+			"selection is checked by coverage; subsets share the same input digest");
 		Assert.AreNotEqual(
 			context,
 			ValidationEvidence.ContextOf("PlayMode", "AgentBridgeEvidenceTests"),

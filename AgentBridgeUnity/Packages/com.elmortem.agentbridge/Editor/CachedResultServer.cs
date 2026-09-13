@@ -1,15 +1,22 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
+using UnityEditor;
 
 namespace AgentBridge
 {
 	public static class CachedResultServer
 	{
-		public static void TryServePending(List<PendingTaskInfo> pending)
+		private static async Task ServeAsync(List<PendingTaskInfo> pending)
 		{
 			// Both kinds key on the same cheap source hash, and it is the expensive part of the
 			// first check, so it is computed once per scan and only if a cacheable task waits.
-			string sourceFingerprint = null;
+			string projectRoot = BridgePaths.ProjectRoot;
+			string[] roots = ValidationEvidence.CollectRoots();
+			string[] excluded = ValidationEvidence.CollectExcludedRoots();
+			var ignore = ValidationEvidence.BuildIgnore(PlayModeSceneRecovery.BootstrapScenePath());
+			using var monitor = new ValidationInputMonitor(roots, excluded, ignore);
+			string sourceFingerprint = await Task.Run(() => CompileFingerprint.Capture(projectRoot));
 			long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
 			for (int i = pending.Count - 1; i >= 0; i--)
@@ -32,14 +39,17 @@ namespace AgentBridge
 					continue;
 				}
 
-				if (sourceFingerprint == null)
-				{
-					sourceFingerprint = TestFingerprint.Sources();
-				}
+				string requestHash = TaskFileHash.HashOf(task.TaskFilePath, null);
 
 				if (task.Kind == "tests")
 				{
-					string inputDigest = null;
+					string mode = request.TestMode == "PlayMode" ? "PlayMode" : "EditMode";
+					string context = ValidationEvidence.ContextOf(mode, FilterOf(request));
+					var job = new InputHashJob(roots, excluded, context, ignore);
+					bool candidate = TestRunDumpStore.ReadIndex().Entries.Exists(e => e.TestMode == mode && e.Validity == EvidenceRecord.Valid && e.SourceFingerprint == sourceFingerprint);
+					if (!candidate) continue;
+					var snapshot = await job.Measure("cache_lookup", task.Id);
+					string inputDigest = snapshot.Complete ? snapshot.Digest : "";
 					// The content digest is only ever computed once a cheap candidate exists, and
 					// it is computed fresh: a memo keyed on sizes and times would hand out a hit
 					// for a file that was edited back to its old size.
@@ -48,15 +58,7 @@ namespace AgentBridge
 					if (!TestCacheQuery.TryServe(
 						request,
 						capturedFingerprint,
-						delegate
-						{
-							if (inputDigest == null)
-							{
-								inputDigest = CurrentInputDigest(request);
-							}
-
-							return inputDigest;
-						},
+						() => inputDigest,
 						nowMs,
 						out hit))
 					{
@@ -65,7 +67,15 @@ namespace AgentBridge
 
 					// A served result consumes its step exactly once, just like a real run.
 					string reserveError;
-					if (inputDigest != CurrentInputDigest(request) || sourceFingerprint != TestFingerprint.Sources()) continue;
+					var verified = await job.Measure("cache_verify", task.Id);
+					string verifiedSources = await Task.Run(() => CompileFingerprint.Capture(projectRoot));
+					// Await allowed cancellation, cache eviction and artifact removal to run.
+					// Recheck the actual entry and editor context before consuming a step.
+					if (context != ValidationEvidence.ContextOf(mode, FilterOf(request))
+						|| !TestCacheQuery.TryServe(request, sourceFingerprint, () => inputDigest,
+							DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), out hit)) continue;
+					if (!verified.Complete || inputDigest != verified.Digest || sourceFingerprint != verifiedSources
+						|| !CanPublish(task, requestHash, monitor)) continue;
 					if (!TryReserveCache(request, task.Id, out reserveError))
 					{
 						continue;
@@ -100,7 +110,8 @@ namespace AgentBridge
 					}
 
 					string reserveError;
-					if (sourceFingerprint != TestFingerprint.Sources()) continue;
+					if (sourceFingerprint != await Task.Run(() => CompileFingerprint.Capture(projectRoot))
+						|| !CanPublish(task, requestHash, monitor)) continue;
 					if (!TryReserveCache(request, task.Id, out reserveError))
 					{
 						continue;
@@ -121,6 +132,54 @@ namespace AgentBridge
 
 				pending.RemoveAt(i);
 			}
+		}
+
+		private static Task _work;
+		private static double _nextLookup;
+		private static readonly HashSet<string> Checking = new HashSet<string>();
+		public static bool IsChecking(string id) { return Checking.Contains(id); }
+
+		public static void TryServePending(List<PendingTaskInfo> pending)
+		{
+			if (_work != null && !_work.IsCompleted) return;
+			if (EditorApplication.timeSinceStartup < _nextLookup) return;
+			var candidates = new List<PendingTaskInfo>();
+			foreach (var task in pending)
+			{
+				TaskRecord record;
+				TaskRequest request;
+				if ((task.Kind == "compile" || task.Kind == "tests")
+					&& !TaskJournal.TryRead(task.Id, out record)
+					&& TaskRequestReader.TryRead(task.TaskFilePath, out request) && !request.Fresh)
+				{
+					candidates.Add(task);
+					Checking.Add(task.Id);
+				}
+			}
+			if (candidates.Count > 0) _work = RunLookup(candidates);
+		}
+
+		private static async Task RunLookup(List<PendingTaskInfo> pending)
+		{
+			try { await ServeAsync(pending); }
+			catch (Exception error)
+			{
+				TelemetryLog.Write("cache_skip", "", "", new[] { TelemetryField.Text("What", error.GetBaseException().Message) });
+			}
+			finally
+			{
+				Checking.Clear();
+				_nextLookup = EditorApplication.timeSinceStartup + 1;
+			}
+		}
+
+		private static bool CanPublish(PendingTaskInfo task, string requestHash, ValidationInputMonitor monitor)
+		{
+			TaskRecord record;
+			return AgentBridgeSettingsStore.IsEnabled() && !EditorApplication.isCompiling && !EditorApplication.isUpdating
+				&& monitor.Observed && monitor.EventCount == 0
+				&& !TaskJournal.TryRead(task.Id, out record)
+				&& requestHash == TaskFileHash.HashOf(task.TaskFilePath, null);
 		}
 
 		private static bool TryReserveCache(TaskRequest request, string taskId, out string reason)

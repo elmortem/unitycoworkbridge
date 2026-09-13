@@ -34,7 +34,7 @@ namespace AgentBridge
 		public static void RequestCompilation()
 		{
 			_startTime = EditorApplication.timeSinceStartup;
-			SessionState.SetString(PendingCompileFingerprintKey, CompileFingerprint.Current());
+			SessionState.SetString(PendingCompileFingerprintKey, ValidationEvidence.PreparedSources);
 			CompilationPipeline.RequestScriptCompilation();
 		}
 

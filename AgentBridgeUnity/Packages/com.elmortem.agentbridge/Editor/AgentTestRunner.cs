@@ -14,6 +14,15 @@ namespace AgentBridge
 		public const string CoordinatorTestFilterKey = "AgentBridge_CoordinatorTestFilter";
 		public const string CoordinatorTestCatalogKey = "AgentBridge_CoordinatorTestCatalog";
 		private static TestRunnerApi _api;
+		private const string FinalizationKey = "AgentBridge_TestFinalization";
+		[System.Serializable]
+		private class PendingFinalization
+		{
+			public string TaskId;
+			public TestRunResult Run;
+			public string RecoveryError;
+		}
+		private static PendingFinalization _finalization;
 
 		static AgentTestRunner()
 		{
@@ -21,6 +30,12 @@ namespace AgentBridge
 			_api = ScriptableObject.CreateInstance<TestRunnerApi>();
 			_api.RegisterCallbacks(new TestCallbacks());
 			PlayModeSceneRecovery.Start();
+			string finalization = SessionState.GetString(FinalizationKey, "");
+			if (!string.IsNullOrEmpty(finalization))
+			{
+				_finalization = JsonUtility.FromJson<PendingFinalization>(finalization);
+				EditorApplication.update += PollFinalization;
+			}
 		}
 
 		public static bool TryRequestRunForCoordinator(string taskId, string testMode, string[] assemblyNames, string[] testNames, string[] categoryNames, out TestRunResult abortedResult, TestNameResolver.CatalogData catalog = null)
@@ -71,7 +86,7 @@ namespace AgentBridge
 			SessionState.SetString(CoordinatorTestTaskKey, taskId);
 			SessionState.SetString(CoordinatorTestCatalogKey, catalog == null ? "" : JsonUtility.ToJson(catalog));
 			SessionState.SetString(CoordinatorTestModeKey, mode.ToString());
-			SessionState.SetString(CoordinatorTestSourceKey, TestFingerprint.Sources());
+			SessionState.SetString(CoordinatorTestSourceKey, ValidationEvidence.PreparedSources);
 			SessionState.SetString(CoordinatorTestFilterKey, JsonUtility.ToJson(new TestRunFilter
 			{
 				TestMode = mode.ToString(),
@@ -236,9 +251,41 @@ namespace AgentBridge
 
 		private static void FinalizeCoordinatorRun(string taskId, TestRunResult run, string recoveryError)
 		{
+			if (_finalization != null && _finalization.TaskId == taskId) return;
+			_finalization = new PendingFinalization { TaskId = taskId, Run = run, RecoveryError = recoveryError };
+			SessionState.SetString(FinalizationKey, JsonUtility.ToJson(_finalization));
+			EditorApplication.update -= PollFinalization;
+			EditorApplication.update += PollFinalization;
+		}
+
+		private static void PollFinalization()
+		{
+			if (_finalization == null) return;
+			string taskId = _finalization.TaskId;
+			try { TryFinalizeCoordinatorRun(taskId, _finalization.Run, _finalization.RecoveryError); }
+			catch (System.Exception error)
+			{
+				FinalizeCancellation(taskId, "runtime_error", "Finalization failed: " + error.GetBaseException().Message);
+			}
+			TaskRecord record;
+			if (!TaskJournal.TryRead(taskId, out record) || TaskCoordinator.IsTerminal(record.Status) || TestRunLifecycle.IsStopping(taskId))
+			{
+				_finalization = null;
+				SessionState.EraseString(FinalizationKey);
+				EditorApplication.update -= PollFinalization;
+			}
+		}
+
+		private static void TryFinalizeCoordinatorRun(string taskId, TestRunResult run, string recoveryError)
+		{
 			TaskRecord prior;
 			if (TaskJournal.TryRead(taskId, out prior) && TaskCoordinator.IsTerminal(prior.Status)) return;
 			if (TestRunLifecycle.IsStopping(taskId)) return;
+			EvidenceRecord evidence;
+			if (!ValidationEvidence.TryComplete(taskId, prior != null && ArtifactsExist(prior), out evidence))
+			{
+				return;
+			}
 			string requestedFilter = SessionState.GetString(CoordinatorTestFilterKey, "");
 			string testMode = SessionState.GetString(CoordinatorTestModeKey, "");
 			string startSources = SessionState.GetString(CoordinatorTestSourceKey, "");
@@ -271,7 +318,7 @@ namespace AgentBridge
 
 			// The evidence is computed before the status, because a green NUnit run over inputs
 			// that moved is not a success: it is a result about a project that no longer exists.
-			EvidenceRecord evidence = ValidationEvidence.Complete(taskId, ArtifactsExist(record));
+			// Evidence was completed asynchronously before releasing the run.
 			record.Evidence = evidence;
 			record.Tests = run;
 
@@ -315,7 +362,7 @@ namespace AgentBridge
 				&& run.total > 0
 				&& evidence.Validity == EvidenceRecord.Valid
 				&& !string.IsNullOrEmpty(startSources)
-				&& startSources == TestFingerprint.Sources();
+				&& startSources == ValidationEvidence.CompletedSources;
 
 			if (promoted)
 			{

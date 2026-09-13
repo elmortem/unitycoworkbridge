@@ -21,6 +21,7 @@ namespace AgentBridge
 		private static double _lastServeTime;
 		private static readonly Dictionary<string, string> _rejectedTaskHashes = new Dictionary<string, string>();
 
+		private static bool _finalizingCompile;
 		private static string _activeTaskId;
 		private static CancellationTokenSource _activeCancellation;
 		private static TaskLogScope _activeLogScope;
@@ -50,7 +51,8 @@ namespace AgentBridge
 
 			PlayModeSceneRecovery.Start();
 			UnsanctionedPlayGuard.Start();
-			TryFinalizePendingCompileTask();
+			string pendingCompile;
+			_finalizingCompile = CompileTaskExecutor.HasPendingTask(out pendingCompile);
 			FinalizeOrphanRecords();
 			SceneShot.SceneShotTaskExecutor.CloseOrphanWindows();
 		}
@@ -135,8 +137,17 @@ namespace AgentBridge
 			string taskId;
 			if (!CompileTaskExecutor.HasPendingTask(out taskId))
 			{
+				_finalizingCompile = false;
 				return;
 			}
+
+			_finalizingCompile = true;
+			EvidenceRecord evidence;
+			if (!ValidationEvidence.TryComplete(taskId, true, out evidence))
+			{
+				return;
+			}
+			_finalizingCompile = false;
 
 			TaskRecordOutcome outcome = CompileTaskExecutor.ConsumePending(taskId);
 
@@ -164,7 +175,7 @@ namespace AgentBridge
 
 			// A compiler error stays a compiler error whatever the evidence says; only a clean
 			// compile can be downgraded by inputs that moved underneath it.
-			EvidenceRecord evidence = ValidationEvidence.Complete(taskId, true);
+			// Evidence and sources were hashed on a worker before consuming the pending task.
 			record.Evidence = evidence;
 			if (record.Status == "success" && evidence.Validity == EvidenceRecord.Stale)
 			{
@@ -192,7 +203,7 @@ namespace AgentBridge
 			if ((record.Status == "success" || record.Status == "compiler_error")
 				&& evidence.Validity != EvidenceRecord.Stale
 				&& !string.IsNullOrEmpty(startFingerprint)
-				&& startFingerprint == CompileFingerprint.Current())
+				&& startFingerprint == ValidationEvidence.CompletedSources)
 			{
 				CompileCacheStore.Write(new CompileCacheEntry
 				{
@@ -253,6 +264,8 @@ namespace AgentBridge
 
 		private static void OnUpdate()
 		{
+			using var timing = new CoordinatorTiming("update", _activeTaskId);
+			if (_finalizingCompile) TryFinalizePendingCompileTask();
 			ProcessCancelRequests();
 			TestRunLifecycle.Tick();
 			if (_activeRecord != null && _activeRecord.Kind == "tests") PollExternallyFinalizedTask();
@@ -302,6 +315,8 @@ namespace AgentBridge
 
 				return;
 			}
+
+			if (_finalizingCompile) return;
 
 			if (now - _lastScanTime < ScanIntervalSeconds)
 			{
@@ -381,6 +396,7 @@ namespace AgentBridge
 
 		private static void TryStartNextTask()
 		{
+			using var timing = new CoordinatorTiming("schedule", _activeTaskId);
 			List<PendingTaskInfo> pending = BuildPendingList(null);
 			CachedResultServer.TryServePending(pending);
 
@@ -410,7 +426,7 @@ namespace AgentBridge
 
 			UpdateQueueStatus(pending);
 
-			pending.RemoveAll(task => !CoordinationGate.CanSchedule(task));
+			pending.RemoveAll(task => CachedResultServer.IsChecking(task.Id) || !CoordinationGate.CanSchedule(task));
 			PendingTaskInfo next;
 			bool holderChanged;
 			string previousHolder;
@@ -538,6 +554,7 @@ namespace AgentBridge
 
 		private static List<PendingTaskInfo> BuildPendingList(string excludeTaskId)
 		{
+			using var timing = new CoordinatorTiming("queue_scan", _activeTaskId);
 			var pending = new List<PendingTaskInfo>();
 			if (!Directory.Exists(BridgePaths.Inbox))
 			{
@@ -972,6 +989,7 @@ namespace AgentBridge
 
 		private static void RunUiTask(TaskRequest request)
 		{
+			using var timing = new CoordinatorTiming("ui", _activeTaskId);
 			string payloadPath = Path.Combine(BridgePaths.Inbox, request.Id + ".ui.json");
 			if (!File.Exists(payloadPath))
 			{
@@ -1025,6 +1043,7 @@ namespace AgentBridge
 
 		private static void PollShotExecutor()
 		{
+			using var timing = new CoordinatorTiming("sceneshot", _activeTaskId);
 			if (_activeRecord == null)
 			{
 				return;
@@ -1115,7 +1134,7 @@ namespace AgentBridge
 		// no compile, no pending PlayMode scene recovery and no play mode of any kind.
 		private static bool IsEditorFreeForWindow()
 		{
-			return _activeTaskId == null
+			return !_finalizingCompile && _activeTaskId == null
 				&& string.IsNullOrEmpty(TestRunLifecycle.TaskId)
 				&& !EditorApplication.isCompiling
 				&& !EditorApplication.isUpdating
