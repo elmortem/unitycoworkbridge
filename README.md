@@ -346,7 +346,9 @@ Restarting the Editor drops the lease but keeps the saved session contexts; a do
 
 ## Coordinating Several Agents
 
-The session scheduler above serialises *commands*. It does not serialise *file writes*, and it cannot tell whether a green test run describes the project you asked about. `coordination-v1` and `evidence-v1` add both, and only for projects that opt in: with no registered sessions every command behaves exactly as it did before.
+Bridge coordinates Unity Editor operations and writes to Unity inputs; agents manage the rest of their work independently. Analysis, reading, ordinary specs/TDDs, documentation, notes, reports, and independent checks outside Unity need no registration, edit grant, or window, even in the same repository. Keep them out of Bridge scopes. Resolve conflicts over those files through the agents' own workflow. External files do need coordination when Unity actually imports, compiles, or consumes them; writing through a shell does not change that boundary. While waiting for Unity, continue independent work. Release the editor before reporting or updating specs.
+
+The session scheduler above serialises *commands*. It does not coordinate *writes to Unity inputs*, and it cannot tell whether a green test run describes the project you asked about. `coordination-v1` and `evidence-v1` add both, and only for projects that opt in: with no registered sessions every command behaves exactly as it did before.
 
 Check first — the CLI and the package version their contracts separately:
 
@@ -358,20 +360,20 @@ agentbridge coord capabilities --format human
 
 | Right | What it allows | How it ends |
 |---|---|---|
-| **Scope** | Reserves an area of the repository. Live scopes never overlap. Registering does *not* allow writing. | `coord leave`, or a new `coord scope` |
-| **Edit grant** | One bounded package of file edits inside your scope. 15–300 s, default 120. | `coord edit-end`, after your writers really stopped |
+| **Scope** | Reserves Unity input paths in the repository. Live scopes never overlap. Writing those inputs requires an edit grant; unrelated work remains independent. | `coord leave`, or a new `coord scope` |
+| **Edit grant** | One bounded package of Unity input edits inside your scope. 15–300 s, default 120. | `coord edit-end`, after your writers really stopped |
 | **Window** | A finite plan of Unity operations, for one owner. 15–600 s, default 120. | `coord finish`, after every started task is terminal |
 
-A window is granted only when every edit grant is closed — including the future window owner's — and only when the Editor itself confirms it is free. Requesting a window does not hold your scope hostage: nobody may rewrite your code while you wait.
+A window is granted only when every edit grant is closed — including the future window owner's — and only when the Editor itself confirms it is free. Requesting a window preserves your scope reservation while you wait. Prepare scripts, JSON payloads and parameters before requesting it. Use event-driven `coord wait` instead of sleeping between status checks, then submit the prepared commands when granted. A `pause_requested` response concerns only coordinated Unity input writes; close that edit grant and continue independent work.
 
 ```bash
-# once per TDD
+# before the first stage requiring Unity coordination
 agentbridge coord register --session AB_A --spec my_tdd --repo D:/repo \
   --scope scope.json --owner host/task-17
 
-# before each bounded package of edits
+# before each bounded package of Unity input edits
 agentbridge coord edit-begin --session AB_A --request $(uuidgen) --seconds 120
-#   ... write files ...
+#   ... write Unity input files ...
 agentbridge coord edit-end --session AB_A --token <token>
 
 # then ask for the editor, with the complete plan up front
@@ -383,7 +385,7 @@ agentbridge tests --mode EditMode --test MyTests \
 agentbridge coord finish --session AB_A --token <token>
 ```
 
-`scope.json` is `{ "Paths": ["Game/Core/", "Docs/CORE.md"] }` — repo-relative, forward slashes, a trailing `/` for directories, no globs. `plan.json` lists every step up front: `{ "Steps": [{ "Id": "V1", "Kind": "tests", "Mode": "EditMode", "Tests": ["MyTests"], "Fresh": false }], "ArtifactRoots": [], "FixtureRoots": [] }`. A `validation` window allows `compile`, `tests` and `sceneshot`; an `editor` window allows `csharp`, `ui`, `sceneshot` and `compile`. Play mode is never part of a plan — take a PlayMode test step instead.
+`scope.json` is `{ "Paths": ["UnityProject/Assets/Game/Core/"] }` — repo-relative, forward slashes, a trailing `/` for directories, no globs. `plan.json` lists every step up front: `{ "Steps": [{ "Id": "V1", "Kind": "tests", "Mode": "EditMode", "Tests": ["MyTests"], "Fresh": false }], "ArtifactRoots": [], "FixtureRoots": [] }`. A `validation` window allows `compile`, `tests` and `sceneshot`; an `editor` window allows `csharp`, `ui`, `sceneshot` and `compile`. Play mode is never part of a plan — take a PlayMode test step instead.
 
 Each step is consumed once. Re-submitting the *same* task id after a domain reload rejoins its own reservation; a different task id gets `step_consumed` and needs a new window. A cached or attached result consumes the step too.
 
