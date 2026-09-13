@@ -67,6 +67,7 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
 - Исполнители: `CSharpTaskExecutor.cs`, `CompileTaskExecutor.cs`, `AgentTestRunner.cs`,
   `SceneShot/SceneShotTaskExecutor.cs`, `Ui/UiTaskRunner.cs`
 - Отмена тестов: `TestRunLifecycle.cs` хранит владельца, дедлайн и состояние остановки сквозь domain reload; `TestRunnerCancellation.cs` изолирует совместимость с API разных версий Test Framework. `scripts/verify-test-cancellation.ps1` проверяет живую отмену, восстановление и запуск следующей задачи.
+  `scripts/verify-inert-test-controller.ps1` проверяет вне NUnit, что оставшийся PlayMode-контроллер не блокирует свободный Edit Mode. Внутри NUnit такую проверку делать нельзя: сам проверочный прогон делает TestRunner активным.
 - Компиляция: `RoslynResolver.cs`, `RoslynCompiler.cs`, `ReferenceCatalog.cs`,
   `SourceGuardrail.cs` (отклонение блокирующих и модальных API до исполнения)
 - Координация: общая папка `Coordination/` (namespace `AgentBridge.Coordination`, без UnityEngine —

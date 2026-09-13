@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Reflection;
+using UnityEditor;
 using UnityEditor.TestTools.TestRunner.Api;
 using UnityEngine;
 
@@ -44,7 +45,10 @@ namespace AgentBridge
 						if ((bool)job.GetType().GetField("isRunning", Flags).GetValue(job)) return "Unity persisted test job still running: " + job.GetType().GetField("guid", Flags).GetValue(job);
 				}
 				if (HasRunner("UnityEditor.TestTools.TestRunner.EditModeRunner")) return "Unity EditMode runner object remains";
-				if (HasRunner("UnityEngine.TestTools.TestRunner.PlaymodeTestsController")) return "Unity PlayMode controller object remains";
+				// Resources also returns loaded prefab assets and controllers left after exit.
+				// This MonoBehaviour cannot run its test coroutine in Edit Mode. Framework
+				// jobs above still protect any editor-side cleanup that is actually running.
+				if (EditorApplication.isPlayingOrWillChangePlaymode && HasRunner("UnityEngine.TestTools.TestRunner.PlaymodeTestsController")) return "Unity PlayMode controller object remains";
 				return "";
 			}
 			catch (Exception ex) { return "Cannot inspect Unity test state: " + ex.GetBaseException().Message; }

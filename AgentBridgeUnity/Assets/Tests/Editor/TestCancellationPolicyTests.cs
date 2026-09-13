@@ -3,6 +3,13 @@ using NUnit.Framework;
 
 public class TestCancellationPolicyTests
 {
+	[Test]
+	public void ActiveFrameworkRunStillBlocksInEditMode()
+	{
+		Assert.IsFalse(UnityEditor.EditorApplication.isPlayingOrWillChangePlaymode);
+		Assert.IsTrue(TestRunnerCancellation.IsRunning(), "The current NUnit run must retain the editor even outside Play Mode.");
+	}
+
 	private class Job { public string guid; public bool isRunning; }
 	[Test]
 	public void LegacyCancellationRecoversOnlyTheSingleRunningJob()
