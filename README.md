@@ -657,3 +657,9 @@ Only the CLI has a publishing pipeline. Bumping `<Version>` in the csproj and pu
 The Unity package is consumed straight from the git URL, so it needs no publishing step — pushing the branch is enough. The plugin ZIP remains tracked in the repository; the Release Contract action validates the committed archive, rebuilds it independently, and uploads it as a workflow artifact. It does not attach the plugin to the CLI GitHub Release.
 
 Cache lookup runs independently of the work queue, including cancellation and scene recovery. Requests without a window token can reuse cache while another window owns the editor. Explicit coordinated steps retain validation and accounting. Fresh requests, cache misses and changed inputs stay queued. Lookup is deferred during compilation/import. Source reuse now hashes file contents as well as metadata; test input digests are rechecked before serving and kept separate per request/mode.
+
+### Task queue window
+
+Open **Tools → Agent Bridge → Task Queue** to see active, canceling, attached, and waiting tasks. The list refreshes twice per second. Drag a waiting task by its handle onto another row to place it before that task, or into the empty area below the list to move it last. **Automatic order** restores normal session scheduling. Manual priority survives assembly reloads within the editor session; coordination locks, cache checks and Play Mode eligibility still apply.
+
+**Cancel** removes a waiting task by recording a terminal `canceled` result, leaving its request intact for the waiting CLI. Running C# and tests stop cooperatively; attached requests can be canceled without stopping the shared test run. During editor phases that cannot be stopped the window reports that limitation. A blocked editor main thread cannot process window input. Human cancellation has the same authority as the existing Cancel Running Task menu.

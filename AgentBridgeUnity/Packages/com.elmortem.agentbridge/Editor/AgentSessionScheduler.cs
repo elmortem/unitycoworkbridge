@@ -45,6 +45,15 @@ namespace AgentBridge
 			SchedulerState state = SchedulerStateStore.State;
 			string holder = state.HolderAgentSessionId ?? "";
 
+			PendingTaskInfo manual = TaskQueueOrder.First(pending);
+			if (manual != null)
+			{
+				next = manual;
+				holderChanged = holder != manual.EffectiveSessionId;
+				previousHolder = holderChanged ? holder : "";
+				return true;
+			}
+
 			PendingTaskInfo foreignRelease = OldestForeignRelease(pending, holder);
 			if (foreignRelease != null)
 			{
@@ -252,6 +261,7 @@ namespace AgentBridge
 
 			string holder = SchedulerStateStore.State.HolderAgentSessionId ?? "";
 			List<PendingTaskInfo> ordered = OrderBySession(pending, holder);
+            TaskQueueOrder.Apply(ordered);
 
 			var queue = new QueuedTaskStatus[ordered.Count];
 			for (int i = 0; i < ordered.Count; i++)

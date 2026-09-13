@@ -8,7 +8,7 @@ using UnityEngine;
 
 namespace AgentBridge
 {
-	public static class TaskCoordinator
+	public static partial class TaskCoordinator
 	{
 		private const float ScanIntervalSeconds = 0.25f;
 		private const float TrimIntervalSeconds = 30f;
@@ -467,7 +467,7 @@ namespace AgentBridge
 						// its own: the foreign stopplay runs and preempts it.
 						if (PlaySessionArbiter.CanPreempt(state, nowUtc, ownerIdleSeconds))
 						{
-							if (next == null || task.CreatedUtc < next.CreatedUtc)
+							if (next == null || TaskQueueOrder.Compare(task, next) < 0)
 							{
 								next = task;
 							}
@@ -496,7 +496,7 @@ namespace AgentBridge
 					continue;
 				}
 
-				if (next == null || task.CreatedUtc < next.CreatedUtc)
+				if (next == null || TaskQueueOrder.Compare(task, next) < 0)
 				{
 					next = task;
 				}
@@ -538,7 +538,7 @@ namespace AgentBridge
 					continue;
 				}
 
-				if (next == null || task.CreatedUtc < next.CreatedUtc)
+				if (next == null || TaskQueueOrder.Compare(task, next) < 0)
 				{
 					next = task;
 				}
@@ -575,7 +575,7 @@ namespace AgentBridge
 				{
 					// An attached task is alive: it waits for the run it joined, and putting it
 					// back in the queue would start a second run of the same tests.
-					if (existing.Status == "attached")
+					if (existing.Status == "attached" || existing.Status == "running" || existing.Status == "canceling")
 					{
 						continue;
 					}
