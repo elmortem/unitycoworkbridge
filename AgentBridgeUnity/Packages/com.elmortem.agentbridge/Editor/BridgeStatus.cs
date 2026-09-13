@@ -26,6 +26,9 @@ namespace AgentBridge
 		public int ExecutedTasks;
 		public string ActiveTaskId;
 		public string QueueBlockReason;
+		public string CompilationState;
+		public string LastCompileId;
+		public string LastCompileFinishedUtc;
 		public string QueueBlockedSinceUtc;
 		public string HolderAgentSessionId;
 		public bool IsPlaying;

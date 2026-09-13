@@ -86,7 +86,7 @@ namespace AgentBridge
 				string requestHash = TaskFileHash.HashOf(task.TaskFilePath, null);
 				if (currentSources == null)
 				{
-					currentSources = await Task.Run(() => CompileFingerprint.Capture(projectRoot));
+					currentSources = await CompileInputContext.StartCapture(projectRoot);
 				}
 
 				if (startSources != currentSources || !monitor.Observed || monitor.EventCount != 0)

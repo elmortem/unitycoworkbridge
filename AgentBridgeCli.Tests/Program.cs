@@ -8,6 +8,10 @@ try
 	Directory.CreateDirectory(root);
 	RunProjectDiscoveryTests(root);
 	RunTaskIdTests();
+	Expect(CliOptions.Parse(new[] { "compile", "--fresh" }).Error != null, "fresh compile must require a diagnostic reason before submitting");
+	Expect(CliOptions.Parse(new[] { "compile", "--fresh", "--note", "Investigate inconsistent compiler output" }).Error == null, "explicit diagnostic compile allowed");
+	Expect(CliOptions.Parse(new[] { "compile" }).Error == null, "ordinary compile needs no reason");
+	Expect(CliOptions.Parse(new[] { "tests", "--fresh" }).Error == null, "flaky test retry remains supported");
 	RunResultClassificationTests();
 	RunHumanResultFormattingTests();
 	RunHealthTests(root);

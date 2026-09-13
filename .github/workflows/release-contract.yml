@@ -7,6 +7,7 @@ on:
       - AgentBridgeCli.Tests/**
       - AgentBridgeCoordination.Tests/**
       - AgentBridgeRecovery.Tests/**
+      - AgentBridgeCompile.Tests/**
       - AgentBridgeUnity/Packages/com.elmortem.agentbridge/**
       - unity-bridge-plugin/**
       - scripts/build-plugin.ps1
@@ -21,6 +22,7 @@ on:
       - AgentBridgeCli.Tests/**
       - AgentBridgeCoordination.Tests/**
       - AgentBridgeRecovery.Tests/**
+      - AgentBridgeCompile.Tests/**
       - AgentBridgeUnity/Packages/com.elmortem.agentbridge/**
       - unity-bridge-plugin/**
       - scripts/build-plugin.ps1
@@ -89,6 +91,10 @@ jobs:
       - name: Verify scene recovery lifecycle
         shell: pwsh
         run: dotnet run --project AgentBridgeRecovery.Tests -c Release
+
+      - name: Verify compilation lifecycle and reuse
+        shell: pwsh
+        run: dotnet run --project AgentBridgeCompile.Tests -c Release
 
       - name: Build validated plugin artifact
         shell: pwsh

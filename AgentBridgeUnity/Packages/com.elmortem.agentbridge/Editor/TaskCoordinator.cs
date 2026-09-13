@@ -134,6 +134,7 @@ namespace AgentBridge
 
 		private static void TryFinalizePendingCompileTask()
 		{
+			if (EditorApplication.isCompiling || EditorApplication.isUpdating) return;
 			string taskId;
 			if (!CompileTaskExecutor.HasPendingTask(out taskId))
 			{
@@ -172,6 +173,8 @@ namespace AgentBridge
 			record.Status = outcome.Status;
 			record.Diagnostics = outcome.Diagnostics;
 			record.ForeignErrors = outcome.ForeignErrors;
+			if (outcome.Status == "stale_input") record.Logs.Add("compile_input_changed: current sources differ from the completed compiler cycle");
+			if (outcome.Status == "evidence_unavailable") record.Logs.Add("compile_inputs_unavailable: compiler cycle inputs could not be verified");
 
 			// A compiler error stays a compiler error whatever the evidence says; only a clean
 			// compile can be downgraded by inputs that moved underneath it.
@@ -195,6 +198,11 @@ namespace AgentBridge
 			TelemetryLog.TaskFinished(record);
 			AgentSessionScheduler.OnTaskFinished(record.AgentSessionId, DateTime.UtcNow);
 			CoordinationGate.ReleaseByRecord(record, record.Status == "success", record.Status);
+			if (record.Status == "runtime_error")
+			{
+				record.Logs.Add("compile_completion_missing: Unity did not confirm compilationFinished; inspect status/doctor, do not retry with --fresh");
+				TaskJournal.Write(record);
+			}
 
 			// The fingerprint taken before the refresh proves nothing changed while the project
 			// compiled; a mismatch means the result already describes older sources.
@@ -214,6 +222,7 @@ namespace AgentBridge
 					FinishedAtUtc = record.FinishedAtUtc
 				});
 			}
+			if (_activeRecord != null && _activeRecord.Id == taskId) CleanupActive();
 		}
 
 		public static void Stop()
@@ -724,6 +733,12 @@ namespace AgentBridge
 				return;
 			}
 
+			if (request.Kind == "compile" && request.Fresh && string.IsNullOrWhiteSpace(request.Note))
+			{
+				WriteTerminal(id, request.Kind, "rejected", "fresh_compile_reason_required: use --note with a diagnostic reason or ordinary compile", hash);
+				return;
+			}
+
 			// Nothing starts inside somebody else's window. The step is reserved with this task id
 			// before any payload runs, so a retry with a different id finds it consumed.
 			string coordinationError;
@@ -1218,7 +1233,12 @@ namespace AgentBridge
 
 		private static void PollCompileTask()
 		{
-			if (!CompileTaskExecutor.IsTimedOut())
+			if (CompileTaskExecutor.HasCompleted())
+			{
+				TryFinalizePendingCompileTask();
+				return;
+			}
+			if (!CompileTaskExecutor.IsTimedOut() || EditorApplication.isCompiling || EditorApplication.isUpdating)
 			{
 				return;
 			}
@@ -1230,23 +1250,7 @@ namespace AgentBridge
 				TelemetryField.Number("LimitS", (long)CompileTaskExecutor.NoReloadTimeoutSeconds)
 			});
 
-			string taskId;
-			CompileTaskExecutor.HasPendingTask(out taskId);
-			TaskRecordOutcome outcome = CompileTaskExecutor.ConsumePending(taskId);
-
-			List<string> extraLogs = null;
-			if (outcome.Diagnostics.Count > 0)
-			{
-				extraLogs = new List<string>();
-				foreach (TaskDiagnostic diagnostic in outcome.Diagnostics)
-				{
-					extraLogs.Add(diagnostic.Code + ": " + diagnostic.Message);
-				}
-			}
-
-			_activeRecord.Diagnostics = outcome.Diagnostics;
-			SessionState.EraseString(CompileTaskExecutor.PendingCompileFingerprintKey);
-			FinishTask(outcome.Status, null, extraLogs, outcome.ForeignErrors);
+			TryFinalizePendingCompileTask();
 		}
 
 		private static void PollCSharpExecutor()

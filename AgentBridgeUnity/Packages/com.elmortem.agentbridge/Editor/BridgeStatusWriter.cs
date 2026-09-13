@@ -125,6 +125,15 @@ namespace AgentBridge
 		private static void OnUpdate()
 		{
 			Beat();
+			string compilation = CompileTaskExecutor.LastCycleStatus;
+			string finished = CompileTaskExecutor.LastCycleFinishedUtc;
+			if (Current.CompilationState != compilation || Current.LastCompileFinishedUtc != finished)
+			{
+				Current.CompilationState = compilation;
+				Current.LastCompileId = CompileTaskExecutor.LastCycleId;
+				Current.LastCompileFinishedUtc = finished;
+				Write();
+			}
 			SyncPlayingFlag();
 			SyncCoordination();
 		}

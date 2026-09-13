@@ -24,6 +24,8 @@ AgentBridgeCli/                     .NET 8 CLI `agentbridge` — клиент м
 AgentBridgeCli.Tests/               Тесты CLI: обычная консоль (Program.cs), без xUnit
 AgentBridgeRecovery.Tests/          Настоящий код восстановления сцен с управляемыми Unity callbacks;
                                     регрессии повторного входа, ожидания cleanup и повторной финализации
+AgentBridgeCompile.Tests/           Production executor/fingerprint/cache с управляемыми compilation callbacks;
+                                    dotnet run --project AgentBridgeCompile.Tests -c Release
 AgentBridgeCoordination.Tests/      Тесты coordination-v1/evidence-v1: консоль, `--group state|store|all`,
                                     дочерние процессы для гонок и обрывов
 AgentBridgeUnity/                   Unity 2022.3.62f2 — хост-проект пакета

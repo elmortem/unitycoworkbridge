@@ -112,7 +112,7 @@ namespace AgentBridge
 
 			_job = new InputHashJob(_roots, _excluded, _context, _ignore);
 			string projectRoot = BridgePaths.ProjectRoot;
-			_sourceWork = Task.Run(() => CompileFingerprint.Capture(projectRoot));
+			_sourceWork = CompileInputContext.StartCapture(projectRoot);
 			_work = _job.Start();
 		}
 
@@ -255,7 +255,7 @@ namespace AgentBridge
 					Split(SessionState.GetString(ExcludedKey, "")), SessionState.GetString(ContextKey, ""),
 					BuildIgnore(SessionState.GetString(ScratchKey, "")));
 				string projectRoot = BridgePaths.ProjectRoot;
-				_completionSources = Task.Run(() => CompileFingerprint.Capture(projectRoot));
+				_completionSources = CompileInputContext.StartCapture(projectRoot);
 				_completion = job.Measure("validation_complete", taskId);
 				return false;
 			}

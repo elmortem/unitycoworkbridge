@@ -6,7 +6,7 @@ namespace AgentBridge
 	[Serializable]
 	public class CompileCacheEntry
 	{
-		public int Version = 1;
+		public int Version = 2;
 		public string Fingerprint;
 		public string SourceTaskId;
 		public string Status;

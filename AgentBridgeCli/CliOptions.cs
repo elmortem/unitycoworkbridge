@@ -330,6 +330,8 @@ internal sealed class CliOptions
 			options.Arguments.Add(argument);
 		}
 
+		if (options.Arguments.Count > 0 && options.Arguments[0] == "compile" && options.Fresh && string.IsNullOrWhiteSpace(options.Note))
+			options.Error = "compile --fresh requires --note with a diagnostic reason; after edits or waiting use ordinary compile";
 		return options;
 	}
 

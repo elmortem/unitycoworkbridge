@@ -16,7 +16,7 @@ namespace AgentBridge
 			string[] excluded = ValidationEvidence.CollectExcludedRoots();
 			var ignore = ValidationEvidence.BuildIgnore(PlayModeSceneRecovery.BootstrapScenePath());
 			using var monitor = new ValidationInputMonitor(roots, excluded, ignore);
-			string sourceFingerprint = await Task.Run(() => CompileFingerprint.Capture(projectRoot));
+			string sourceFingerprint = await CompileInputContext.StartCapture(projectRoot);
 			long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
 			for (int i = pending.Count - 1; i >= 0; i--)
@@ -34,12 +34,13 @@ namespace AgentBridge
 				}
 
 				TaskRequest request;
-				if (!TaskRequestReader.TryRead(task.TaskFilePath, out request) || request.Fresh)
+				if (!TaskRequestReader.TryRead(task.TaskFilePath, out request) || (request.Fresh && task.Kind != "compile"))
 				{
 					continue;
 				}
 
 				string requestHash = TaskFileHash.HashOf(task.TaskFilePath, null);
+				if (task.Kind == "compile" && request.Fresh && string.IsNullOrWhiteSpace(request.Note)) continue;
 
 				if (task.Kind == "tests")
 				{
@@ -68,7 +69,7 @@ namespace AgentBridge
 					// A served result consumes its step exactly once, just like a real run.
 					string reserveError;
 					var verified = await job.Measure("cache_verify", task.Id);
-					string verifiedSources = await Task.Run(() => CompileFingerprint.Capture(projectRoot));
+					string verifiedSources = await CompileInputContext.StartCapture(projectRoot);
 					// Await allowed cancellation, cache eviction and artifact removal to run.
 					// Recheck the actual entry and editor context before consuming a step.
 					if (context != ValidationEvidence.ContextOf(mode, FilterOf(request))
@@ -104,13 +105,13 @@ namespace AgentBridge
 						continue;
 					}
 
-					if (entry.Fingerprint != sourceFingerprint)
+					if (!CompileCacheStore.CanReuse(entry, sourceFingerprint, request.Fresh, task.CreatedUtc))
 					{
 						continue;
 					}
 
 					string reserveError;
-					if (sourceFingerprint != await Task.Run(() => CompileFingerprint.Capture(projectRoot))
+					if (sourceFingerprint != await CompileInputContext.StartCapture(projectRoot)
 						|| !CanPublish(task, requestHash, monitor)) continue;
 					if (!TryReserveCache(request, task.Id, out reserveError))
 					{
@@ -120,6 +121,7 @@ namespace AgentBridge
 					TaskRecord record = BuildServedRecord(task, entry.Status, entry.SourceTaskId, request);
 					record.Diagnostics = entry.Diagnostics;
 					record.ForeignErrors = entry.Diagnostics.Count > 0;
+					record.Logs.Add(request.Fresh ? "compile_reuse: shared cycle completed while this fresh request waited" : "compile_reuse: current sources and compilation context match");
 
 					// The compile cache is keyed on the legacy fingerprint, which is a reuse key
 					// and not an input digest. Saying so is more useful than claiming evidence.
@@ -150,7 +152,7 @@ namespace AgentBridge
 				TaskRequest request;
 				if ((task.Kind == "compile" || task.Kind == "tests")
 					&& !TaskJournal.TryRead(task.Id, out record)
-					&& TaskRequestReader.TryRead(task.TaskFilePath, out request) && !request.Fresh)
+					&& TaskRequestReader.TryRead(task.TaskFilePath, out request) && (!request.Fresh || task.Kind == "compile"))
 				{
 					candidates.Add(task);
 					Checking.Add(task.Id);

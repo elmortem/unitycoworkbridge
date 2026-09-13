@@ -23,6 +23,9 @@ internal sealed class BridgeStatus
 	public int ExecutedTasks { get; set; }
 	public string? ActiveTaskId { get; set; }
 	public string? QueueBlockReason { get; set; }
+	public string? CompilationState { get; set; }
+	public string? LastCompileId { get; set; }
+	public string? LastCompileFinishedUtc { get; set; }
 	public string? QueueBlockedSinceUtc { get; set; }
 	public string? HolderAgentSessionId { get; set; }
 	public bool IsPlaying { get; set; }

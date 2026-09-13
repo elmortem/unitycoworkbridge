@@ -17,29 +17,37 @@ namespace AgentBridge
 		// waiting, and it costs a fraction of the run it saves.
 		public static string Current()
 		{
-			return Capture(BridgePaths.ProjectRoot);
+			return Capture(BridgePaths.ProjectRoot, CompileInputContext.Roots, CompileInputContext.Context);
 		}
 
 		// The caller captures the Unity-derived project path before dispatching to a worker.
 		public static string Capture(string projectRoot)
 		{
-			var files = new List<string>();
+			return Capture(projectRoot, new[] { Path.Combine(projectRoot, "Assets"), Path.Combine(projectRoot, "Packages"), Path.Combine(projectRoot, "ProjectSettings") }, "");
+		}
 
-			Collect(Path.Combine(projectRoot, "Assets"), files);
-			Collect(Path.Combine(projectRoot, "Packages"), files);
-			AddIfExists(Path.Combine(projectRoot, "ProjectSettings", "ProjectSettings.asset"), files);
+		public static string Capture(string projectRoot, string[] roots, string context)
+		{
+			var files = new List<string>();
+			foreach (string root in roots)
+			{
+				if (!Directory.Exists(root)) throw new DirectoryNotFoundException("Compile input root unavailable: " + root);
+				Collect(root, files);
+			}
+			if (Directory.Exists(Path.Combine(projectRoot, "ProjectSettings")))
+				foreach (string file in Directory.EnumerateFiles(Path.Combine(projectRoot, "ProjectSettings"), "*", SearchOption.AllDirectories))
+					if (!files.Contains(file)) files.Add(file);
 			AddIfExists(Path.Combine(projectRoot, "Packages", "manifest.json"), files);
 			AddIfExists(Path.Combine(projectRoot, "Packages", "packages-lock.json"), files);
 
 			files.Sort(StringComparer.Ordinal);
 
-			var builder = new StringBuilder();
+			var builder = new StringBuilder("compile-v2|" + context + "\n");
 			foreach (string file in files)
 			{
 				var info = new FileInfo(file);
-				builder.Append(file.Substring(projectRoot.Length))
+				builder.Append(file.Replace('\\', '/'))
 					.Append('|').Append(info.Length)
-					.Append('|').Append(info.LastWriteTimeUtc.Ticks)
 					.Append('|');
 				// Timestamps and sizes can be preserved by external tools. Cache reuse must
 				// still notice different source bytes in that case.
@@ -73,6 +81,10 @@ namespace AgentBridge
 
 			foreach (string file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
 			{
+				bool ignored = false;
+				foreach (string segment in file.Substring(root.Length).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+					if (segment.StartsWith(".", StringComparison.Ordinal) || segment.EndsWith("~", StringComparison.Ordinal)) { ignored = true; break; }
+				if (ignored) continue;
 				if (HasTrackedExtension(file))
 				{
 					files.Add(file);
@@ -82,6 +94,8 @@ namespace AgentBridge
 
 		private static bool HasTrackedExtension(string file)
 		{
+			if (file.EndsWith(".meta", StringComparison.OrdinalIgnoreCase)) file = file.Substring(0, file.Length - 5);
+			if (file.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) || Path.GetFileName(file) == "package.json") return true;
 			foreach (string extension in Extensions)
 			{
 				if (file.EndsWith(extension, StringComparison.OrdinalIgnoreCase))

@@ -273,6 +273,8 @@ internal static class AgentBridgeApplication
 					+ (health.Bridge.WakeTimerInstalled ? (health.Bridge.WakeTimerKind ?? "installed") : "missing"));
 				Console.Out.WriteLine("Interaction mode: " + (health.Bridge.InteractionMode ?? "unknown"));
 				Console.Out.WriteLine("Active task: " + (health.Bridge.ActiveTaskId ?? "none"));
+				Console.Out.WriteLine("Compilation (last observed cycle): " + (health.Bridge.CompilationState ?? "unknown")
+					+ " " + (health.Bridge.LastCompileId ?? "") + " " + (health.Bridge.LastCompileFinishedUtc ?? ""));
 				if (!string.IsNullOrEmpty(health.Bridge.QueueBlockReason))
 					Console.Out.WriteLine("Queue blocked: " + health.Bridge.QueueBlockReason + " since " + health.Bridge.QueueBlockedSinceUtc);
 
@@ -379,7 +381,7 @@ internal static class AgentBridgeApplication
 			  --format <value>   json (default, machine-readable) or human for every command
 			  --session <id>     agent session for fair scheduling
 			  --note <text>      intent shown to the session holding the editor
-			  --fresh            force a real run for tests/compile, ignore cached results and attaching
+			  --fresh            diagnostic compile requires --note; overlapping compile requests share a new cycle; tests rerun
 			  --coord-window <token>  window token from 'coord request', required once a project is coordinated
 			  --coord-step <id>       the planned step this task executes
 			  --version
