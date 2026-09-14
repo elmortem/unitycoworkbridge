@@ -7,8 +7,6 @@ $Project = [IO.Path]::GetFullPath($Project)
 $Cli = [IO.Path]::GetFullPath($Cli)
 $scratch = Join-Path $Project 'Temp/AgentBridge/repro-queue'
 New-Item -ItemType Directory -Force $scratch | Out-Null
-$settings = Join-Path $Project 'ProjectSettings/AgentBridge.json'
-$original = [IO.File]::ReadAllBytes($settings)
 $runId = Get-Date -Format 'yyyyMMdd_HHmmss_fff'
 $evidence = Join-Path $scratch $runId
 New-Item -ItemType Directory -Force $evidence | Out-Null
@@ -41,20 +39,20 @@ public static class $id
 try {
 	$health = Invoke-Bridge @('status')
 	if ($health.bridge.activeTaskId -or $health.bridge.isPlaying -or $health.bridge.queuedTasks.Count -gt 0) { throw 'Run only in an idle test editor.' }
-	$config = [IO.File]::ReadAllText($settings) | ConvertFrom-Json
-	$config.TaskTimeoutSeconds = 10
-	[IO.File]::WriteAllText($settings, ($config | ConvertTo-Json))
-	# SettingsStore refreshes its cache every two seconds.
-	Start-Sleep -Seconds 3
 	$cases = @(
-		@('plain', 'EditMode', 'QueueTimeoutReproTests.ResponsiveTestOutlivesTimeout', 'timeout'),
-		@('recovery', 'EditMode', 'QueueTimeoutReproTests.PendingRecoveryOutlivesTimeout', 'timeout'),
-		@('play', 'PlayMode', 'AgentBridgeCancellationPlayModeTests.ResponsiveLongRun', 'timeout'),
+		@('plain', 'EditMode', 'QueueTimeoutReproTests.ResponsiveTestOutlivesTimeout', 'canceled'),
+		@('recovery', 'EditMode', 'QueueTimeoutReproTests.PendingRecoveryOutlivesTimeout', 'canceled'),
+		@('play', 'PlayMode', 'AgentBridgeCancellationPlayModeTests.ResponsiveLongRun', 'canceled'),
 		@('orphan', 'EditMode', 'QueueTimeoutReproTests.FinishedOwnerLeavesRecovery', 'success')
 	)
 	foreach ($case in $cases) {
-		$submitted = Invoke-Bridge @('tests', '--mode', $case[1], '--test', $case[2], '--fresh', '--wait', '1')
+		$submitted = Invoke-Bridge @('tests', '--mode', $case[1], '--test', $case[2], '--session', 'cancellation-verifier', '--fresh', '--wait', '1')
 		Save-Result ($case[0] + '-submit') $submitted
+		if ($case[0] -ne 'orphan') {
+			Start-Sleep -Seconds 4
+			$stop = Invoke-Bridge @('cancel', $submitted.Id, '--session', 'cancellation-verifier', '--wait', '5')
+			if ($stop.Status -ne 'success') { throw 'Owner cancellation failed' }
+		}
 		$marker = Invoke-Bridge @('csharp', (New-Marker $case[0]), '--session', 'cancellation-verifier', '--wait', '30')
 		Save-Result ($case[0] + '-marker') $marker
 		if ($marker.Status -ne 'success') { throw "Marker failed for $($case[0]): $($marker | ConvertTo-Json -Depth 10)" }
@@ -63,7 +61,7 @@ try {
 		if ($final.Status -ne $case[3]) { throw "Expected $($case[3]), got $($final.Status) for $($case[0])" }
 		Write-Output "PASS $($case[0]): $($final.Status), executor stopped, next task completed"
 	}
-	$active = Invoke-Bridge @('tests', '--mode', 'EditMode', '--test', 'QueueTimeoutReproTests.ResponsiveTestOutlivesTimeout', '--fresh', '--wait', '1')
+	$active = Invoke-Bridge @('tests', '--mode', 'EditMode', '--test', 'QueueTimeoutReproTests.ResponsiveTestOutlivesTimeout', '--session', 'cancellation-verifier', '--fresh', '--wait', '1')
 	Start-Sleep -Seconds 3
 	$queued = Invoke-Bridge @('csharp', (New-Marker 'queued_cancel'), '--session', 'cancellation-verifier', '--wait', '1')
 	if ($queued.Status -ne 'queued') { throw 'Expected queued follower' }
@@ -78,7 +76,7 @@ try {
 	if ($after.Status -ne 'success') { throw 'Queue did not recover after cancellation' }
 	$again = Invoke-Bridge @('cancel', $active.Id, '--session', 'cancellation-verifier', '--wait', '3')
 	if ($again.Status -ne 'success') { throw 'Repeated cancel must be harmless' }
-	Write-Output 'PASS explicit cancellation: queued target, active foreign test, repeated cancel, follower'
+	Write-Output 'PASS explicit cancellation: queued target, active owned test, repeated cancel, follower'
 	$cooperativeId = "Task_${runId}_cooperative"
 	$cooperativePath = Join-Path $Project "Temp/AgentBridge/$cooperativeId.cs"
 	[IO.File]::WriteAllText($cooperativePath, @"
@@ -93,15 +91,41 @@ public static class $cooperativeId
  }
 }
 "@)
-	$cooperative = Invoke-Bridge @('csharp', $cooperativePath, '--wait', '1')
+	$cooperative = Invoke-Bridge @('csharp', $cooperativePath, '--session', 'cancellation-verifier', '--wait', '1')
 	$stopScript = Invoke-Bridge @('cancel', $cooperative.Id, '--session', 'cancellation-verifier', '--wait', '3')
 	$scriptFinal = Invoke-Bridge @('wait', $cooperative.Id, '--wait', '10')
 	Save-Result 'cooperative-cancel' $scriptFinal
 	if ($stopScript.Status -ne 'success' -or $scriptFinal.Status -ne 'canceled') { throw 'Cooperative script cancellation failed' }
 	Write-Output 'PASS cooperative C# cancellation'
+	$slowId = "Task_${runId}_slow_stop"
+	$slowPath = Join-Path $Project "Temp/AgentBridge/$slowId.cs"
+	[IO.File]::WriteAllText($slowPath, @"
+using System.Threading.Tasks;
+public static class $slowId
+{
+ public static async Task<string> Run()
+ {
+  await Task.Delay(35000);
+  return "Finished after delayed cancellation";
+ }
+}
+"@)
+	$slow = Invoke-Bridge @('csharp', $slowPath, '--session', 'cancellation-verifier', '--wait', '1')
+	Start-Sleep -Seconds 3
+	$null = Invoke-Bridge @('cancel', $slow.Id, '--session', 'cancellation-verifier', '--wait', '3')
+	$stopping = Invoke-Bridge @('wait', $slow.Id, '--wait', '1')
+	if ($stopping.Status -ne 'canceling') { throw 'Uncooperative C# lost its canceling status' }
+	$blocked = Invoke-Bridge @('csharp', (New-Marker 'slow_follower'), '--session', 'cancellation-verifier', '--wait', '1')
+	if ($blocked.Status -ne 'queued') { throw 'Queue released before C# executor stopped' }
+	$slowFinal = Invoke-Bridge @('wait', $slow.Id, '--wait', '40')
+	Save-Result 'slow-cancel-final' $slowFinal
+	if ($slowFinal.Status -ne 'canceled') { throw 'Late C# success overwrote cancellation' }
+	$follower = Invoke-Bridge @('wait', $blocked.Id, '--wait', '10')
+	if ($follower.Status -ne 'success') { throw 'Follower did not resume after C# stopped' }
+	Write-Output 'PASS delayed C# cancellation retains queue and terminal outcome'
 	Write-Output "Evidence: $evidence"
 }
 finally {
-	[IO.File]::WriteAllBytes($settings, $original)
+	# Control only tasks submitted by this verifier; do not change project timeout settings.
 	& $Cli release --session cancellation-verifier --project $Project --wait 2 --format human
 }

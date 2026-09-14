@@ -66,17 +66,6 @@ namespace AgentBridge
 			return settings.KeepCompletedCount;
 		}
 
-		public static int GetTaskTimeoutSeconds()
-		{
-			AgentBridgeSettings settings = Load();
-			if (settings.TaskTimeoutSeconds <= 0)
-			{
-				return 300;
-			}
-
-			return settings.TaskTimeoutSeconds;
-		}
-
 		public static int GetIdleTickIntervalMs()
 		{
 			AgentBridgeSettings settings = Load();

@@ -224,7 +224,7 @@ internal static class Scenarios
 
 		engine.Apply(state, StepCommand(CoordinationEngine.OpStepBegin, "a", token, "V1", "Task_1"), clock.UtcNowMs);
 
-		clock.Advance(20_000);
+		clock.Advance(3_600_000);
 		var afterDeadline = engine.Apply(state, StepCommand(CoordinationEngine.OpStepBegin, "a", token, "V2", "Task_2"), clock.UtcNowMs);
 		ExpectCode(afterDeadline, CoordinationCodes.WindowDraining, "a drained window takes no new steps");
 		Expect(state.FindWindowGrant() != null, "the deadline does not free the editor under a running task");

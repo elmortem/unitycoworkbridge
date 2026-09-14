@@ -22,6 +22,8 @@ internal sealed class BridgeStatus
 	public int LoadedTaskAssemblies { get; set; }
 	public int ExecutedTasks { get; set; }
 	public string? ActiveTaskId { get; set; }
+	public long ActiveTaskElapsedSeconds { get; set; }
+	public bool ActiveTaskCancelableByOtherAgents { get; set; }
 	public string? QueueBlockReason { get; set; }
 	public string? CompilationState { get; set; }
 	public string? LastCompileId { get; set; }

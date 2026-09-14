@@ -14,6 +14,8 @@ void Case(string name, Action body)
 	PlayModeSceneRecovery.Stop();
 	PlayModeSceneRecovery.Cancel();
 	EditorApplication.Reset();
+	SessionState.Clear();
+	TestRunnerCancellation.Requests = AgentTestRunner.CancellationFinalizations = 0;
 	EditorSceneManager.Restores = 0;
 	EditorSceneManager.OnRestore = null;
 	TestRunnerCancellation.Running = false;
@@ -76,5 +78,38 @@ Case("deferred finalizer retains owner across restart", () =>
 	EditorApplication.Frame();
 	Check(!PlayModeSceneRecovery.IsPending, "terminal owner did not release recovery");
 });
-Console.WriteLine(failures == 0 ? "Scene recovery: PASS" : $"Scene recovery: FAIL ({failures})");
+Case("legacy expired deadline does not stop a long run", () =>
+{
+	SessionState.SetString("AgentBridge_TestRunLifecycle", """{"Id":"owner","Deadline":1,"Submitted":true}""");
+	TestRunnerCancellation.Running = true;
+	TestRunLifecycle.Tick();
+	Check(TaskJournal.Owner.Status == "running", "expired legacy deadline stopped the run");
+	Check(TestRunnerCancellation.Requests == 0 && AgentTestRunner.CancellationFinalizations == 0, "stopped without explicit cancellation");
+	Check(TestRunLifecycle.TaskId == "owner", "lost persisted ownership");
+});
+Case("preemption reason survives reload reads and repeated cancel", () =>
+{
+	TestRunLifecycle.Begin("owner");
+	TestRunLifecycle.Submitted("job");
+	TestRunnerCancellation.Running = true;
+	const string reason = "preempted_after_300s: Canceled by neighbor after 427 seconds";
+	Check(!TestRunLifecycle.RequestStop("other-task", "canceled", "wrong"), "canceled the wrong task");
+	Check(TestRunLifecycle.RequestStop("owner", "canceled", reason), "did not accept stop");
+	TestRunLifecycle.RequestStop("owner", "canceled", "second requester");
+	TestRunLifecycle.Tick();
+	Check(TaskJournal.Owner.Status == "canceling" && AgentTestRunner.CancellationFinalizations == 0, "published terminal while executor runs");
+	Check(TestRunLifecycle.IsStopping("owner") && TestRunnerCancellation.Requests == 1, "lost persisted stop state");
+	TestRunnerCancellation.Running = false;
+	AgentTestRunner.OnFinalize = () => { };
+	TestRunLifecycle.Tick();
+	Check(AgentTestRunner.CancellationFinalizations == 0, "published terminal before restoring scenes");
+	EditorApplication.Frame();
+	Check(EditorSceneManager.Restores == 1 && !PlayModeSceneRecovery.IsPending, "recovery did not finish");
+	TestRunLifecycle.Tick();
+	Check(TaskJournal.Owner.Status == "canceled" && AgentTestRunner.CancellationReason == reason, "lost first initiator or reason");
+	Check(TestRunLifecycle.TaskId == "", "did not release lifecycle after recovery");
+	TestRunLifecycle.Tick();
+	Check(AgentTestRunner.CancellationFinalizations == 1, "finalized cancellation twice");
+});
+Console.WriteLine(failures == 0 ? "Scene recovery and cancellation lifecycle: PASS" : $"Scene recovery and cancellation lifecycle: FAIL ({failures})");
 Environment.ExitCode = failures == 0 ? 0 : 1;

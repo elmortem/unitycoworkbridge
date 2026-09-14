@@ -1,0 +1,60 @@
+{
+    "Id":  "Task_20260914_193647_690_58dd7824",
+    "Kind":  "cancel",
+    "Status":  "rejected",
+    "Hash":  "aac84fd86d14a36f0926731ea5d15b10cde3ef44e22a6f28167ddf558e8638fa",
+    "ReturnValue":  "",
+    "Logs":  [
+                 "task_protected: Task_20260914_223645_154_natural; foreign cancellation is allowed after 300 seconds of execution"
+             ],
+    "Diagnostics":  [
+
+                    ],
+    "ForeignErrors":  false,
+    "Cached":  false,
+    "SourceTaskId":  "",
+    "AttachedToTaskId":  "",
+    "Artifacts":  [
+
+                  ],
+    "Tests":  {
+                  "passed":  0,
+                  "failed":  0,
+                  "skipped":  0,
+                  "inconclusive":  0,
+                  "total":  0,
+                  "duration":  0.0,
+                  "aborted":  false,
+                  "message":  "",
+                  "failures":  [
+
+                               ]
+              },
+    "Timing":  {
+                   "QueuedMs":  0,
+                   "CompileMs":  0,
+                   "ExecuteMs":  0,
+                   "TotalMs":  0
+               },
+    "SessionId":  "6b9abc55737c434bb259e9a0e5cd356e",
+    "AgentSessionId":  "",
+    "Contention":  {
+                       "WaitingSessions":  0,
+                       "OldestWaitSeconds":  0,
+                       "Notes":  [
+
+                                 ]
+                   },
+    "Evidence":  {
+                     "Validity":  "unknown",
+                     "InputDigest":  "",
+                     "EndInputDigest":  "",
+                     "WindowId":  "",
+                     "Reason":  "",
+                     "ArtifactsPresent":  false
+                 },
+    "CoordinationWindowToken":  "",
+    "CoordinationStepId":  "",
+    "StartedAtUtc":  "2026-09-14T19:36:47.7791819Z",
+    "FinishedAtUtc":  "2026-09-14T19:36:47.7791819Z"
+}

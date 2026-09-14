@@ -21,7 +21,14 @@ namespace UnityEngine.SceneManagement
 namespace UnityEditor
 {
 	public enum PlayModeStateChange { ExitingPlayMode, EnteredEditMode }
-	public static class SessionState { public static string GetString(string key, string fallback) => fallback; }
+	public static class SessionState
+	{
+		static readonly Dictionary<string, string> Values = new();
+		public static string GetString(string key, string fallback) => Values.TryGetValue(key, out var value) ? value : fallback;
+		public static void SetString(string key, string value) => Values[key] = value;
+		public static void EraseString(string key) => Values.Remove(key);
+		public static void Clear() => Values.Clear();
+	}
 	public static class EditorApplication
 	{
 		public static bool isPlaying, isPlayingOrWillChangePlaymode;
@@ -49,21 +56,35 @@ namespace UnityEditor.SceneManagement
 namespace AgentBridge
 {
 	public class TestRunResult { public bool aborted; public string message; }
-	public class TaskRecord { public string Status; }
+	public class TaskRecord { public string Status; public List<string> Logs = new(); }
 	public static class TaskJournal
 	{
 		public static TaskRecord Owner;
 		public static bool TryRead(string id, out TaskRecord record) { record = Owner; return record != null; }
+		public static void Write(TaskRecord record) => Owner = record;
 	}
 	public static class TaskCoordinator { public static bool IsTerminal(string status) => status is "success" or "canceled" or "runtime_error"; }
-	public static class TestRunLifecycle { public static bool IsStopping(string id) => false; }
-	public static class TestRunnerCancellation { public static bool Running; public static bool IsRunning() => Running; }
+	public static class TestRunnerCancellation
+	{
+		public static bool Running;
+		public static int Requests;
+		public static bool IsRunning() => Running;
+		public static bool PlayRunnerStarted() => Running;
+		public static string Request(string id) { Requests++; return "requested"; }
+		public static string RunningReason() => "test executor";
+	}
 	public static class BridgePaths { public static string PlayModeSceneStateFile; }
 	public static class AgentTestRunner
 	{
 		public const string CoordinatorTestTaskKey = "test";
 		public static Action OnFinalize;
+		public static int CancellationFinalizations;
+		public static string CancellationReason;
 		public static void FinalizeRecoveredPlayModeRun(string id, TestRunResult result, string error) => OnFinalize?.Invoke();
+		public static void FinalizeCancellation(string id, string outcome, string reason)
+		{
+			CancellationFinalizations++; CancellationReason = reason; TaskJournal.Owner.Status = outcome;
+		}
 	}
 	public static class SceneDirtyWatcher { public static void Disarm(string id) { } }
 	public static class SceneSafetyGuard

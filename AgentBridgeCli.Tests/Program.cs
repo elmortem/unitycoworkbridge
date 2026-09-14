@@ -538,6 +538,7 @@ static async Task RunQueueBudgetTests(string temporaryRoot)
 		using var control = JsonDocument.Parse(File.ReadAllText(requests.Single(path => !path.EndsWith(id + ".task.json"))));
 		Expect(control.RootElement.GetProperty("TargetTaskId").GetString() == id, "cancel must address the exact task");
 		Expect(control.RootElement.GetProperty("Kind").GetString() == "cancel", "control request uses cancel kind");
+		Expect(control.RootElement.GetProperty("AgentSessionId").GetString() == "observer", "cancel must preserve requester identity for protection and notification");
 		Expect(await cancel.WaitAsync(TimeSpan.FromSeconds(5)) == 2, "an unconsumed cancellation obeys the client budget too");
 	}
 	finally { Console.SetOut(stdout); Console.SetError(stderr); }

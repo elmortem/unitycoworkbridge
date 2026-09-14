@@ -1,0 +1,52 @@
+{
+    "Id": "Batch_b3d5097acb5d0dcba15a7cce_0",
+    "Kind": "tests",
+    "Status": "canceled",
+    "Hash": "30f547a32874128a05f88c803d18d833c8e3e775ee9004d95f254c07a4da7c21",
+    "ReturnValue": "",
+    "Logs": [
+        "preempted_after_300s: Canceled by long-neighbor-20260914_225132_497 after 904 seconds; exceeded the protected period of 300 seconds."
+    ],
+    "Diagnostics": [],
+    "ForeignErrors": false,
+    "Cached": false,
+    "SourceTaskId": "",
+    "AttachedToTaskId": "",
+    "Artifacts": [],
+    "Tests": {
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0,
+        "inconclusive": 0,
+        "total": 0,
+        "duration": 0.0,
+        "aborted": true,
+        "message": "preempted_after_300s: Canceled by long-neighbor-20260914_225132_497 after 904 seconds; exceeded the protected period of 300 seconds.",
+        "failures": []
+    },
+    "Timing": {
+        "QueuedMs": 0,
+        "CompileMs": 0,
+        "ExecuteMs": 0,
+        "TotalMs": 904141
+    },
+    "SessionId": "b5e4e751979d46029a92cc7f0a7672e0",
+    "AgentSessionId": "long-owner-20260914_225132_497",
+    "Contention": {
+        "WaitingSessions": 0,
+        "OldestWaitSeconds": 0,
+        "Notes": []
+    },
+    "Evidence": {
+        "Validity": "unknown",
+        "InputDigest": "",
+        "EndInputDigest": "",
+        "WindowId": "",
+        "Reason": "",
+        "ArtifactsPresent": false
+    },
+    "CoordinationWindowToken": "w-d7f0b48feb8e425593e8a0fe4a586316",
+    "CoordinationStepId": "long",
+    "StartedAtUtc": "2026-09-14T19:51:33.1549293Z",
+    "FinishedAtUtc": "2026-09-14T20:06:37.2964159Z"
+}

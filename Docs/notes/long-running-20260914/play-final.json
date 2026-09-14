@@ -1,0 +1,60 @@
+{
+    "Id":  "Batch_4025773fc69ec018d7bd6fd6_0",
+    "Kind":  "tests",
+    "Status":  "canceled",
+    "Hash":  "db0cd57c077d5acff6264514929d03971005ce3cc030b32ae138d3120b6de694",
+    "ReturnValue":  "",
+    "Logs":  [
+                 "preempted_after_300s: Canceled by long-neighbor-20260914_230723_958 after 306 seconds; exceeded the protected period of 300 seconds."
+             ],
+    "Diagnostics":  [
+
+                    ],
+    "ForeignErrors":  false,
+    "Cached":  false,
+    "SourceTaskId":  "",
+    "AttachedToTaskId":  "",
+    "Artifacts":  [
+
+                  ],
+    "Tests":  {
+                  "passed":  0,
+                  "failed":  0,
+                  "skipped":  0,
+                  "inconclusive":  0,
+                  "total":  0,
+                  "duration":  0.0,
+                  "aborted":  true,
+                  "message":  "preempted_after_300s: Canceled by long-neighbor-20260914_230723_958 after 306 seconds; exceeded the protected period of 300 seconds.",
+                  "failures":  [
+
+                               ]
+              },
+    "Timing":  {
+                   "QueuedMs":  0,
+                   "CompileMs":  0,
+                   "ExecuteMs":  0,
+                   "TotalMs":  306812
+               },
+    "SessionId":  "c719719372d44a18bea40f272c6d485d",
+    "AgentSessionId":  "long-owner-20260914_230723_958",
+    "Contention":  {
+                       "WaitingSessions":  0,
+                       "OldestWaitSeconds":  0,
+                       "Notes":  [
+
+                                 ]
+                   },
+    "Evidence":  {
+                     "Validity":  "unknown",
+                     "InputDigest":  "",
+                     "EndInputDigest":  "",
+                     "WindowId":  "",
+                     "Reason":  "",
+                     "ArtifactsPresent":  false
+                 },
+    "CoordinationWindowToken":  "w-7a7702773637442c8a8167f896327f7d",
+    "CoordinationStepId":  "long",
+    "StartedAtUtc":  "2026-09-14T20:07:24.5605485Z",
+    "FinishedAtUtc":  "2026-09-14T20:12:31.3732210Z"
+}

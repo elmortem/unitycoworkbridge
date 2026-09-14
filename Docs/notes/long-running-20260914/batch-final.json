@@ -1,0 +1,20 @@
+{
+    "Ok":  true,
+    "Code":  "ok",
+    "ProjectId":  "d149afb837f442abbe8f672c89f40746",
+    "Epoch":  "c8af746a30744a03a192ac68a7259741",
+    "Revision":  346,
+    "Session":  "long-owner-20260914_230723_958",
+    "RequestId":  "R0053",
+    "State":  "closed",
+    "Token":  "",
+    "Blockers":  [
+
+                 ],
+    "Message":  "",
+    "TaskIds":  [
+                    "Batch_4025773fc69ec018d7bd6fd6_0",
+                    "Batch_4025773fc69ec018d7bd6fd6_1"
+                ],
+    "Reason":  "failed:long:canceled"
+}

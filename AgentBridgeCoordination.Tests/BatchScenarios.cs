@@ -42,8 +42,8 @@ internal static class BatchScenarios
 			begin.Actual = ActualTests(task.CoordinationStepId);
 			ExpectCode(engine.Apply(state, begin, now), CoordinationCodes.Ok, "editor reserves supplied task");
 			executed.Add(request.Session + task.CoordinationStepId);
-			// B fails its first step: B2 must never be supplied, C must still run.
-			string status = request.Session == "b" ? "test_failure" : "success";
+			// B is canceled on its first step: B2 must never be supplied, C must still run.
+			string status = request.Session == "b" ? "canceled" : "success";
 			File.WriteAllText(Path.Combine(BridgePaths.Journal, id + ".json"), UnityEngine.JsonUtility.ToJson(new TaskRecord { Status = status, FinishedAtUtc = "2026-09-13T00:00:00Z" }));
 			// Skip the completion callback, as if its store transaction lost a race/reloaded.
 			// The production pump must reconcile the journal without re-executing the task.
@@ -51,7 +51,7 @@ internal static class BatchScenarios
 		Expect(string.Join(",", executed) == "aV1,aV2,bV1,cV1,cV2", "FIFO, ordered steps, fail-fast, no client polling");
 		Expect(state.FindWindowGrant() == null, "last batch frees editor without finish");
 		Expect(state.FindRequestByUuid("a", "batch-a").Reason == "completed", "successful batch outcome");
-		Expect(state.FindRequestByUuid("b", "batch-b").Reason.StartsWith("failed:V1"), "failed batch outcome");
+		Expect(state.FindRequestByUuid("b", "batch-b").Reason.StartsWith("failed:V1"), "canceled batch outcome");
 		Expect(state.FindRequestByUuid("c", "batch-c").Reason == "completed", "later batch completes");
 		var replay = engine.Apply(state, WindowRequest("a", "batch-a", plan: TestsPlan("V1", "V2")), now);
 		ExpectCode(replay, CoordinationCodes.AlreadyClosed, "repeated submit cannot repeat effects");

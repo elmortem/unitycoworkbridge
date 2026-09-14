@@ -1,0 +1,60 @@
+{
+    "Id":  "Task_20260914_195018_359_83dcd409",
+    "Kind":  "tests",
+    "Status":  "canceled",
+    "Hash":  "dc1fecc6a5d025c5f886bde22586742dbb19ea985d2b3426707f2c384d91ca8e",
+    "ReturnValue":  "",
+    "Logs":  [
+                 "Canceled through CLI by cancellation-verifier"
+             ],
+    "Diagnostics":  [
+
+                    ],
+    "ForeignErrors":  false,
+    "Cached":  false,
+    "SourceTaskId":  "",
+    "AttachedToTaskId":  "",
+    "Artifacts":  [
+
+                  ],
+    "Tests":  {
+                  "passed":  0,
+                  "failed":  0,
+                  "skipped":  0,
+                  "inconclusive":  0,
+                  "total":  0,
+                  "duration":  0.0,
+                  "aborted":  true,
+                  "message":  "Canceled through CLI by cancellation-verifier",
+                  "failures":  [
+
+                               ]
+              },
+    "Timing":  {
+                   "QueuedMs":  0,
+                   "CompileMs":  0,
+                   "ExecuteMs":  0,
+                   "TotalMs":  5523
+               },
+    "SessionId":  "286bfaf5ef1146a6bd92ff7bf9395831",
+    "AgentSessionId":  "cancellation-verifier",
+    "Contention":  {
+                       "WaitingSessions":  0,
+                       "OldestWaitSeconds":  0,
+                       "Notes":  [
+
+                                 ]
+                   },
+    "Evidence":  {
+                     "Validity":  "unknown",
+                     "InputDigest":  "",
+                     "EndInputDigest":  "",
+                     "WindowId":  "",
+                     "Reason":  "",
+                     "ArtifactsPresent":  false
+                 },
+    "CoordinationWindowToken":  "",
+    "CoordinationStepId":  "",
+    "StartedAtUtc":  "2026-09-14T19:50:18.3830741Z",
+    "FinishedAtUtc":  "2026-09-14T19:50:23.9068084Z"
+}

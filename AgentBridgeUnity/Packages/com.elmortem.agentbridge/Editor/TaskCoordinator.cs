@@ -35,6 +35,7 @@ namespace AgentBridge
 		private static string _pendingValidationKind;
 		private static string _queueSignature = "";
 		private static string _cancelOutcome;
+		private static string _cancelReason;
 		private static double _cancelSince;
 		private static double _nextControlScan;
 
@@ -313,7 +314,6 @@ namespace AgentBridge
 
 			if (_activeTaskId != null)
 			{
-				CheckTimeout(now);
 				RefreshQueueStatus(now);
 				TryServeThrottled(now);
 				if (TestRunLifecycle.IsStopping(_activeTaskId)) return;
@@ -1280,7 +1280,7 @@ namespace AgentBridge
 				return;
 			}
 
-			string statusHint = _activeCSharpExecutor.StatusHint;
+			string statusHint = _cancelOutcome != null ? "canceling" : _activeCSharpExecutor.StatusHint;
 			if (_activeRecord.Status != statusHint && !IsTerminal(_activeRecord.Status))
 			{
 				_activeRecord.Status = statusHint;
@@ -1338,6 +1338,7 @@ namespace AgentBridge
 				logs.AddRange(extraLogs);
 			}
 
+			if (!string.IsNullOrEmpty(_cancelReason)) logs.Add(_cancelReason);
 			logs.AddRange(SceneDirtyWatcher.DrainLogs());
 
 			if (_activeRestoreLogs != null && _activeRestoreLogs.Count > 0)
@@ -1381,6 +1382,7 @@ namespace AgentBridge
 
 			_activeCancellation = null;
 			_cancelOutcome = null;
+			_cancelReason = null;
 			_activeRecord = null;
 			_activeTaskId = null;
 			_activeRequest = null;
@@ -1400,46 +1402,6 @@ namespace AgentBridge
 			EditorTickPump.HasActiveTask = false;
 			BridgeStatusWriter.Current.ActiveTaskId = null;
 			BridgeStatusWriter.Write();
-		}
-
-		private static void CheckTimeout(double now)
-		{
-			if (_activeRecord == null)
-			{
-				return;
-			}
-
-			// A play session has its own deadline and a stopplay task waits for the editor to
-			// finish leaving play mode; the task timeout would cut both short.
-			if (_activeRecord.Kind == "play" || _activeRecord.Kind == "stopplay" || _activeRecord.Kind == "tests")
-			{
-				return;
-			}
-
-			int timeoutSeconds = AgentBridgeSettingsStore.GetTaskTimeoutSeconds();
-			if (now - _activeStartTime <= timeoutSeconds)
-			{
-				return;
-			}
-			if (_activeRecord.Kind == "csharp")
-			{
-				RequestCSharpStop("timeout");
-				return;
-			}
-
-			if (_activeCancellation != null)
-			{
-				_activeCancellation.Cancel();
-			}
-
-			TelemetryLog.Write("watchdog", _activeRecord.AgentSessionId, _activeRecord.Id, new[]
-			{
-				TelemetryField.Text("What", "task_timeout"),
-				TelemetryField.Text("Kind", _activeRecord.Kind),
-				TelemetryField.Number("LimitS", timeoutSeconds)
-			});
-
-			FinishTask("timeout", null, new List<string> { "task exceeded timeout: " + timeoutSeconds + "s" }, false);
 		}
 
 		private static void OnBeforeAssemblyReload()
@@ -1504,10 +1466,11 @@ namespace AgentBridge
 			TelemetryLog.TaskFinished(record);
 		}
 
-		private static void RequestCSharpStop(string outcome)
+		private static void RequestCSharpStop(string outcome, string reason = "Canceled by user")
 		{
 			if (_cancelOutcome != null) return;
 			_cancelOutcome = outcome;
+			_cancelReason = reason;
 			_cancelSince = EditorApplication.timeSinceStartup;
 			if (_activeCancellation != null) _activeCancellation.Cancel();
 			_activeRecord.Status = "canceling";
@@ -1530,10 +1493,19 @@ namespace AgentBridge
 			}
 			BridgeStatus status = BridgeStatusWriter.Current;
 			string visibleTask = _activeTaskId ?? TestRunLifecycle.TaskId;
-			if (status.QueueBlockReason == reason && status.ActiveTaskId == visibleTask) return;
+			TaskRecord visibleRecord = _activeRecord;
+			if (visibleRecord == null && !string.IsNullOrEmpty(visibleTask)) TaskJournal.TryRead(visibleTask, out visibleRecord);
+			long elapsed = visibleRecord == null ? 0 : TaskCancellationPolicy.ElapsedSeconds(visibleRecord.StartedAtUtc, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+			bool cancelable = visibleRecord != null && (visibleRecord.Status == "running" || visibleRecord.Status == "compiling")
+				&& !TestRunLifecycle.IsStopping(visibleTask)
+				&& (visibleRecord.Kind == "csharp" || visibleRecord.Kind == "tests") && elapsed >= TaskCancellationPolicy.ProtectedSeconds;
+			if (status.QueueBlockReason == reason && status.ActiveTaskId == visibleTask
+				&& status.ActiveTaskElapsedSeconds == elapsed && status.ActiveTaskCancelableByOtherAgents == cancelable) return;
+			status.ActiveTaskElapsedSeconds = elapsed;
+			status.ActiveTaskCancelableByOtherAgents = cancelable;
 			status.ActiveTaskId = visibleTask;
+			if (status.QueueBlockReason != reason) status.QueueBlockedSinceUtc = reason.Length == 0 ? "" : DateTime.UtcNow.ToString("o");
 			status.QueueBlockReason = reason;
-			status.QueueBlockedSinceUtc = reason.Length == 0 ? "" : DateTime.UtcNow.ToString("o");
 			BridgeStatusWriter.Write();
 		}
 
@@ -1571,9 +1543,15 @@ namespace AgentBridge
 						string token = exists ? record.CoordinationWindowToken : targetRequest.CoordinationWindowToken;
 						var state = CoordinationEditorAdapter.Snapshot;
 						var grant = state == null || string.IsNullOrEmpty(token) ? null : state.FindGrantByToken(token);
-						if (IsCancellationProtected(grant, owner, request.AgentSessionId, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())) result = "coordinated_window_held:" + owner;
-						else if (TestRunLifecycle.RequestStop(target, "canceled", "Canceled through CLI by " + (request.AgentSessionId ?? "manual"))) { ok = true; result = "cancel_requested"; }
-						else if (_activeTaskId == target && _activeRecord.Kind == "csharp") { RequestCSharpStop("canceled"); ok = true; result = "cancel_requested"; }
+						long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+						bool running = exists && (_activeTaskId == target || TestRunLifecycle.TaskId == target
+							|| record.Status == "running" || record.Status == "compiling" || record.Status == "canceling");
+						string reason = TaskCancellationPolicy.Reason(owner, request.AgentSessionId, exists ? record.StartedAtUtc : null, nowMs);
+						if (running && TaskCancellationPolicy.IsProtected(owner, request.AgentSessionId, record.StartedAtUtc, nowMs))
+							result = "task_protected: " + target + "; foreign cancellation is allowed after 300 seconds of execution";
+						else if (!running && IsCancellationProtected(grant, owner, request.AgentSessionId, nowMs)) result = "coordinated_window_held:" + owner;
+						else if (TestRunLifecycle.RequestStop(target, "canceled", reason)) { ok = true; result = "cancel_requested"; }
+						else if (_activeTaskId == target && _activeRecord.Kind == "csharp") { RequestCSharpStop("canceled", reason); ok = true; result = "cancel_requested"; }
 						else if (exists && record.Status == "attached")
 						{
 							record.Status = "canceled";

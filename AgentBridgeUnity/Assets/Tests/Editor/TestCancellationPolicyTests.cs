@@ -20,14 +20,34 @@ public class TestCancellationPolicyTests
 		Assert.Throws<System.InvalidOperationException>(() => TestRunnerCancellation.UniqueRunningJobId(new[] {
 			new Job { guid = "one", isRunning = true }, new Job { guid = "two", isRunning = true } }));
 	}
-	[TestCase(3600, 300)]
-	[TestCase(300, 300)]
-	[TestCase(10, 10)]
-	[TestCase(0, 300)]
-	[TestCase(-1, 300)]
-	public void TestRunCannotExceedFiveMinutes(int configured, int expected)
+	[TestCase(299999, true)]
+	[TestCase(300000, false)]
+	[TestCase(3600000, false)]
+	public void ForeignCancellationUsesExecutionAge(long elapsedMs, bool expected)
 	{
-		Assert.AreEqual(expected, TestRunLifecycle.LimitSeconds(configured));
+		const long start = 1700000000000;
+		string started = System.DateTimeOffset.FromUnixTimeMilliseconds(start).ToString("o");
+		Assert.AreEqual(expected, TaskCancellationPolicy.IsProtected("owner", "other", started, start + elapsedMs));
+		Assert.IsFalse(TaskCancellationPolicy.IsProtected("owner", "owner", started, start));
+	}
+
+	[Test]
+	public void AnonymousCallerAndMissingStartDoNotBypassProtection()
+	{
+		Assert.IsTrue(TaskCancellationPolicy.IsProtected("", "", null, 1700000000000));
+		Assert.IsTrue(TaskCancellationPolicy.IsProtected("owner", "other", "invalid", 1700000000000));
+		Assert.IsFalse(TaskCancellationPolicy.IsProtected("owner", "owner", null, 1700000000000));
+	}
+
+	[Test]
+	public void PreemptionReasonNamesInitiatorAndDuration()
+	{
+		const long start = 1700000000000;
+		string started = System.DateTimeOffset.FromUnixTimeMilliseconds(start).ToString("o");
+		string reason = TaskCancellationPolicy.Reason("owner", "neighbor", started, start + 427000);
+		StringAssert.Contains("preempted_after_300s", reason);
+		StringAssert.Contains("neighbor", reason);
+		StringAssert.Contains("427 seconds", reason);
 	}
 
 	[Test]

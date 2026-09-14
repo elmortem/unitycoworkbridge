@@ -273,6 +273,9 @@ internal static class AgentBridgeApplication
 					+ (health.Bridge.WakeTimerInstalled ? (health.Bridge.WakeTimerKind ?? "installed") : "missing"));
 				Console.Out.WriteLine("Interaction mode: " + (health.Bridge.InteractionMode ?? "unknown"));
 				Console.Out.WriteLine("Active task: " + (health.Bridge.ActiveTaskId ?? "none"));
+				if (!string.IsNullOrEmpty(health.Bridge.ActiveTaskId) && health.Bridge.Capabilities.Contains("long-running-tasks-v1"))
+					Console.Out.WriteLine("Execution: " + health.Bridge.ActiveTaskElapsedSeconds + " seconds; cancellation by another agent: "
+						+ (health.Bridge.ActiveTaskCancelableByOtherAgents ? "allowed" : "protected or stopping/unsupported"));
 				Console.Out.WriteLine("Compilation (last observed cycle): " + (health.Bridge.CompilationState ?? "unknown")
 					+ " " + (health.Bridge.LastCompileId ?? "") + " " + (health.Bridge.LastCompileFinishedUtc ?? ""));
 				if (!string.IsNullOrEmpty(health.Bridge.QueueBlockReason))

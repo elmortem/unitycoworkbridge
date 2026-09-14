@@ -14,7 +14,17 @@ public class AgentBridgeCancellationPlayModeTests
 	}
 
 	[UnityTest]
-	[Explicit("Run through CLI with a short task deadline to verify cancellation across domain reload")]
+	[Timeout(600000)]
+	[Explicit("Run with scripts/verify-long-running-tasks.ps1; intentionally runs beyond 300 seconds")]
+	public IEnumerator SurvivesProtectedPeriod()
+	{
+		DateTime until = DateTime.UtcNow.AddSeconds(360);
+		while (DateTime.UtcNow < until) yield return null;
+		Assert.IsTrue(UnityEngine.Application.isPlaying);
+	}
+
+	[UnityTest]
+	[Explicit("Run through CLI to verify owner cancellation across domain reload")]
 	public IEnumerator ResponsiveLongRun()
 	{
 		Directory.CreateDirectory("Temp/AgentBridge/repro-queue");

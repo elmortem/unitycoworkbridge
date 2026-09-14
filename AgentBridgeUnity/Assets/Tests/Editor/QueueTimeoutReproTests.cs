@@ -24,7 +24,7 @@ public class QueueTimeoutReproTests
 	}
 
 	[UnityTest]
-	[Explicit("Run with scripts/verify-test-cancellation.ps1; intentionally exceeds the task deadline")]
+	[Explicit("Run with scripts/verify-test-cancellation.ps1; verifies explicit owner cancellation")]
 	public IEnumerator ResponsiveTestOutlivesTimeout()
 	{
 		Mark("plain begin");

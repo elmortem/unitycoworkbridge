@@ -25,6 +25,8 @@ namespace AgentBridge
 		public int LoadedTaskAssemblies;
 		public int ExecutedTasks;
 		public string ActiveTaskId;
+		public long ActiveTaskElapsedSeconds;
+		public bool ActiveTaskCancelableByOtherAgents;
 		public string QueueBlockReason;
 		public string CompilationState;
 		public string LastCompileId;

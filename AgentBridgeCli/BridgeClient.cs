@@ -129,7 +129,8 @@ internal sealed class BridgeClient
 	public Task<int> SubmitCancelAsync(string taskId, int waitSeconds)
 	{
 		if (!IsSafeTaskId(taskId)) return Task.FromResult(WriteError("invalid_task_id", "Invalid target task id."));
-		return SubmitRequestAsync(new TaskRequest { Id = TaskIdGenerator.NewId(), Kind = "cancel", TargetTaskId = taskId }, waitSeconds);
+		return SubmitRequestAsync(new TaskRequest { Id = TaskIdGenerator.NewId(), Kind = "cancel", TargetTaskId = taskId,
+			AgentSessionId = _session ?? "", Note = _note ?? "" }, waitSeconds);
 	}
 
 	public async Task<int> SubmitPlayAsync(int seconds, int waitSeconds)

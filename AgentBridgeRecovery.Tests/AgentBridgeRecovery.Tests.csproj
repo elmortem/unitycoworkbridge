@@ -8,5 +8,6 @@
   <ItemGroup>
     <Compile Include="$(RecoverySourceDirectory)/PlayModeSceneRecovery.cs" Link="PlayModeSceneRecovery.cs" />
     <Compile Include="$(RecoverySourceDirectory)/PlayModeSceneState.cs" Link="PlayModeSceneState.cs" />
+    <Compile Include="$(RecoverySourceDirectory)/TestRunLifecycle.cs" Link="TestRunLifecycle.cs" />
   </ItemGroup>
 </Project>
