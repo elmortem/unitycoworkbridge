@@ -154,7 +154,7 @@ namespace AgentBridge
 			SessionState.SetString(CycleIdKey, string.IsNullOrEmpty(taskId) ? "UnityCompile_" + Guid.NewGuid().ToString("N") : taskId);
 			try
 			{
-				_cycleMonitor = new ValidationInputMonitor(CompileInputContext.Roots, new string[0]);
+				_cycleMonitor = new ValidationInputMonitor(CompileInputContext.Roots, new string[0], ValidationEvidence.BuildIgnore(""));
 				SessionState.SetBool(CycleStableKey, _cycleMonitor.Observed);
 				SessionState.SetString(CycleSourcesKey, CompileFingerprint.Current());
 			}

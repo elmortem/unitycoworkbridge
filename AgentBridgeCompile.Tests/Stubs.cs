@@ -59,7 +59,11 @@ namespace AgentBridge
     public class TaskDiagnosticList { public List<TaskDiagnostic> Items; }
     public class TaskRecordOutcome { public string Status; public List<TaskDiagnostic> Diagnostics; public bool ForeignErrors; }
     public static class SourceImportVerifier { public static List<TaskDiagnostic> ValidateProjectSources() => new(); }
-    public static class ValidationEvidence { public static string PreparedSources => CompileFingerprint.Current(); }
+    public static class ValidationEvidence
+    {
+        public static string PreparedSources => CompileFingerprint.Current();
+        public static Func<string, bool> BuildIgnore(string bootstrap) => null;
+    }
     public static class CompileInputContext
     {
         public static string[] Roots => new[] { Path.Combine(BridgePaths.ProjectRoot, "Assets"), Path.Combine(BridgePaths.ProjectRoot, "Packages"), Path.Combine(BridgePaths.ProjectRoot, "ProjectSettings") };

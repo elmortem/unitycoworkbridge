@@ -124,10 +124,30 @@ namespace AgentBridge
 		{
 			string projectRoot = ValidationInputSnapshot.Normalize(BridgePaths.ProjectRoot).TrimEnd('/') + "/";
 			string bootstrap = bootstrapScenePath ?? "";
+			// Resolve imported types and population modes on the main thread. The immutable path
+			// set can then be shared by the hash worker and FileSystemWatcher callbacks. Dynamic
+			// font files contain TMP's generated glyph tables and embedded atlas textures; their
+			// .meta and source font files remain inputs. Do not infer font types from filenames.
+			var dynamicFonts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			foreach (string guid in AssetDatabase.FindAssets("t:TMP_FontAsset"))
+			{
+				string path = AssetDatabase.GUIDToAssetPath(guid);
+				var font = AssetDatabase.LoadAssetAtPath<TMPro.TMP_FontAsset>(path);
+				if (font == null || font.atlasPopulationMode == TMPro.AtlasPopulationMode.Static) continue;
+				string absolute = Path.Combine(BridgePaths.ProjectRoot, path);
+				if (path.StartsWith("Packages/", StringComparison.Ordinal))
+				{
+					var package = UnityEditor.PackageManager.PackageInfo.FindForAssetPath(path);
+					if (package == null || string.IsNullOrEmpty(package.resolvedPath)) continue;
+					absolute = Path.Combine(package.resolvedPath, path.Substring(("Packages/" + package.name + "/").Length));
+				}
+				dynamicFonts.Add(ValidationInputSnapshot.Normalize(Path.GetFullPath(absolute)));
+			}
 
 			return delegate(string fullPath)
 			{
 				string normalized = ValidationInputSnapshot.Normalize(fullPath);
+				if (dynamicFonts.Contains(normalized)) return true;
 				if (!normalized.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase))
 				{
 					return false;
