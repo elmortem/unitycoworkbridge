@@ -8,7 +8,7 @@ namespace AgentBridge.Cli;
 // cross-process transaction.
 internal static class CoordinationCommands
 {
-	public const string CliContracts = "coordination-v1,coordination-batch-v1,evidence-v1,test-cache-v2";
+	public const string CliContracts = "coordination-v1,coordination-batch-v1,coordination-edit-leases-v1,evidence-v1,test-cache-v2";
 	private const int LockBudgetMs = 5000;
 
 	public static int Run(string projectRoot, string[] arguments, CliOptions options)
@@ -40,6 +40,14 @@ internal static class CoordinationCommands
 		if (command == "capabilities")
 		{
 			return Capabilities(projectRoot, canonical, options);
+		}
+		if (command is "register" or "scope" or "edit-begin" or "edit-end" or "renew"
+			or "finish" or "request" or "submit" or "cancel" or "leave" or "abandon")
+		{
+			var capabilities = BridgeInspector.Inspect(projectRoot).Bridge?.Capabilities ?? Array.Empty<string>();
+			if (!capabilities.Contains(CoordinationLimits.EditLeasesCapability))
+				return Fail(options, CoordinationCodes.SchemaUnsupported,
+					"update the Unity package to advertise coordination-edit-leases-v1 before changing coordination state; update all CLI clients too");
 		}
 		if (command is "submit" or "request")
 		{

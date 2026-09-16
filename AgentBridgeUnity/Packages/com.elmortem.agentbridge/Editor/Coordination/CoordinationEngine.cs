@@ -39,14 +39,18 @@ namespace AgentBridge.Coordination
 			state.Normalize();
 			command.Normalize();
 
-			if (state.SchemaVersion != CoordinationLimits.SchemaVersion)
+			if (state.SchemaVersion != 1 && state.SchemaVersion != CoordinationLimits.SchemaVersion)
 			{
 				return Stamp(state, CoordinationReply.Fail(
 					CoordinationCodes.SchemaUnsupported,
 					"coordination state schema " + state.SchemaVersion + " is not supported"));
 			}
 
-			bool swept = Sweep(state, nowMs, true);
+			// Older schedulers assume registrations never overlap. Persist the new version under
+			// the transaction lock so they refuse this state instead of issuing conflicting edits.
+			bool migrated = state.SchemaVersion != CoordinationLimits.SchemaVersion;
+			state.SchemaVersion = CoordinationLimits.SchemaVersion;
+			bool swept = Sweep(state, nowMs, true) || migrated;
 
 			CoordinationReply reply = Dispatch(state, command, nowMs);
 			if (reply.Ok && reply.Changed)
@@ -58,7 +62,7 @@ namespace AgentBridge.Coordination
 			}
 			else if (swept)
 			{
-				// The sweep itself is a meaningful change: an expired writer became orphaned.
+				// Expiry and migration must persist even when the requested operation is refused.
 				reply.Changed = true;
 				state.Revision++;
 			}
@@ -80,7 +84,7 @@ namespace AgentBridge.Coordination
 
 			state.Normalize();
 
-			// Reading applies expiry to the snapshot the caller holds, so an orphaned writer is
+			// Reading applies expiry to the snapshot the caller holds, so an expired writer is
 			// reported honestly. It deliberately does not issue anything: a right that exists only
 			// in a reader's memory would let two clients believe they hold the same one.
 			Sweep(state, nowMs, false);
@@ -187,14 +191,6 @@ namespace AgentBridge.Coordination
 			}
 
 			CoordinationParticipant existing = state.FindParticipant(command.Session);
-			string conflictSession;
-			string conflictPath;
-			if (Conflicts(state, command.Session, paths, out conflictSession, out conflictPath))
-			{
-				return CoordinationReply.Fail(
-					CoordinationCodes.ScopeConflict,
-					"scope path " + conflictPath + " is already reserved by session " + conflictSession);
-			}
 
 			if (existing != null)
 			{
@@ -274,15 +270,6 @@ namespace AgentBridge.Coordination
 				return CoordinationReply.Fail(CoordinationCodes.ScopeInvalid, error);
 			}
 
-			string conflictSession;
-			string conflictPath;
-			if (Conflicts(state, command.Session, paths, out conflictSession, out conflictPath))
-			{
-				// All or nothing: an expansion that collides anywhere leaves the old scope intact.
-				return CoordinationReply.Fail(
-					CoordinationCodes.ScopeConflict,
-					"scope path " + conflictPath + " is already reserved by session " + conflictSession);
-			}
 
 			bool changed = !SameSet(participant.Paths, paths);
 			participant.Paths = paths;
@@ -310,7 +297,7 @@ namespace AgentBridge.Coordination
 			{
 				return CoordinationReply.Fail(
 					CoordinationCodes.ParticipantBusy,
-					"leave requires no active or orphaned right; close it first");
+					"leave requires no active right; close it first");
 			}
 
 			foreach (CoordinationRequest request in state.Requests)
@@ -505,11 +492,11 @@ namespace AgentBridge.Coordination
 					"the grant already expired; confirm your writers finished with edit-end");
 			}
 
-			if (HasWaitingWindow(state))
+			if (HasWaitingWindow(state) || HasWaitingOverlap(state, grant.Session))
 			{
 				return CoordinationReply.Fail(
 					CoordinationCodes.PauseRequested,
-					"a window is waiting; finish the current package and call edit-end");
+					"a window or overlapping writer is waiting; finish the current package and call edit-end");
 			}
 
 			int seconds = command.Seconds > 0 ? command.Seconds : CoordinationLimits.EditDefaultSeconds;
@@ -1054,9 +1041,11 @@ namespace AgentBridge.Coordination
 				CoordinationGrant grant = state.Grants[i];
 				if (grant.Kind == CoordinationLimits.KindEdit)
 				{
-					if (grant.State == CoordinationLimits.GrantActive && nowMs > grant.DeadlineMs)
+					if (nowMs >= grant.DeadlineMs || grant.State == CoordinationLimits.GrantOrphaned)
 					{
-						grant.State = CoordinationLimits.GrantOrphaned;
+						CloseGrant(state, grant, "expired", nowMs);
+						AddTombstone(state, grant.Session, TokenKey(grant.Token, OpEditEnd), "",
+							grant.RequestId, CoordinationLimits.StateClosed, CoordinationCodes.AlreadyClosed, "expired", nowMs);
 						changed = true;
 					}
 
@@ -1119,6 +1108,11 @@ namespace AgentBridge.Coordination
 				}
 
 				if (state.FindGrantBySession(request.Session, null) != null)
+				{
+					continue;
+				}
+
+				if (HasEditConflict(state, participant, request.Ticket))
 				{
 					continue;
 				}
@@ -1330,32 +1324,39 @@ namespace AgentBridge.Coordination
 				"session " + session + " is not registered; run coord register first");
 		}
 
-		private static bool Conflicts(
-			CoordinationState state,
-			string session,
-			string[] paths,
-			out string conflictSession,
-			out string conflictPath)
+		private static bool ScopesOverlap(CoordinationParticipant left, CoordinationParticipant right)
 		{
-			conflictSession = "";
-			conflictPath = "";
-			foreach (CoordinationParticipant other in state.Participants)
+			string mine;
+			string theirs;
+			return left != null && right != null
+				&& CoordinationScope.AnyOverlap(left.Paths, right.Paths, out mine, out theirs);
+		}
+
+		private static bool HasEditConflict(CoordinationState state, CoordinationParticipant participant, long ticket)
+		{
+			foreach (CoordinationGrant grant in state.Grants)
 			{
-				if (string.Equals(other.Session, session, StringComparison.Ordinal))
-				{
-					continue;
-				}
-
-				string mine;
-				string theirs;
-				if (CoordinationScope.AnyOverlap(paths, other.Paths, out mine, out theirs))
-				{
-					conflictSession = other.Session;
-					conflictPath = mine;
-					return true;
-				}
+				if (grant.Kind == CoordinationLimits.KindEdit && grant.Session != participant.Session
+					&& ScopesOverlap(participant, state.FindParticipant(grant.Session))) return true;
 			}
+			// A younger edit must not overtake an older overlapping waiter, even if the older
+			// waiter is itself blocked on a different part of its scope. Disjoint work proceeds.
+			foreach (CoordinationRequest request in state.Requests)
+			{
+				if (request.Kind == CoordinationLimits.KindEdit && request.State == CoordinationLimits.StateWaiting
+					&& request.Ticket < ticket && ScopesOverlap(participant, state.FindParticipant(request.Session))) return true;
+			}
+			return false;
+		}
 
+		private static bool HasWaitingOverlap(CoordinationState state, string session)
+		{
+			CoordinationParticipant participant = state.FindParticipant(session);
+			foreach (CoordinationRequest request in state.Requests)
+			{
+				if (request.Kind == CoordinationLimits.KindEdit && request.State == CoordinationLimits.StateWaiting
+					&& request.Session != session && ScopesOverlap(participant, state.FindParticipant(request.Session))) return true;
+			}
 			return false;
 		}
 
@@ -1479,11 +1480,14 @@ namespace AgentBridge.Coordination
 				{
 					continue;
 				}
+				if (request != null && request.Kind == CoordinationLimits.KindEdit
+					&& grant.Kind == CoordinationLimits.KindEdit
+					&& !ScopesOverlap(state.FindParticipant(session), state.FindParticipant(grant.Session))) continue;
 
 				blockers.Add((grant.Kind == CoordinationLimits.KindEdit ? "edit_active:" : "window_active:") + grant.Session);
 			}
 
-			if (!string.IsNullOrEmpty(session) && HasWaitingWindow(state))
+			if (!string.IsNullOrEmpty(session) && (HasWaitingWindow(state) || HasWaitingOverlap(state, session)))
 			{
 				CoordinationGrant own = state.FindGrantBySession(session, CoordinationLimits.KindEdit);
 				if (own != null && own.State == CoordinationLimits.GrantActive)
@@ -1497,7 +1501,9 @@ namespace AgentBridge.Coordination
 				int ahead = 0;
 				foreach (CoordinationRequest other in state.Requests)
 				{
-					if (other.State == CoordinationLimits.StateWaiting && other.Ticket < request.Ticket)
+					if (other.State == CoordinationLimits.StateWaiting && other.Ticket < request.Ticket
+						&& (request.Kind != CoordinationLimits.KindEdit || other.Kind != CoordinationLimits.KindEdit
+							|| ScopesOverlap(state.FindParticipant(session), state.FindParticipant(other.Session))))
 					{
 						ahead++;
 					}

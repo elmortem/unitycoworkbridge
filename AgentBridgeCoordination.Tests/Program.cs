@@ -42,6 +42,7 @@ try
 		Scenarios.C03_Idempotency(covered);
 		Scenarios.C06_OrphanedWriterAndAbandon(covered);
 		Scenarios.C07_DrainingWindow(covered);
+		LeaseScenarios.Run(root, covered);
 		Scenarios.C19_Codecs(covered);
 		Scenarios.C20_RunningTaskOutlivesTheClient(covered);
 		Scenarios.C12_InputDigest(root, covered);
@@ -56,6 +57,7 @@ try
 		Scenarios.C04_TwoProcessesOneWindow(root, covered);
 		Scenarios.C05_CrashAndCorruption(root, covered);
 		Scenarios.C08_Waiting(root, covered);
+		LeaseScenarios.CrossProcess(root, covered);
 	}
 
 	Console.WriteLine("scenarios: " + string.Join(", ", covered));

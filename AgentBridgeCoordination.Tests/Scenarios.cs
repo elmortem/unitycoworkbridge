@@ -8,8 +8,7 @@ namespace AgentBridge.Coordination.Tests;
 
 internal static class Scenarios
 {
-	// C01 — two disjoint scopes and their edit grants coexist; an overlapping scope is refused
-	// without touching anything that was already reserved.
+	// C01 — registrations are declarations; only overlapping live edits exclude each other.
 	public static void C01_ScopeReservation(List<string> covered)
 	{
 		var engine = new CoordinationEngine();
@@ -25,11 +24,14 @@ internal static class Scenarios
 		ExpectCode(grantB, CoordinationCodes.Granted, "disjoint writers run at the same time");
 		Expect(grantA.Token != grantB.Token && grantA.Token.Length > 0, "each writer gets its own token");
 
-		var revisionBefore = state.Revision;
 		var conflict = engine.Apply(state, Register("c", "Game/Core/Deep/"), clock.UtcNowMs);
-		ExpectCode(conflict, CoordinationCodes.ScopeConflict, "a nested path is a conflict");
-		Expect(state.FindParticipant("c") == null, "a refused registration must not be created");
-		Expect(state.Revision == revisionBefore, "a refused registration must not move the revision");
+		ExpectCode(conflict, CoordinationCodes.Ok, "overlapping registration must not reserve files");
+		var queued = engine.Apply(state, EditBegin("c", "u-c1"), clock.UtcNowMs);
+		ExpectCode(queued, CoordinationCodes.Waiting, "overlapping writes queue behind the live writer");
+		Expect(queued.Token.Length == 0, "waiting is not permission to write");
+		engine.Apply(state, Fill(Command(CoordinationEngine.OpEditEnd), "a", grantA.Token), clock.UtcNowMs);
+		Expect(state.FindGrantBySession("c", null) != null, "ending the edit frees files without leaving registration");
+		Expect(state.FindGrantBySession("b", null) != null, "unrelated writer keeps its grant");
 
 		// Segment boundaries: Foo/ does not contain Foobar/.
 		ExpectCode(
@@ -154,8 +156,7 @@ internal static class Scenarios
 		covered.Add("C03");
 	}
 
-	// C06 — an expired writer becomes orphaned and blocks the next window until it confirms; a token
-	// from before an abandon is refused afterwards.
+	// C06 — expired writers release automatically; stale tokens cannot revive a lease.
 	public static void C06_OrphanedWriterAndAbandon(List<string> covered)
 	{
 		var engine = new CoordinationEngine();
@@ -167,23 +168,22 @@ internal static class Scenarios
 		var writer = engine.Apply(state, EditBegin("a", "u-a", 15), clock.UtcNowMs);
 		engine.Apply(state, WindowRequest("b", "u-b-window"), clock.UtcNowMs);
 
-		clock.Advance(20_000);
+		clock.Advance(15_000);
 		var confirm = engine.Apply(state, Command(CoordinationEngine.OpWindowConfirm), clock.UtcNowMs);
-		ExpectCode(confirm, CoordinationCodes.OrphanedWriter, "an expired writer is orphaned, not free");
-		Expect(state.FindGrantBySession("a", null).State == CoordinationLimits.GrantOrphaned, "the grant is orphaned");
-		Expect(state.FindParticipant("a").Lifecycle == CoordinationLimits.LifecycleOrphaned, "the participant is orphaned");
+		ExpectCode(confirm, CoordinationCodes.Granted, "the window proceeds at the writer deadline without owner cleanup");
+		Expect(state.FindGrantBySession("a", null) == null, "the expired grant is removed");
+		Expect(state.FindParticipant("a").Lifecycle == CoordinationLimits.LifecycleIdle, "registration remains idle");
 
 		var renew = engine.Apply(state, Fill(Command(CoordinationEngine.OpRenew), "a", writer.Token), clock.UtcNowMs);
-		ExpectCode(renew, CoordinationCodes.OrphanedWriter, "an orphaned grant is not renewed");
+		ExpectCode(renew, CoordinationCodes.StaleToken, "an expired grant cannot be renewed");
 
-		// Only edit-end accepts an orphaned token, and only as the confirmation that writers stopped.
+		// Late cleanup remains harmless and does not disturb the next holder.
 		var close = engine.Apply(state, Fill(Command(CoordinationEngine.OpEditEnd), "a", writer.Token), clock.UtcNowMs);
-		ExpectCode(close, CoordinationCodes.Ok, "edit-end accepts the owner's orphaned token");
+		ExpectCode(close, CoordinationCodes.AlreadyClosed, "expired edit-end reports closure");
 		var repeat = engine.Apply(state, Fill(Command(CoordinationEngine.OpEditEnd), "a", writer.Token), clock.UtcNowMs);
 		ExpectCode(repeat, CoordinationCodes.AlreadyClosed, "edit-end is idempotent");
 
-		ExpectCode(engine.Apply(state, Command(CoordinationEngine.OpWindowConfirm), clock.UtcNowMs),
-			CoordinationCodes.Granted, "the window is free once the writer confirmed");
+		Expect(state.FindWindowGrant().Token == confirm.Token, "late cleanup preserves the next window");
 
 		// abandon: a deliberate recovery of one session, not a way around the queue.
 		var abandonState = NewState();

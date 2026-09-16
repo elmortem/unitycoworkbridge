@@ -19,6 +19,7 @@ try
 	RunScratchTests(root);
 	RunSessionOptionTests();
 	RunCoordinationOptionTests();
+	CoordinationLeaseTests.Run(root);
 	RunEvidenceFormattingTests();
 	RunContentionFormattingTests();
 	RunWakePolicyTests();

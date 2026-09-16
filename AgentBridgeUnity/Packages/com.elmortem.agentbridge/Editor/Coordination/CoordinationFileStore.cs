@@ -172,7 +172,7 @@ namespace AgentBridge.Coordination
 			}
 
 			state.Normalize();
-			if (state.SchemaVersion != CoordinationLimits.SchemaVersion)
+			if (state.SchemaVersion != 1 && state.SchemaVersion != CoordinationLimits.SchemaVersion)
 			{
 				throw new CoordinationStoreException(
 					CoordinationCodes.SchemaUnsupported,

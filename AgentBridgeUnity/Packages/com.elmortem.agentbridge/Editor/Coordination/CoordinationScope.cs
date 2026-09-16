@@ -8,8 +8,8 @@ namespace AgentBridge.Coordination
 	// slash. Overlap is decided on whole segments, so "Foo/" never swallows "Foobar/".
 	//
 	// The comparison is case-insensitive on every host. That is deliberately conservative: on a
-	// case-sensitive filesystem it can refuse two registrations that would not actually collide,
-	// and refusing is the safe direction. Silently letting two writers share a file is not.
+	// case-sensitive filesystem it can serialize two edits that would not actually collide.
+	// Registrations may overlap; live writers must not silently share a file.
 	public static class CoordinationScope
 	{
 		private static readonly char[] Forbidden = { '*', '?', '<', '>', '|', '"' };

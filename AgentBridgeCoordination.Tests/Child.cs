@@ -47,6 +47,13 @@ internal static class Child
 		{
 			case "window":
 				return Window(project, session);
+			case "edit":
+				var store = Store(project);
+				long now = CoordinationSystemClock.Instance.UtcNowMs;
+				ExpectCode(Commit(store, Register(session, "Assets/Shared/"), now), CoordinationCodes.Ok, "overlapping registration");
+				var edit = Commit(store, EditBegin(session, "edit-" + session), now);
+				Expect(edit.Code == CoordinationCodes.Granted || edit.Code == CoordinationCodes.Waiting, "edit grants or queues");
+				return 0;
 			case "crash":
 				return Crash(project);
 			default:

@@ -152,6 +152,7 @@ namespace AgentBridge
 			{
 				capabilities.Add("coordination-v1");
 				capabilities.Add(Coordination.CoordinationBatch.Capability);
+				capabilities.Add(Coordination.CoordinationLimits.EditLeasesCapability);
 			}
 
 			return capabilities.ToArray();

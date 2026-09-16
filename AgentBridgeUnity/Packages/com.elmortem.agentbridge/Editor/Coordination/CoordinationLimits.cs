@@ -4,7 +4,10 @@ namespace AgentBridge.Coordination
 	// parser and the editor gate have to refuse the same values before a transaction is opened.
 	public static class CoordinationLimits
 	{
-		public const int SchemaVersion = 1;
+		// Version 2 changes scheduling semantics: registrations may overlap. Version 1 writers
+		// must refuse the migrated state rather than grant those edits concurrently.
+		public const int SchemaVersion = 2;
+		public const string EditLeasesCapability = "coordination-edit-leases-v1";
 
 		public const int EditDefaultSeconds = 120;
 		public const int EditMinSeconds = 15;

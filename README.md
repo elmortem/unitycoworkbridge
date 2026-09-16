@@ -360,7 +360,7 @@ agentbridge coord capabilities --format human
 
 ### Ready packages and input edits
 
-Check for `coordination-batch-v1` on both CLI and package. Register a scope containing only Unity input paths. Use `edit-begin` / `edit-end` around bounded writes to those inputs; independent work needs no Bridge permission.
+Check for `coordination-batch-v1` and `coordination-edit-leases-v1` on both CLI and package. Register a scope containing only Unity input paths. Registration declares intent and does not reserve files: overlapping registrations, including idle sessions waiting for tests, are allowed. Use `edit-begin` / `edit-end` around bounded writes to those inputs; independent work needs no Bridge permission.
 
 Submit all executable work together:
 ```bash
@@ -384,7 +384,11 @@ Use `coord status --session AB_A --request <uuid>` or event-driven `coord wait -
 
 A validation plan supports compile, tests, sceneshot; an editor plan supports csharp, ui, sceneshot, compile. Test steps declare Mode (EditMode or PlayMode) and a nonempty Tests, Assemblies or Categories filter. For example: `{ "Steps": [{ "Id": "V1", "Kind": "tests", "Mode": "EditMode", "Tests": ["MyTests"] }] }`. Optional ArtifactRoots and FixtureRoots retain their evidence-v1 meaning.
 
-Scope paths are repo-relative, with forward slashes, a trailing slash for directories and no globs: `{ "Paths": ["UnityProject/Assets/Game/Core/"] }`. Edit grants last 15–300 seconds (default 120). While a ready package waits, writers see pause_requested: finish only the current Unity input edits, call edit-end, and continue independent work. Close registration with coord leave when its Unity work is done.
+Scope paths are repo-relative, with forward slashes, a trailing slash for directories and no globs: `{ "Paths": ["UnityProject/Assets/Game/Core/"] }`. Edit grants last 15–300 seconds (default 120), starting when granted. Overlapping edits queue in ticket order; disjoint edits may run together. A waiting reply is not permission to write: wait for a granted request and its token. While a ready package or an overlapping writer waits, renewal returns `pause_requested`: finish the current bounded writes and call `edit-end`. Scope changes are allowed only without a grant or pending request.
+
+At the deadline the edit grant closes automatically and the queue advances. A late `renew` returns `stale_token`; a late `edit-end` reports `already_closed`. Do not leave background writers beyond the deadline. After a pause or expiry, request a new edit grant with a new UUID, reread the current files, and adapt changes before writing: another agent may have edited the same files. Close registration with `coord leave` when its Unity work is done; forgetting to leave no longer reserves files.
+
+Upgrade the Unity package and all CLI clients together. The package advertises `coordination-edit-leases-v1`; the new CLI refuses mutations until it sees that capability. The first mutation migrates state schema 1 to 2 atomically, preserving registrations and running windows and releasing old orphaned edits. Old CLI builds refuse schema 2 instead of scheduling overlapping writers under the former assumptions. No manual deletion or abandonment of idle registrations is needed.
 
 Upgrading rejects old waiting permission-only requests with batch_required. Already running old windows drain safely; their tasks are not interrupted merely to migrate. Ordinary task commands without tokens remain supported and wait while a window is occupied. Older packages without the batch capability require the old manual request/wait/dispatch/finish workflow.
 
@@ -401,10 +405,10 @@ Five different kinds of "it stopped", and they are not interchangeable:
 | The client process went away | Nothing. The request and the task live under their own ids; reconnect with `coord status --request <uuid>` or `agentbridge wait <TaskId>`. |
 | A `wait` expired | Nothing. It never cancels a request and never moves the revision. |
 | A domain reload from your own compile or PlayMode | The window, its token and its remaining steps survive. |
-| The Editor process restarted | Registrations, scopes and edit grants survive. Windows become `interrupted`; the recorded tasks are reported failed and the window closes. Ask for a new one. |
-| A writer disappeared with a live grant | The grant becomes `orphaned` and blocks new windows. Only the owner's `edit-end` clears it — the token is accepted for exactly that. |
+| The Editor process restarted | Registrations and scopes survive; edit grants retain their original deadlines. Windows become `interrupted`; the recorded tasks are reported failed and the window closes. Ask for a new one. |
+| A writer disappeared with a live grant | The grant closes at its deadline. The next eligible writer or window can proceed without owner cleanup. A running Unity task still drains through its normal completion/cancellation and recovery. |
 
-`coord abandon --target-session S --reason "<text>"` is the emergency exit for the last row. It requires an explicit human decision after that session's writers are confirmed stopped, refuses while that session has a running Unity task, closes only that session's rights, and bumps only its generation. Time passing is never a reason to call it.
+`coord abandon --target-session S --reason "<text>"` remains an explicit emergency override for a still-live session, not routine expiry cleanup. It requires an explicit human decision after that session's writers are confirmed stopped, refuses while that session has a running Unity task, closes only that session's rights, and bumps only its generation. Idle registrations and expired edit grants need no such override.
 
 State lives in `Library/AgentBridge/Coordination/` behind one persistent `transaction.lock`. `coordination-v1` supports an ordinary local physical tree only: UNC paths, network drives and symlinked project roots are refused rather than falsely declared protected. The lock file is never deleted to "recover"; a damaged `state.json` is reported as `coordination_corrupt`, and a missing state next to a live marker as `coordination_recovery_required`.
 

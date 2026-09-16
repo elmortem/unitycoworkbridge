@@ -332,7 +332,7 @@ namespace AgentBridge
 			{
 				CoordinationRequest request = state.FindRequest(grant.RequestId);
 				if (CoordinationLimits.IsWindowKind(grant.Kind) && request != null && !request.Automatic) return true;
-				if (grant.State == CoordinationLimits.GrantActive && nowMs > grant.DeadlineMs)
+				if (grant.State == CoordinationLimits.GrantActive && nowMs >= grant.DeadlineMs)
 				{
 					return true;
 				}
