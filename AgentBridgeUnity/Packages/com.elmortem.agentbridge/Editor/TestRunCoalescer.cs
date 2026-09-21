@@ -46,82 +46,103 @@ namespace AgentBridge
 
 			// Hashing every source file is far too expensive for a tick that runs once a second,
 			// so it happens at most once per scan, and only once a task has cleared every cheap
-			// check and is otherwise ready to attach.
-			using var monitor = new ValidationInputMonitor(ValidationEvidence.CollectRoots(), ValidationEvidence.CollectExcludedRoots(),
-				ValidationEvidence.BuildIgnore(PlayModeSceneRecovery.BootstrapScenePath()));
+			// check and is otherwise ready to attach. Installing the observer is just as expensive:
+			// it walks every input root before it reports anything, which stalls the editor for as
+			// long as that takes. This tick runs for the whole length of a test run, so the observer
+			// is installed on the same condition as the hash, and a run with nothing to attach pays
+			// for neither.
+			ValidationInputMonitor monitor = null;
 			string currentSources = null;
 			string projectRoot = BridgePaths.ProjectRoot;
 
-			for (int i = pending.Count - 1; i >= 0; i--)
+			try
 			{
-				PendingTaskInfo task = pending[i];
-				if (task.Kind != "tests" || task.Id == sourceId)
+				for (int i = pending.Count - 1; i >= 0; i--)
 				{
-					continue;
+					PendingTaskInfo task = pending[i];
+					if (task.Kind != "tests" || task.Id == sourceId)
+					{
+						continue;
+					}
+
+					TaskRecord existing;
+					if (TaskJournal.TryRead(task.Id, out existing))
+					{
+						continue;
+					}
+
+					TaskRequest request;
+					if (!TaskRequestReader.TryRead(task.TaskFilePath, out request) || request.Fresh)
+					{
+						continue;
+					}
+
+					string mode = request.TestMode == "PlayMode" ? "PlayMode" : "EditMode";
+					if (mode != filter.TestMode)
+					{
+						continue;
+					}
+
+					if (!TestFilterCoverage.CoversFilterOnly(filter, request))
+					{
+						continue;
+					}
+
+					// The observer has to be watching before anything is read that the decision
+					// rests on, exactly as it did when it was installed for the whole scan.
+					if (monitor == null)
+					{
+						monitor = new ValidationInputMonitor(ValidationEvidence.CollectRoots(), ValidationEvidence.CollectExcludedRoots(),
+							ValidationEvidence.BuildIgnore(PlayModeSceneRecovery.BootstrapScenePath()));
+					}
+
+					string requestHash = TaskFileHash.HashOf(task.TaskFilePath, null);
+					if (currentSources == null)
+					{
+						currentSources = await CompileInputContext.StartCapture(projectRoot);
+					}
+
+					if (startSources != currentSources || !monitor.Observed || monitor.EventCount != 0)
+					{
+						return;
+					}
+
+					if (sourceId != SessionState.GetString(AgentTestRunner.CoordinatorTestTaskKey, "")
+						|| TestRunLifecycle.IsStopping(sourceId) || TaskJournal.TryRead(task.Id, out existing)
+						|| requestHash != TaskFileHash.HashOf(task.TaskFilePath, null)) continue;
+					// Joining a run consumes the step exactly like starting one: the plan authorises a
+					// result, not a process.
+					string reserveError;
+					if (!CoordinationGate.TryReserve(request, task.Id, out reserveError))
+					{
+						continue;
+					}
+
+					var record = new TaskRecord
+					{
+						Id = task.Id,
+						Kind = "tests",
+						Status = "attached",
+						AttachedToTaskId = sourceId,
+						Hash = TaskFileHash.HashOf(task.TaskFilePath, null),
+						SessionId = BridgeStatusWriter.Current.SessionId,
+						AgentSessionId = task.EffectiveSessionId,
+						CoordinationWindowToken = request.CoordinationWindowToken,
+						CoordinationStepId = request.CoordinationStepId,
+						StartedAtUtc = DateTime.UtcNow.ToString("o")
+					};
+
+					record.Logs.Add("attached to running test task " + sourceId);
+					TaskJournal.Write(record);
+					pending.RemoveAt(i);
 				}
-
-				TaskRecord existing;
-				if (TaskJournal.TryRead(task.Id, out existing))
+			}
+			finally
+			{
+				if (monitor != null)
 				{
-					continue;
+					monitor.Dispose();
 				}
-
-				TaskRequest request;
-				if (!TaskRequestReader.TryRead(task.TaskFilePath, out request) || request.Fresh)
-				{
-					continue;
-				}
-
-				string mode = request.TestMode == "PlayMode" ? "PlayMode" : "EditMode";
-				if (mode != filter.TestMode)
-				{
-					continue;
-				}
-
-				if (!TestFilterCoverage.CoversFilterOnly(filter, request))
-				{
-					continue;
-				}
-
-				string requestHash = TaskFileHash.HashOf(task.TaskFilePath, null);
-				if (currentSources == null)
-				{
-					currentSources = await CompileInputContext.StartCapture(projectRoot);
-				}
-
-				if (startSources != currentSources || !monitor.Observed || monitor.EventCount != 0)
-				{
-					return;
-				}
-
-				if (sourceId != SessionState.GetString(AgentTestRunner.CoordinatorTestTaskKey, "")
-					|| TestRunLifecycle.IsStopping(sourceId) || TaskJournal.TryRead(task.Id, out existing)
-					|| requestHash != TaskFileHash.HashOf(task.TaskFilePath, null)) continue;
-				// Joining a run consumes the step exactly like starting one: the plan authorises a
-				// result, not a process.
-				string reserveError;
-				if (!CoordinationGate.TryReserve(request, task.Id, out reserveError))
-				{
-					continue;
-				}
-
-				var record = new TaskRecord
-				{
-					Id = task.Id,
-					Kind = "tests",
-					Status = "attached",
-					AttachedToTaskId = sourceId,
-					Hash = TaskFileHash.HashOf(task.TaskFilePath, null),
-					SessionId = BridgeStatusWriter.Current.SessionId,
-					AgentSessionId = task.EffectiveSessionId,
-					CoordinationWindowToken = request.CoordinationWindowToken,
-					CoordinationStepId = request.CoordinationStepId,
-					StartedAtUtc = DateTime.UtcNow.ToString("o")
-				};
-
-				record.Logs.Add("attached to running test task " + sourceId);
-				TaskJournal.Write(record);
-				pending.RemoveAt(i);
 			}
 		}
 	}
