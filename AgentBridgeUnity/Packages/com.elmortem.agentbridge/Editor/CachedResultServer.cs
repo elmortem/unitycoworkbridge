@@ -7,133 +7,214 @@ namespace AgentBridge
 {
 	public static class CachedResultServer
 	{
+		private static readonly CacheMissMemo Misses = new CacheMissMemo();
+
 		private static async Task ServeAsync(List<PendingTaskInfo> pending)
 		{
 			// Both kinds key on the same cheap source hash, and it is the expensive part of the
 			// first check, so it is computed once per scan and only if a cacheable task waits.
+			//
+			// The witnesses cost far more than that key: an observer window keeps the shared hub
+			// warm and the stat manifest walks every input. So they are opened at most once per
+			// scan, and only once a candidate entry has actually been found — a scan with nothing
+			// to serve lets the observers go cold and takes no digest at all.
 			string projectRoot = BridgePaths.ProjectRoot;
 			string[] roots = ValidationEvidence.CollectRoots();
 			string[] excluded = ValidationEvidence.CollectExcludedRoots();
 			var ignore = ValidationEvidence.BuildIgnore(PlayModeSceneRecovery.BootstrapScenePath());
-			using var monitor = await ValidationInputMonitor.OpenAsync(roots, excluded, ignore);
-			string sourceFingerprint = await CompileInputContext.StartCapture(projectRoot);
-			long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
-			for (int i = pending.Count - 1; i >= 0; i--)
+			CacheLookupWitness witness = null;
+			try
 			{
-				PendingTaskInfo task = pending[i];
-				if (task.Kind != "tests" && task.Kind != "compile")
+				string sourceFingerprint = await CompileInputContext.StartCapture(projectRoot);
+				long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+				// Remembered misses belong to the tasks that are still waiting. The whole queue is
+				// in hand here, so this is where the rest are forgotten.
+				var live = new HashSet<string>();
+				foreach (PendingTaskInfo waiting in pending)
 				{
-					continue;
+					live.Add(waiting.Id);
 				}
 
-				TaskRecord existing;
-				if (TaskJournal.TryRead(task.Id, out existing))
-				{
-					continue;
-				}
+				Misses.Retain(live);
 
-				TaskRequest request;
-				if (!TaskRequestReader.TryRead(task.TaskFilePath, out request) || (request.Fresh && task.Kind != "compile"))
+				for (int i = pending.Count - 1; i >= 0; i--)
 				{
-					continue;
-				}
-
-				string requestHash = TaskFileHash.HashOf(task.TaskFilePath, null);
-				if (task.Kind == "compile" && request.Fresh && string.IsNullOrWhiteSpace(request.Note)) continue;
-
-				if (task.Kind == "tests")
-				{
-					string mode = request.TestMode == "PlayMode" ? "PlayMode" : "EditMode";
-					string context = ValidationEvidence.ContextOf(mode, FilterOf(request));
-					var job = new InputHashJob(roots, excluded, context, ignore);
-					bool candidate = TestRunDumpStore.ReadIndex().Entries.Exists(e => e.TestMode == mode && e.Validity == EvidenceRecord.Valid && e.SourceFingerprint == sourceFingerprint);
-					if (!candidate) continue;
-					var snapshot = await job.Measure("cache_lookup", task.Id);
-					string inputDigest = snapshot.Complete ? snapshot.Digest : "";
-					// The content digest is only ever computed once a cheap candidate exists, and
-					// it is computed fresh: a memo keyed on sizes and times would hand out a hit
-					// for a file that was edited back to its old size.
-					string capturedFingerprint = sourceFingerprint;
-					TestCacheQuery.Hit hit;
-					if (!TestCacheQuery.TryServe(
-						request,
-						capturedFingerprint,
-						() => inputDigest,
-						nowMs,
-						out hit))
+					PendingTaskInfo task = pending[i];
+					if (task.Kind != "tests" && task.Kind != "compile")
 					{
 						continue;
 					}
 
-					// A served result consumes its step exactly once, just like a real run.
-					string reserveError;
-					var verified = await job.Measure("cache_verify", task.Id);
-					string verifiedSources = await CompileInputContext.StartCapture(projectRoot);
-					// Await allowed cancellation, cache eviction and artifact removal to run.
-					// Recheck the actual entry and editor context before consuming a step.
-					if (context != ValidationEvidence.ContextOf(mode, FilterOf(request))
-						|| !TestCacheQuery.TryServe(request, sourceFingerprint, () => inputDigest,
-							DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), out hit)) continue;
-					if (!verified.Complete || inputDigest != verified.Digest || sourceFingerprint != verifiedSources
-						|| !CanPublish(task, requestHash, monitor)) continue;
-					if (!TryReserveCache(request, task.Id, out reserveError))
+					TaskRecord existing;
+					if (TaskJournal.TryRead(task.Id, out existing))
 					{
 						continue;
 					}
 
-					TaskRecord record = BuildServedRecord(task, hit.Status, hit.SourceTaskId, request);
-					record.Tests = hit.Result;
-					record.Artifacts.AddRange(hit.Artifacts);
-					record.Evidence = new EvidenceRecord
+					TaskRequest request;
+					if (!TaskRequestReader.TryRead(task.TaskFilePath, out request) || (request.Fresh && task.Kind != "compile"))
 					{
-						Validity = EvidenceRecord.Valid,
-						InputDigest = inputDigest,
-						EndInputDigest = inputDigest,
-						Reason = "served from cache entry " + hit.EntryId,
-						ArtifactsPresent = true
-					};
-					TaskJournal.Write(record);
-					TelemetryLog.TaskFinished(record);
-					CoordinationGate.Release(request, task.Id, true, "cache_hit");
+						continue;
+					}
+
+					string requestHash = TaskFileHash.HashOf(task.TaskFilePath, null);
+					if (task.Kind == "compile" && request.Fresh && string.IsNullOrWhiteSpace(request.Note)) continue;
+
+					if (task.Kind == "tests")
+					{
+						string mode = request.TestMode == "PlayMode" ? "PlayMode" : "EditMode";
+						string context = ValidationEvidence.ContextOf(mode, FilterOf(request));
+						var job = new InputHashJob(roots, excluded, context, ignore);
+
+						// The cheap half of the key names the entries the digest would be compared
+						// against. With none of them there is nothing to prove and nothing to serve.
+						var ids = new List<string>();
+						foreach (TestCacheEntryInfo entry in TestRunDumpStore.ReadIndex().Entries)
+						{
+							if (entry.TestMode == mode && entry.Validity == EvidenceRecord.Valid
+								&& entry.SourceFingerprint == sourceFingerprint)
+							{
+								ids.Add(entry.Id);
+							}
+						}
+
+						if (ids.Count == 0) continue;
+						ids.Sort(StringComparer.Ordinal);
+						string candidateKey = string.Join(",", ids);
+
+						// A digest that just missed against these very sources and these very
+						// candidates will miss again a second later. It is asked again when either
+						// changes, and otherwise only once the backstop is due.
+						if (Misses.ShouldSkip(task.Id, sourceFingerprint, candidateKey, nowMs)) continue;
+						if (witness == null) witness = await OpenWitness(roots, excluded, ignore, task.Id);
+						var snapshot = await job.Measure("cache_lookup", task.Id);
+						string inputDigest = snapshot.Complete ? snapshot.Digest : "";
+						// The content digest is only ever computed once a cheap candidate exists, and
+						// it is computed fresh: a memo keyed on sizes and times would hand out a hit
+						// for a file that was edited back to its old size.
+						string capturedFingerprint = sourceFingerprint;
+						TestCacheQuery.Hit hit;
+						if (!TestCacheQuery.TryServe(
+							request,
+							capturedFingerprint,
+							() => inputDigest,
+							nowMs,
+							out hit))
+						{
+							Misses.Record(task.Id, sourceFingerprint, candidateKey, nowMs);
+							continue;
+						}
+
+						// A served result consumes its step exactly once, just like a real run.
+						string reserveError;
+						var verified = await job.Measure("cache_verify", task.Id);
+						string verifiedSources = await CompileInputContext.StartCapture(projectRoot);
+						// The witness closes here: every read the decision stands on — both digests
+						// and the closing source fingerprint — lies between the two manifests.
+						InputStatVerdict stat = await witness.VerifyAsync();
+						// Await allowed cancellation, cache eviction and artifact removal to run.
+						// Recheck the actual entry and editor context before consuming a step.
+						if (context != ValidationEvidence.ContextOf(mode, FilterOf(request))
+							|| !TestCacheQuery.TryServe(request, sourceFingerprint, () => inputDigest,
+								DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), out hit)) continue;
+						if (!verified.Complete || inputDigest != verified.Digest || sourceFingerprint != verifiedSources
+							|| !CanPublish(task, requestHash, witness.Monitor)) continue;
+						// Equal digests only say the bytes match now. An input that was edited and put
+						// back during the lookup means the answer describes a project that moved.
+						if (!stat.Complete || stat.Changed != 0)
+						{
+							TelemetryLog.Write("cache_skip", "", task.Id, new[] {
+								TelemetryField.Text("What", stat.Complete
+									? "inputs moved during the cache lookup"
+									: stat.Reason),
+								TelemetryField.Text("Paths", string.Join(";", stat.Paths)) });
+							continue;
+						}
+
+						if (!TryReserveCache(request, task.Id, out reserveError))
+						{
+							continue;
+						}
+
+						TaskRecord record = BuildServedRecord(task, hit.Status, hit.SourceTaskId, request);
+						record.Tests = hit.Result;
+						record.Artifacts.AddRange(hit.Artifacts);
+						record.Evidence = new EvidenceRecord
+						{
+							Validity = EvidenceRecord.Valid,
+							InputDigest = inputDigest,
+							EndInputDigest = inputDigest,
+							Reason = "served from cache entry " + hit.EntryId,
+							ArtifactsPresent = true
+						};
+						TaskJournal.Write(record);
+						Misses.Forget(task.Id);
+						TelemetryLog.TaskFinished(record);
+						CoordinationGate.Release(request, task.Id, true, "cache_hit");
+					}
+					else
+					{
+						CompileCacheEntry entry;
+						if (!CompileCacheStore.TryRead(out entry))
+						{
+							continue;
+						}
+
+						if (!CompileCacheStore.CanReuse(entry, sourceFingerprint, request.Fresh, task.CreatedUtc))
+						{
+							continue;
+						}
+
+						// The reuse key is itself made of sizes, times and content of the sources, so
+						// the second capture below already catches an edit that was put back. Only the
+						// observer is needed here, and only now that there is an entry to serve.
+						string reserveError;
+						if (witness == null) witness = await OpenWitness(roots, excluded, ignore, task.Id);
+						if (sourceFingerprint != await CompileInputContext.StartCapture(projectRoot)
+							|| !CanPublish(task, requestHash, witness.Monitor)) continue;
+						if (!TryReserveCache(request, task.Id, out reserveError))
+						{
+							continue;
+						}
+
+						TaskRecord record = BuildServedRecord(task, entry.Status, entry.SourceTaskId, request);
+						record.Diagnostics = entry.Diagnostics;
+						record.ForeignErrors = entry.Diagnostics.Count > 0;
+						record.Logs.Add(request.Fresh ? "compile_reuse: shared cycle completed while this fresh request waited" : "compile_reuse: current sources and compilation context match");
+
+						// The compile cache is keyed on the legacy fingerprint, which is a reuse key
+						// and not an input digest. Saying so is more useful than claiming evidence.
+						record.Evidence = EvidenceRecord.UnknownBecause(
+							"served from the compile reuse cache; no evidence-v1 input digest was taken");
+						TaskJournal.Write(record);
+						TelemetryLog.TaskFinished(record);
+						CoordinationGate.Release(request, task.Id, true, "cache_hit");
+					}
+
+					pending.RemoveAt(i);
 				}
-				else
-				{
-					CompileCacheEntry entry;
-					if (!CompileCacheStore.TryRead(out entry))
-					{
-						continue;
-					}
-
-					if (!CompileCacheStore.CanReuse(entry, sourceFingerprint, request.Fresh, task.CreatedUtc))
-					{
-						continue;
-					}
-
-					string reserveError;
-					if (sourceFingerprint != await CompileInputContext.StartCapture(projectRoot)
-						|| !CanPublish(task, requestHash, monitor)) continue;
-					if (!TryReserveCache(request, task.Id, out reserveError))
-					{
-						continue;
-					}
-
-					TaskRecord record = BuildServedRecord(task, entry.Status, entry.SourceTaskId, request);
-					record.Diagnostics = entry.Diagnostics;
-					record.ForeignErrors = entry.Diagnostics.Count > 0;
-					record.Logs.Add(request.Fresh ? "compile_reuse: shared cycle completed while this fresh request waited" : "compile_reuse: current sources and compilation context match");
-
-					// The compile cache is keyed on the legacy fingerprint, which is a reuse key
-					// and not an input digest. Saying so is more useful than claiming evidence.
-					record.Evidence = EvidenceRecord.UnknownBecause(
-						"served from the compile reuse cache; no evidence-v1 input digest was taken");
-					TaskJournal.Write(record);
-					TelemetryLog.TaskFinished(record);
-					CoordinationGate.Release(request, task.Id, true, "cache_hit");
-				}
-
-				pending.RemoveAt(i);
 			}
+			finally
+			{
+				if (witness != null)
+				{
+					witness.Dispose();
+				}
+			}
+		}
+
+		// One open per scan, and it is worth seeing in the log: this is the cost a lookup pays the
+		// moment a candidate appears.
+		private static async Task<CacheLookupWitness> OpenWitness(string[] roots, string[] excluded, Func<string, bool> ignore, string taskId)
+		{
+			var watch = System.Diagnostics.Stopwatch.StartNew();
+			CacheLookupWitness witness = await CacheLookupWitness.OpenAsync(roots, excluded, ignore);
+			TelemetryLog.Write("cache_witness", "", taskId, new[] {
+				TelemetryField.Number("ElapsedMs", watch.ElapsedMilliseconds),
+				TelemetryField.Number("Files", witness.Start.Entries.Count)
+			});
+			return witness;
 		}
 
 		private static Task _work;

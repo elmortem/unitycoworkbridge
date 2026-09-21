@@ -14,6 +14,11 @@ namespace AgentBridge
 	// project is still moving, the expensive run is refused instead of producing a result nobody
 	// can interpret. After the run: hash once more and compare, with the observers as the second
 	// witness for a change that was made and reverted.
+	//
+	// The observer alone cannot cover a PlayMode run: it dies with the domain and, being Mono's
+	// polling watcher, never delivers the last seconds before the reload either. So the run carries
+	// a witness that needs no thread — a stat manifest of the same inputs, taken at prepare time,
+	// kept in a file across the reload and compared once the run is over.
 	[InitializeOnLoad]
 	public static class ValidationEvidence
 	{
@@ -27,6 +32,7 @@ namespace AgentBridge
 		public const string EventsKey = "AgentBridge_EvidenceEvents";
 		public const string ObserverKey = "AgentBridge_EvidenceObserver";
 		public const string ScratchKey = "AgentBridge_EvidenceScratch";
+		public const string ManifestKey = "AgentBridge_EvidenceManifest";
 
 		private const char Separator = (char)31;
 		private const int MaxRetries = 1;
@@ -37,6 +43,9 @@ namespace AgentBridge
 		private static InputHashJob _job;
 		private static Task<ValidationInputSnapshot> _completion;
 		private static Task<string> _completionSources;
+		private static Task<InputStatManifest> _manifestWork;
+		private static Task<InputStatVerdict> _completionManifest;
+		private static string _manifestPath = "";
 		private static string _completingId;
 		public const string SourceKey = "AgentBridge_EvidenceSources";
 		public static string PreparedSources { get { return SessionState.GetString(SourceKey, ""); } }
@@ -57,6 +66,12 @@ namespace AgentBridge
 				return;
 			}
 
+			// Nothing used to hand the observer's count over before the domain went down, so the
+			// events the watcher had already delivered died with the watcher. DisposeMonitor is
+			// what carries them, and this is the last moment it can be called.
+			AssemblyReloadEvents.beforeAssemblyReload -= CarryAcrossReload;
+			AssemblyReloadEvents.beforeAssemblyReload += CarryAcrossReload;
+
 			// A PlayMode run reloads the domain in the middle of its own observation. Reinstalling
 			// the observer keeps the rest of the run watched; the gap is disclosed in the reason,
 			// never silently treated as "nothing happened".
@@ -73,6 +88,13 @@ namespace AgentBridge
 			_ignore = BuildIgnore(SessionState.GetString(ScratchKey, ""));
 			SessionState.SetInt(ReloadsKey, SessionState.GetInt(ReloadsKey, 0) + 1);
 			InstallMonitor();
+		}
+
+		// The monitor's verdict is already latched, so it does not matter whether InputWatchHub
+		// shuts the watchers down before or after this runs on the same event.
+		private static void CarryAcrossReload()
+		{
+			DisposeMonitor();
 		}
 
 		public static bool IsPreparing
@@ -168,6 +190,41 @@ namespace AgentBridge
 			return PlayModeSceneRecovery.BootstrapScenePath();
 		}
 
+		// The attempt number is in the name so an abandoned attempt that is still writing cannot
+		// land in the file the current one is about to trust.
+		private static string ManifestPath(string taskId, int attempt)
+		{
+			return Path.Combine(BridgePaths.WorkingRoot, "evidence-manifest-" + taskId + "-" + attempt + ".txt");
+		}
+
+		// Everything the worker needs is copied here, on the main thread: an abandoned job cannot
+		// start walking the next task's roots, exactly like InputHashJob.
+		private static Task<InputStatManifest> StartManifest(string path)
+		{
+			string[] roots = (string[])_roots.Clone();
+			string[] excluded = (string[])_excluded.Clone();
+			Func<string, bool> ignore = _ignore;
+			return Task.Run(() =>
+			{
+				InputStatManifest manifest = InputStatManifest.Capture(roots, excluded, ignore);
+				if (!manifest.Complete)
+				{
+					return manifest;
+				}
+
+				try
+				{
+					manifest.Save(path);
+				}
+				catch (Exception exception)
+				{
+					return InputStatManifest.Incomplete("input stat manifest could not be saved: " + exception.Message);
+				}
+
+				return manifest;
+			});
+		}
+
 		// Main thread poll. Returns false while the worker is still hashing.
 		public static bool TryFinishPrepare(out bool ready, out string reason)
 		{
@@ -184,7 +241,8 @@ namespace AgentBridge
 			// Fast native hashing can finish before the refresh that queued this preparation.
 			// Keep the completed work until Unity settles instead of turning speed into failure.
 			if (EditorApplication.isCompiling || EditorApplication.isUpdating) return false;
-			if (!_work.IsCompleted || (_sourceWork != null && !_sourceWork.IsCompleted))
+			if (!_work.IsCompleted || (_sourceWork != null && !_sourceWork.IsCompleted)
+				|| (_manifestWork != null && !_manifestWork.IsCompleted))
 			{
 				return false;
 			}
@@ -216,6 +274,8 @@ namespace AgentBridge
 				// looking and watching.
 				_first = snapshot;
 				InstallMonitor();
+				_manifestPath = ManifestPath(_preparingTaskId, _retries);
+				_manifestWork = StartManifest(_manifestPath);
 				_work = _job.Start();
 				return false;
 			}
@@ -247,6 +307,24 @@ namespace AgentBridge
 				return true;
 			}
 
+			// Without the manifest on disk the run would have no witness across the domain reload,
+			// and a result nobody can interpret is refused here rather than believed later.
+			InputStatManifest manifest = _manifestWork != null && _manifestWork.Status == TaskStatus.RanToCompletion
+				? _manifestWork.Result
+				: InputStatManifest.Incomplete(_manifestWork != null && _manifestWork.Exception != null
+					? "input stat manifest failed: " + _manifestWork.Exception.GetBaseException().Message
+					: "the input stat manifest was not taken");
+			if (!manifest.Complete)
+			{
+				Cleanup();
+				reason = manifest.Reason;
+				ready = false;
+				return true;
+			}
+
+			SessionState.SetString(ManifestKey, _manifestPath);
+			_manifestWork = null;
+
 			SessionState.SetString(SourceKey, _sourceWork != null && _sourceWork.Status == TaskStatus.RanToCompletion ? _sourceWork.Result : "");
 			SessionState.SetString(TaskKey, _preparingTaskId);
 			SessionState.SetString(DigestKey, snapshot.Digest);
@@ -271,26 +349,45 @@ namespace AgentBridge
 			if (_completion == null || _completingId != taskId)
 			{
 				_completingId = taskId;
-				var job = new InputHashJob(Split(SessionState.GetString(RootsKey, "")),
-					Split(SessionState.GetString(ExcludedKey, "")), SessionState.GetString(ContextKey, ""),
-					BuildIgnore(SessionState.GetString(ScratchKey, "")));
+				string[] roots = Split(SessionState.GetString(RootsKey, ""));
+				string[] excluded = Split(SessionState.GetString(ExcludedKey, ""));
+				Func<string, bool> ignore = BuildIgnore(SessionState.GetString(ScratchKey, ""));
+				var job = new InputHashJob(roots, excluded, SessionState.GetString(ContextKey, ""), ignore);
 				string projectRoot = BridgePaths.ProjectRoot;
+				// Read on the main thread, walked on a worker: the closing manifest must describe
+				// exactly the inputs the closing digest describes.
+				string startPath = SessionState.GetString(ManifestKey, "");
 				_completionSources = CompileInputContext.StartCapture(projectRoot);
 				_completion = job.Measure("validation_complete", taskId);
+				_completionManifest = Task.Run(() => InputStatManifest.Compare(
+					InputStatManifest.Load(startPath), InputStatManifest.Capture(roots, excluded, ignore)));
 				return false;
 			}
-			if (!_completion.IsCompleted || !_completionSources.IsCompleted) return false;
+			if (!_completion.IsCompleted || !_completionSources.IsCompleted || !_completionManifest.IsCompleted) return false;
 			var end = _completion.Status == TaskStatus.RanToCompletion ? _completion.Result
 				: ValidationInputSnapshot.Incomplete("final input snapshot failed");
+			var stat = _completionManifest.Status == TaskStatus.RanToCompletion
+				? _completionManifest.Result
+				: new InputStatVerdict
+				{
+					Reason = _completionManifest.Exception != null
+						? "input stat manifest failed: " + _completionManifest.Exception.GetBaseException().Message
+						: "the input stat manifest could not be compared"
+				};
 			CompletedSources = _completionSources.Status == TaskStatus.RanToCompletion ? _completionSources.Result : "";
 			_completion = null;
 			_completionSources = null;
+			_completionManifest = null;
 			_completingId = null;
-			result = Complete(taskId, artifactsPresent, end);
+			result = Complete(taskId, artifactsPresent, end, stat);
 			return true;
 		}
 
-		private static EvidenceRecord Complete(string taskId, bool artifactsPresent, ValidationInputSnapshot end)
+		private static EvidenceRecord Complete(
+			string taskId,
+			bool artifactsPresent,
+			ValidationInputSnapshot end,
+			InputStatVerdict stat)
 		{
 			string observed = SessionState.GetString(TaskKey, "");
 			if (observed != taskId)
@@ -311,12 +408,25 @@ namespace AgentBridge
 				{
 					TelemetryLog.Write("input_changes", "", taskId, new[] {
 						TelemetryField.Number("Events", _monitor.EventCount),
-						TelemetryField.Text("Paths", string.Join(";", _monitor.Paths)) });
+						TelemetryField.Text("Paths", string.Join(";", _monitor.Paths)),
+						TelemetryField.Text("Source", "observer") });
 				}
 				events += _monitor.EventCount;
 				observerOk = observerOk && _monitor.Observed;
 				observerFailure = _monitor.Failure;
 			}
+
+			// The witness that was awake across the reload. Its events weigh the same as the
+			// observer's: an input that moved and came back is not something a result may ignore.
+			if (stat.Complete && stat.Changed > 0)
+			{
+				TelemetryLog.Write("input_changes", "", taskId, new[] {
+					TelemetryField.Number("Events", stat.Changed),
+					TelemetryField.Text("Paths", string.Join(";", stat.Paths)),
+					TelemetryField.Text("Source", "manifest") });
+				events += stat.Changed;
+			}
+
 			// The observer remains alive until the worker finishes and we evaluate its events.
 			Cleanup();
 
@@ -360,9 +470,21 @@ namespace AgentBridge
 				return record;
 			}
 
+			// Without the manifest there is nothing that covered the reload gap, and "the observer
+			// saw nothing" is not the same claim as "nothing happened".
+			if (!stat.Complete)
+			{
+				record.Validity = EvidenceRecord.Unknown;
+				record.Reason = string.IsNullOrEmpty(stat.Reason)
+					? "the input stat manifest was lost"
+					: stat.Reason;
+				return record;
+			}
+
 			record.Validity = EvidenceRecord.Valid;
 			record.Reason = reloads > 0
-				? "observer reinstalled after " + reloads + " domain reload(s); both input digests match"
+				? "observer reinstalled after " + reloads
+					+ " domain reload(s); the stat manifest covers the gap; both input digests match"
 				: "";
 			return record;
 		}
@@ -499,6 +621,9 @@ namespace AgentBridge
 			_sourceWork = null;
 			_completion = null;
 			_completionSources = null;
+			_completionManifest = null;
+			_manifestWork = null;
+			_manifestPath = "";
 			_completingId = null;
 			_job = null;
 			_first = null;
@@ -510,9 +635,34 @@ namespace AgentBridge
 			SessionState.EraseString(ExcludedKey);
 			SessionState.EraseString(WindowKey);
 			SessionState.EraseString(ScratchKey);
+			SessionState.EraseString(ManifestKey);
 			SessionState.EraseInt(ReloadsKey);
 			SessionState.EraseInt(EventsKey);
 			SessionState.EraseInt(ObserverKey);
+			EraseManifests();
+		}
+
+		// One run carries evidence in this editor at a time, so every manifest still lying here
+		// belongs to a run that is over. Leaving them would let an abandoned attempt pose as the
+		// witness of the next one.
+		private static void EraseManifests()
+		{
+			try
+			{
+				foreach (string file in Directory.GetFiles(BridgePaths.WorkingRoot, "evidence-manifest-*"))
+				{
+					try
+					{
+						File.Delete(file);
+					}
+					catch (Exception)
+					{
+					}
+				}
+			}
+			catch (Exception)
+			{
+			}
 		}
 
 		private static bool IsUnder(string path, string root)

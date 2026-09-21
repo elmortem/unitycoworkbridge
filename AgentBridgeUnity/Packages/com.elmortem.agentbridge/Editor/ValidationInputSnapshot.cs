@@ -129,7 +129,9 @@ namespace AgentBridge
 			return snapshot;
 		}
 
-		private static bool TryCollect(
+		// Internal rather than private: the stat manifest is the second witness of the same inputs
+		// and must walk them through this exact code, not through a copy that can drift from it.
+		internal static bool TryCollect(
 			string root,
 			string[] excludedRoots,
 			Func<string, bool> ignore,

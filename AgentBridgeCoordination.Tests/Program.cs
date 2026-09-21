@@ -50,6 +50,8 @@ try
 		Scenarios.C18_CacheEviction(covered);
 		HashingScenarios.Run(root, covered);
 		ObserverHubScenarios.Run(root, covered);
+		StatManifestScenarios.Run(root, covered);
+		CacheLookupScenarios.Run(root, covered);
 		BatchScenarios.Run(root, covered);
 	}
 

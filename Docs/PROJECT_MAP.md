@@ -83,13 +83,27 @@ scripts/                           Сборка плагина, вендорин
    исходников проекта (`SourceImportVerifier`), запрещённые API в скрипте (`SourceGuardrail`).
 5. **Кэш.** Для `compile` и `tests` сначала ищется готовый результат по отпечатку входов
    (`CompileFingerprint`/`CompileCacheStore`, `TestFingerprint`/`TestCacheQuery`), выдаёт его
-   `CachedResultServer` без запуска редактора.
+   `CachedResultServer` без запуска редактора. Дорогая часть — не поиск, а доказательство: пока
+   дешёвый отпечаток источников не назвал ни одной записи-кандидата, `CacheLookupWitness` не
+   открывается и дайджест входов не считается вовсе. Появился кандидат — свидетели открываются один
+   раз за скан, и выдача `tests` требует чистого stat-манифеста вокруг обоих замеров дайджеста, а не
+   только их совпадения. Промах запоминает `CacheMissMemo` по отпечатку источников и набору
+   кандидатов: пока оба держатся, дайджест пересчитывается не чаще раза в 10 секунд.
 6. **Исполнение.** Один из исполнителей: `CSharpTaskExecutor` (Roslyn в памяти),
    `CompileTaskExecutor`, `AgentTestRunner`, `SceneShotTaskExecutor`, `UiTaskRunner`.
-7. **Достоверность.** Пока задача идёт, `ValidationInputMonitor` следит, что входы не изменились;
-   сам наблюдатель — общий: `InputWatchHub` держит по одному `FileSystemWatcher` на корень входов,
-   а монитор лишь открывает над ним окно со своими исключениями и своим счётчиком. Результат
-   классифицируется (`EvidenceClassification`) и пишется в `EvidenceRecord`.
+7. **Достоверность.** У прогона два свидетеля. Первый — `ValidationInputMonitor`: пока задача идёт,
+   он следит, что входы не изменились; сам наблюдатель общий, `InputWatchHub` держит по одному
+   `FileSystemWatcher` на корень входов, а монитор лишь открывает над ним окно со своими
+   исключениями и своим счётчиком. Его счётчик переносится через domain reload:
+   `ValidationEvidence.CarryAcrossReload` на `beforeAssemblyReload` складывает события в
+   `SessionState` до того, как наблюдатель умрёт вместе с доменом. Второй свидетель —
+   `InputStatManifest`: путь, размер и mtime тех же входов, снятые на рабочем потоке при подготовке,
+   сохранённые в `Library/AgentBridge/evidence-manifest-<TaskId>-<попытка>.txt` и сравнённые в
+   завершении. Он закрывает разрыв, который наблюдатель проспал: под Unity это опрашивающий
+   `System.IO.DefaultWatcher`, и между `InputWatchHub.Shutdown` и новой установкой не наблюдает
+   никто. Расхождение манифеста — такое же событие `input_changes` (с полем `Source`), потерянный
+   манифест — `unknown`. Результат классифицируется (`EvidenceClassification`) и пишется в
+   `EvidenceRecord`.
 8. **Завершение.** `TaskJournal` атомарно пишет `Journal/<id>.json`, артефакты уходят в
    `Artifacts/<id>/`, `BridgeStatusWriter` обновляет `status.json`.
 9. **Выдача.** CLI дожидается записи журнала и печатает результат (`TaskResultFormatter`) в
@@ -123,6 +137,7 @@ scripts/                           Сборка плагина, вендорин
 	project-id                          идентификатор проекта (сверка «тот ли проект»)
 	compile-cache.json                  кэш результатов компиляции
 	test-cache-<mode>.json              легаси-индекс кэша тестов
+	evidence-manifest-<id>-<n>.txt      stat-манифест входов прогона, переживающий domain reload
 	pending_<id>.json                   задача, переживающая domain reload
 	pending-playmode-scene.json         сцены, которые надо восстановить после плеймода
 	play-session.json                   владелец текущего плеймода
@@ -274,13 +289,17 @@ package.json       версия и зависимости пакета
 | `TestCacheQuery.cs` | поиск подходящего кэшированного прогона |
 | `TestRunDumpStore.cs` / `TestRunDump.cs` | test-cache-v2: отдельные entry-файлы в `TestCacheV2/` и атомарный индекс |
 | `TestCacheIndex.cs` / `TestCacheEntryInfo.cs` | индекс кэша тестов |
-| `CachedResultServer.cs` | выдача кэшированных результатов `tests`/`compile` без запуска; общий хэш источников считается один раз за скан, окно наблюдения открывается через `OpenAsync` и не занимает главный поток |
+| `CachedResultServer.cs` | выдача кэшированных результатов `tests`/`compile` без запуска; общий хэш источников считается один раз за скан, свидетели открываются лениво — только при найденном кандидате и один раз за скан, телеметрия `cache_witness`/`cache_skip` |
+| `CacheLookupWitness.cs` | оба свидетеля одной проверки кэша: окно наблюдения и stat-манифест входов, открытые и закрытые вместе, без главного потока |
+| `CacheMissMemo.cs` / `CacheMissEntry.cs` | откат промахов: пока отпечаток источников и набор кандидатов те же, дайджест не пересчитывается чаще раза в `RetryMs` (10 с); запись снятой задачи забывается |
 | `ValidationInputSnapshot.cs` | SHA-256 содержимого входов |
 | `ValidationInputMonitor.cs` | окно наблюдения за изменением входов во время прогона (`stale_input`): свои исключения, свой счётчик, свой вердикт поверх общих наблюдателей |
 | `InputWatchHub.cs` | один наблюдатель на корень входов на весь редактор: выдача по ссылкам, доживание 30 с после последнего окна, выметание идлящих |
 | `InputWatchRoot.cs` | живой `FileSystemWatcher` над одним корнем и рассылка событий подписанным окнам |
 | `InputWatchHubLifetime.cs` | гашение хаба на `beforeAssemblyReload` и `quitting`; вердикты открытых окон при этом сохраняются |
-| `ValidationEvidence.cs` | сбор корней и исключений для снимка входов |
+| `ValidationEvidence.cs` | сбор корней и исключений для снимка входов; оба свидетеля прогона — наблюдатель и stat-манифест — и перенос счётчика наблюдателя через domain reload |
+| `InputStatManifest.cs` | второй свидетель: снимок «путь, размер, mtime» тех же входов, файл в `Library/AgentBridge/`, сравнение двух снимков в вердикт |
+| `InputStatEntry.cs` / `InputStatVerdict.cs` | запись манифеста и вердикт сравнения (число изменений и до 16 названных путей) |
 | `InputHashJob.cs` | фоновое хэширование; воркер получает только неизменяемые данные |
 | `EvidenceRecord.cs` / `EvidenceClassification.cs` | запись и классификация достоверности результата |
 | `ContentHash.cs` | SHA-256 через CNG на Windows (Mono-реализация слишком медленная), портируемая — на остальных |
@@ -464,7 +483,7 @@ ProjectSettings/CoworkBridge.json            настройки предыдущ
 | Проект | Что покрывает | Как запустить |
 |---|---|---|
 | `AgentBridgeCli.Tests/` | разбор флагов, форматирование результата, политика пробуждения, клиентская логика | `dotnet run --project AgentBridgeCli.Tests/AgentBridgeCli.Tests.csproj -c Release` |
-| `AgentBridgeCoordination.Tests/` | coordination-v1 и evidence-v1; `Harness.cs` — стенд, `Child.cs`/`BatchHost.cs` — дочерние процессы для гонок и обрывов, `Scenarios.cs`/`BatchScenarios.cs`/`HashingScenarios.cs`/`ObserverHubScenarios.cs` — сценарии | `dotnet run --project AgentBridgeCoordination.Tests/AgentBridgeCoordination.Tests.csproj -c Release -- --group all` (также `--group state\|store`) |
+| `AgentBridgeCoordination.Tests/` | coordination-v1 и evidence-v1; `Harness.cs` — стенд, `Child.cs`/`BatchHost.cs` — дочерние процессы для гонок и обрывов, `Scenarios.cs`/`BatchScenarios.cs`/`HashingScenarios.cs`/`ObserverHubScenarios.cs`/`StatManifestScenarios.cs`/`CacheLookupScenarios.cs` — сценарии | `dotnet run --project AgentBridgeCoordination.Tests/AgentBridgeCoordination.Tests.csproj -c Release -- --group all` (также `--group state\|store`) |
 | `AgentBridgeCompile.Tests/` | executor, отпечаток и кэш компиляции с управляемыми compilation callbacks (`Stubs.cs`) | `dotnet run --project AgentBridgeCompile.Tests -c Release` |
 | `AgentBridgeRecovery.Tests/` | восстановление сцен: повторный вход, ожидание cleanup, повторная финализация (`EditorStubs.cs`) | `dotnet run --project AgentBridgeRecovery.Tests -c Release` |
 

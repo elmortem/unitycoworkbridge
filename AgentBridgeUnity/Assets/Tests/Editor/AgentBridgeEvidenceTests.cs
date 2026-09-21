@@ -139,6 +139,52 @@ public class AgentBridgeEvidenceTests
 	}
 
 	[Test]
+	public void StatManifestSeesAChangeThatWasReverted()
+	{
+		// Under Mono the observer polls, so it can miss both the seconds before a domain reload and
+		// the gap across it. The manifest has no thread to lose: it is taken here on the editor's
+		// own runtime, over a tree inside the project's Temp so the run's inputs stay untouched.
+		string assets = Path.Combine(BridgePaths.ProjectRoot, "Temp", "AgentBridgeStatManifest_" + Guid.NewGuid().ToString("N"));
+		Directory.CreateDirectory(assets);
+		try
+		{
+			string script = Path.Combine(assets, "Thing.cs");
+			File.WriteAllText(script, "class Thing {}");
+
+			string[] roots = { assets };
+			InputStatManifest before = InputStatManifest.Capture(roots, new string[0], null);
+			Assert.IsTrue(before.Complete, "a readable tree produces a complete manifest");
+
+			System.Threading.Thread.Sleep(50);
+			File.WriteAllText(script, "class Thing {}");
+
+			ValidationInputSnapshot digestBefore = ValidationInputSnapshot.Capture(roots, new string[0], "ctx");
+			InputStatManifest after = InputStatManifest.Capture(roots, new string[0], null);
+			Assert.IsTrue(after.Complete);
+
+			InputStatVerdict verdict = InputStatManifest.Compare(before, after);
+			Assert.IsTrue(verdict.Complete, "the comparison is a complete witness");
+			Assert.AreEqual(1, verdict.Changed, "rewriting the same bytes is a change only the manifest can see");
+			Assert.AreEqual(ValidationInputSnapshot.Normalize(script), verdict.Paths[0], "and it names the path");
+
+			Assert.AreEqual(
+				digestBefore.Digest,
+				ValidationInputSnapshot.Capture(roots, new string[0], "ctx").Digest,
+				"while the digest sees the same project it saw before");
+		}
+		finally
+		{
+			try
+			{
+				Directory.Delete(assets, true);
+			}
+			catch (IOException)
+			{
+			}
+		}
+	}
+
+	[Test]
 	public void TheBridgesOwnTemporaryPlayModeSceneIsNotAForeignChange()
 	{
 		// The Unity Test Framework creates Assets/InitTestScene*.unity for a PlayMode run and the
