@@ -87,7 +87,9 @@ scripts/                           Сборка плагина, вендорин
 6. **Исполнение.** Один из исполнителей: `CSharpTaskExecutor` (Roslyn в памяти),
    `CompileTaskExecutor`, `AgentTestRunner`, `SceneShotTaskExecutor`, `UiTaskRunner`.
 7. **Достоверность.** Пока задача идёт, `ValidationInputMonitor` следит, что входы не изменились;
-   результат классифицируется (`EvidenceClassification`) и пишется в `EvidenceRecord`.
+   сам наблюдатель — общий: `InputWatchHub` держит по одному `FileSystemWatcher` на корень входов,
+   а монитор лишь открывает над ним окно со своими исключениями и своим счётчиком. Результат
+   классифицируется (`EvidenceClassification`) и пишется в `EvidenceRecord`.
 8. **Завершение.** `TaskJournal` атомарно пишет `Journal/<id>.json`, артефакты уходят в
    `Artifacts/<id>/`, `BridgeStatusWriter` обновляет `status.json`.
 9. **Выдача.** CLI дожидается записи журнала и печатает результат (`TaskResultFormatter`) в
@@ -272,9 +274,12 @@ package.json       версия и зависимости пакета
 | `TestCacheQuery.cs` | поиск подходящего кэшированного прогона |
 | `TestRunDumpStore.cs` / `TestRunDump.cs` | test-cache-v2: отдельные entry-файлы в `TestCacheV2/` и атомарный индекс |
 | `TestCacheIndex.cs` / `TestCacheEntryInfo.cs` | индекс кэша тестов |
-| `CachedResultServer.cs` | выдача кэшированных результатов `tests`/`compile` без запуска; общий хэш источников считается один раз за скан |
+| `CachedResultServer.cs` | выдача кэшированных результатов `tests`/`compile` без запуска; общий хэш источников считается один раз за скан, окно наблюдения открывается через `OpenAsync` и не занимает главный поток |
 | `ValidationInputSnapshot.cs` | SHA-256 содержимого входов |
-| `ValidationInputMonitor.cs` | наблюдение за изменением входов во время прогона (`stale_input`) |
+| `ValidationInputMonitor.cs` | окно наблюдения за изменением входов во время прогона (`stale_input`): свои исключения, свой счётчик, свой вердикт поверх общих наблюдателей |
+| `InputWatchHub.cs` | один наблюдатель на корень входов на весь редактор: выдача по ссылкам, доживание 30 с после последнего окна, выметание идлящих |
+| `InputWatchRoot.cs` | живой `FileSystemWatcher` над одним корнем и рассылка событий подписанным окнам |
+| `InputWatchHubLifetime.cs` | гашение хаба на `beforeAssemblyReload` и `quitting`; вердикты открытых окон при этом сохраняются |
 | `ValidationEvidence.cs` | сбор корней и исключений для снимка входов |
 | `InputHashJob.cs` | фоновое хэширование; воркер получает только неизменяемые данные |
 | `EvidenceRecord.cs` / `EvidenceClassification.cs` | запись и классификация достоверности результата |
@@ -290,7 +295,7 @@ package.json       версия и зависимости пакета
 | `TestFilterCoverage.cs` | проверка, покрывает ли кэшированный прогон запрошенные тестовые случаи |
 | `TestResultAggregator.cs` | свёртка результатов прогона |
 | `TestRunResult.cs`, `TestCaseResult.cs`, `TestFailure.cs` | DTO результатов |
-| `TestRunCoalescer.cs` | присоединение новой задачи к уже идущему подходящему прогону вместо повторного запуска |
+| `TestRunCoalescer.cs` | присоединение новой задачи к уже идущему подходящему прогону вместо повторного запуска; окно наблюдения открывается через `OpenAsync` и делит наблюдатель самого прогона |
 | `TestRunAttachments.cs` | раздача результата присоединённым задачам; непокрытые фильтром отцепляются |
 | `TestRunLifecycle.cs` | владелец прогона, дедлайн и состояние остановки сквозь domain reload |
 | `TestRunnerCancellation.cs` | изоляция различий API отмены между версиями Test Framework |
@@ -459,7 +464,7 @@ ProjectSettings/CoworkBridge.json            настройки предыдущ
 | Проект | Что покрывает | Как запустить |
 |---|---|---|
 | `AgentBridgeCli.Tests/` | разбор флагов, форматирование результата, политика пробуждения, клиентская логика | `dotnet run --project AgentBridgeCli.Tests/AgentBridgeCli.Tests.csproj -c Release` |
-| `AgentBridgeCoordination.Tests/` | coordination-v1 и evidence-v1; `Harness.cs` — стенд, `Child.cs`/`BatchHost.cs` — дочерние процессы для гонок и обрывов, `Scenarios.cs`/`BatchScenarios.cs`/`HashingScenarios.cs` — сценарии | `dotnet run --project AgentBridgeCoordination.Tests/AgentBridgeCoordination.Tests.csproj -c Release -- --group all` (также `--group state\|store`) |
+| `AgentBridgeCoordination.Tests/` | coordination-v1 и evidence-v1; `Harness.cs` — стенд, `Child.cs`/`BatchHost.cs` — дочерние процессы для гонок и обрывов, `Scenarios.cs`/`BatchScenarios.cs`/`HashingScenarios.cs`/`ObserverHubScenarios.cs` — сценарии | `dotnet run --project AgentBridgeCoordination.Tests/AgentBridgeCoordination.Tests.csproj -c Release -- --group all` (также `--group state\|store`) |
 | `AgentBridgeCompile.Tests/` | executor, отпечаток и кэш компиляции с управляемыми compilation callbacks (`Stubs.cs`) | `dotnet run --project AgentBridgeCompile.Tests -c Release` |
 | `AgentBridgeRecovery.Tests/` | восстановление сцен: повторный вход, ожидание cleanup, повторная финализация (`EditorStubs.cs`) | `dotnet run --project AgentBridgeRecovery.Tests -c Release` |
 

@@ -49,6 +49,7 @@ try
 		Scenarios.C13_ObserverVerdict(root, covered);
 		Scenarios.C18_CacheEviction(covered);
 		HashingScenarios.Run(root, covered);
+		ObserverHubScenarios.Run(root, covered);
 		BatchScenarios.Run(root, covered);
 	}
 

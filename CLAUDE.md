@@ -90,7 +90,9 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
   (одна неблокирующая попытка блокировки за тик, подтверждение окна), `CoordinationGate.cs`
   (единственный вход для запуска, кэша и присоединения)
 - Достоверность: `EvidenceRecord.cs`, `ValidationInputSnapshot.cs` (SHA-256 содержимого входов),
-  `ValidationInputMonitor.cs`, `ValidationEvidence.cs`, `EvidenceClassification.cs`
+  `ValidationInputMonitor.cs` (окно над общими наблюдателями; `OpenAsync` для ежесекундных путей),
+  `InputWatchHub.cs` + `InputWatchRoot.cs` + `InputWatchHubLifetime.cs` (один `FileSystemWatcher` на
+  корень входов на весь редактор), `ValidationEvidence.cs`, `EvidenceClassification.cs`
 - Кэш: `CompileFingerprint.cs`, `CompileCacheStore.cs`, `TestFingerprint.cs`, `TestCacheQuery.cs`,
   `TestRunDumpStore.cs` (test-cache-v2: отдельные entry-файлы и атомарный индекс),
   `TestCacheIndex.cs`, `TestCacheEntryInfo.cs`

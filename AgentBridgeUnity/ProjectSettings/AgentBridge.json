@@ -1,7 +1,6 @@
 {
     "Enabled": true,
     "KeepCompletedCount": 10,
-    "TaskTimeoutSeconds": 300,
     "IdleTickIntervalMs": 500,
     "ActiveTickIntervalMs": 33,
     "RoslynSource": "Auto",

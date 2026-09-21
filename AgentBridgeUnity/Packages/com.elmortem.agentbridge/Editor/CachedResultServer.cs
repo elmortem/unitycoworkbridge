@@ -15,7 +15,7 @@ namespace AgentBridge
 			string[] roots = ValidationEvidence.CollectRoots();
 			string[] excluded = ValidationEvidence.CollectExcludedRoots();
 			var ignore = ValidationEvidence.BuildIgnore(PlayModeSceneRecovery.BootstrapScenePath());
-			using var monitor = new ValidationInputMonitor(roots, excluded, ignore);
+			using var monitor = await ValidationInputMonitor.OpenAsync(roots, excluded, ignore);
 			string sourceFingerprint = await CompileInputContext.StartCapture(projectRoot);
 			long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 

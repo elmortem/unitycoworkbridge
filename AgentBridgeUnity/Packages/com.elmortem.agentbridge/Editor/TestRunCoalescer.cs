@@ -46,11 +46,9 @@ namespace AgentBridge
 
 			// Hashing every source file is far too expensive for a tick that runs once a second,
 			// so it happens at most once per scan, and only once a task has cleared every cheap
-			// check and is otherwise ready to attach. Installing the observer is just as expensive:
-			// it walks every input root before it reports anything, which stalls the editor for as
-			// long as that takes. This tick runs for the whole length of a test run, so the observer
-			// is installed on the same condition as the hash, and a run with nothing to attach pays
-			// for neither.
+			// check and is otherwise ready to attach. The observer window opens on the same
+			// condition, and it costs nothing here: the run this tick belongs to already holds the
+			// same roots in the hub, so opening the window only subscribes to them.
 			ValidationInputMonitor monitor = null;
 			string currentSources = null;
 			string projectRoot = BridgePaths.ProjectRoot;
@@ -92,7 +90,7 @@ namespace AgentBridge
 					// rests on, exactly as it did when it was installed for the whole scan.
 					if (monitor == null)
 					{
-						monitor = new ValidationInputMonitor(ValidationEvidence.CollectRoots(), ValidationEvidence.CollectExcludedRoots(),
+						monitor = await ValidationInputMonitor.OpenAsync(ValidationEvidence.CollectRoots(), ValidationEvidence.CollectExcludedRoots(),
 							ValidationEvidence.BuildIgnore(PlayModeSceneRecovery.BootstrapScenePath()));
 					}
 
