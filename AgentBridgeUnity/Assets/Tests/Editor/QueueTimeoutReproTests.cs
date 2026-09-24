@@ -1,6 +1,8 @@
 using System;
 using System.Collections;
 using System.IO;
+using System.Linq;
+using System.Reflection;
 using AgentBridge;
 using NUnit.Framework;
 using UnityEditor;
@@ -31,6 +33,28 @@ public class QueueTimeoutReproTests
 		double deadline = EditorApplication.timeSinceStartup + 35;
 		while (EditorApplication.timeSinceStartup < deadline) yield return null;
 		Mark("plain end; active=" + TaskCoordinator.ActiveTaskId);
+	}
+
+	// StopRun unregisters the job and unsubscribes update without RunFinished, exactly as the
+	// framework does on RunFailed. The coroutine below never advances past this point.
+	[UnityTest]
+	[Explicit("Run with scripts/verify-test-cancellation.ps1; stops the Unity job without RunFinished")]
+	public IEnumerator FrameworkStopsWithoutRunFinished()
+	{
+		Mark("lost begin");
+		yield return null;
+		var runners = EditorApplication.update.GetInvocationList()
+			.Where(d => d.Target != null && d.Target.GetType().FullName == "UnityEditor.TestTools.TestRunner.TestRun.TestJobRunner")
+			.Select(d => d.Target)
+			.Distinct()
+			.ToList();
+		Assert.AreEqual(1, runners.Count, "Expected exactly one subscribed TestJobRunner");
+		runners[0].GetType().GetMethod("StopRun", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(runners[0], null);
+		double deadline = EditorApplication.timeSinceStartup + 120;
+		while (EditorApplication.timeSinceStartup < deadline)
+		{
+			yield return null;
+		}
 	}
 
 	[UnityTest]

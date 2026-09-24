@@ -31,12 +31,12 @@ namespace UnityEditor
 	}
 	public static class EditorApplication
 	{
-		public static bool isPlaying, isPlayingOrWillChangePlaymode;
+		public static bool isPlaying, isPlayingOrWillChangePlaymode, isCompiling;
 		public static event Action<PlayModeStateChange> playModeStateChanged;
 		public static event Action update, delayCall;
 		public static void ExitPlaymode() { isPlaying = isPlayingOrWillChangePlaymode = false; playModeStateChanged?.Invoke(PlayModeStateChange.EnteredEditMode); }
 		public static void Frame() { update?.Invoke(); var delayed = delayCall; delayCall = null; delayed?.Invoke(); }
-		public static void Reset() { isPlaying = isPlayingOrWillChangePlaymode = false; update = delayCall = null; playModeStateChanged = null; }
+		public static void Reset() { isPlaying = isPlayingOrWillChangePlaymode = isCompiling = false; update = delayCall = null; playModeStateChanged = null; }
 	}
 }
 namespace UnityEditor.SceneManagement
@@ -80,6 +80,8 @@ namespace AgentBridge
 		public static Action OnFinalize;
 		public static int CancellationFinalizations;
 		public static string CancellationReason;
+		public static string PendingFinalizationTaskId;
+		public static bool HasPendingFinalization(string taskId) => !string.IsNullOrEmpty(taskId) && PendingFinalizationTaskId == taskId;
 		public static void FinalizeRecoveredPlayModeRun(string id, TestRunResult result, string error) => OnFinalize?.Invoke();
 		public static void FinalizeCancellation(string id, string outcome, string reason)
 		{

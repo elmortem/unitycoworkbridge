@@ -11,8 +11,14 @@ $runId = Get-Date -Format 'yyyyMMdd_HHmmss_fff'
 $evidence = Join-Path $scratch $runId
 New-Item -ItemType Directory -Force $evidence | Out-Null
 function Invoke-Bridge([string[]]$Arguments) {
+	# status.json is replaced atomically; a reader can catch the swap gap and see exit 3.
+	# One retry distinguishes that gap from an editor that is really gone.
 	$json = (& $Cli @Arguments --project $Project --format json | Out-String)
-	if ($LASTEXITCODE -eq 3) { throw $json }
+	if ($LASTEXITCODE -eq 3) {
+		Start-Sleep -Seconds 2
+		$json = (& $Cli @Arguments --project $Project --format json | Out-String)
+		if ($LASTEXITCODE -eq 3) { throw $json }
+	}
 	return ($json | ConvertFrom-Json)
 }
 function Save-Result($Name, $Result) { $Result | ConvertTo-Json -Depth 30 | Set-Content (Join-Path $evidence "$Name.json") }
@@ -43,22 +49,28 @@ try {
 		@('plain', 'EditMode', 'QueueTimeoutReproTests.ResponsiveTestOutlivesTimeout', 'canceled'),
 		@('recovery', 'EditMode', 'QueueTimeoutReproTests.PendingRecoveryOutlivesTimeout', 'canceled'),
 		@('play', 'PlayMode', 'AgentBridgeCancellationPlayModeTests.ResponsiveLongRun', 'canceled'),
-		@('orphan', 'EditMode', 'QueueTimeoutReproTests.FinishedOwnerLeavesRecovery', 'success')
+		@('orphan', 'EditMode', 'QueueTimeoutReproTests.FinishedOwnerLeavesRecovery', 'success'),
+		# No client action at all: the bridge itself must notice the job that never reported back.
+		@('lost', 'EditMode', 'QueueTimeoutReproTests.FrameworkStopsWithoutRunFinished', 'runtime_error')
 	)
 	foreach ($case in $cases) {
 		$submitted = Invoke-Bridge @('tests', '--mode', $case[1], '--test', $case[2], '--session', 'cancellation-verifier', '--fresh', '--wait', '1')
 		Save-Result ($case[0] + '-submit') $submitted
-		if ($case[0] -ne 'orphan') {
+		if ($case[0] -ne 'orphan' -and $case[0] -ne 'lost') {
 			Start-Sleep -Seconds 4
 			$stop = Invoke-Bridge @('cancel', $submitted.Id, '--session', 'cancellation-verifier', '--wait', '5')
 			if ($stop.Status -ne 'success') { throw 'Owner cancellation failed' }
 		}
-		$marker = Invoke-Bridge @('csharp', (New-Marker $case[0]), '--session', 'cancellation-verifier', '--wait', '30')
+		$markerWait = if ($case[0] -eq 'lost') { '60' } else { '30' }
+		$marker = Invoke-Bridge @('csharp', (New-Marker $case[0]), '--session', 'cancellation-verifier', '--wait', $markerWait)
 		Save-Result ($case[0] + '-marker') $marker
 		if ($marker.Status -ne 'success') { throw "Marker failed for $($case[0]): $($marker | ConvertTo-Json -Depth 10)" }
 		$final = Invoke-Bridge @('wait', $submitted.Id, '--wait', '1')
 		Save-Result ($case[0] + '-final') $final
 		if ($final.Status -ne $case[3]) { throw "Expected $($case[3]), got $($final.Status) for $($case[0])" }
+		if ($case[0] -eq 'lost' -and -not (($final.Logs -join "`n") -match 'ended without RunFinished')) {
+			throw "Lost run must explain itself in the logs: $($final | ConvertTo-Json -Depth 10)"
+		}
 		Write-Output "PASS $($case[0]): $($final.Status), executor stopped, next task completed"
 	}
 	$active = Invoke-Bridge @('tests', '--mode', 'EditMode', '--test', 'QueueTimeoutReproTests.ResponsiveTestOutlivesTimeout', '--session', 'cancellation-verifier', '--fresh', '--wait', '1')

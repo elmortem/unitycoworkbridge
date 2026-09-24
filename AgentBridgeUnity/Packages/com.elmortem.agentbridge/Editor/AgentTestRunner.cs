@@ -258,6 +258,12 @@ namespace AgentBridge
 			EditorApplication.update += PollFinalization;
 		}
 
+		// A queued finalization is progress, not a lost run: the detector must not time it out.
+		public static bool HasPendingFinalization(string taskId)
+		{
+			return _finalization != null && _finalization.TaskId == taskId;
+		}
+
 		private static void PollFinalization()
 		{
 			if (_finalization == null) return;
@@ -509,8 +515,19 @@ namespace AgentBridge
 			CoordinationGate.ReleaseByRecord(record, false, outcome);
 		}
 
-		private class TestCallbacks : ICallbacks
+		private class TestCallbacks : ICallbacks, IErrorCallbacks
 		{
+			// RunFailed skips RunFinishedInvocationEvent, so nothing else would ever end the task.
+			public void OnError(string message)
+			{
+				string taskId = SessionState.GetString(CoordinatorTestTaskKey, "");
+				if (string.IsNullOrEmpty(taskId))
+				{
+					return;
+				}
+				TestRunLifecycle.RequestStop(taskId, "runtime_error", "Unity test run failed: " + message);
+			}
+
 			public void RunStarted(ITestAdaptor testsToRun)
 			{
 				if (SessionState.GetString(CoordinatorTestModeKey, "") == TestMode.PlayMode.ToString())

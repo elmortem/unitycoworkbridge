@@ -12,9 +12,30 @@ namespace AgentBridge
 		[Serializable] private class State
 		{
 			public string Id, JobId, Outcome, Reason, CancellationDiagnostic;
-			public long StopRequested;
+			public long StopRequested, InactiveSince;
 			public bool Submitted;
 		}
+		// A Unity job that ends without RunFinished leaves no result and no activity to wait for.
+		public const long LostRunGraceMs = 25000;
+
+		public static long TrackInactivity(bool idle, long inactiveSince, long now)
+		{
+			if (!idle)
+			{
+				return 0;
+			}
+			if (inactiveSince == 0)
+			{
+				return now;
+			}
+			return inactiveSince;
+		}
+
+		public static bool IsLost(long inactiveSince, long now)
+		{
+			return inactiveSince != 0 && now - inactiveSince >= LostRunGraceMs;
+		}
+
 		private static State Read() { string json = SessionState.GetString(Key, ""); return string.IsNullOrEmpty(json) ? null : JsonUtility.FromJson<State>(json); }
 		private static void Save(State state) { SessionState.SetString(Key, JsonUtility.ToJson(state)); }
 		public static string TaskId { get { State state = Read(); return state == null ? "" : state.Id; } }
@@ -77,7 +98,8 @@ namespace AgentBridge
 				if (EditorApplication.isPlayingOrWillChangePlaymode) return;
 				if (state.Submitted)
 				{
-					string diagnostic = TestRunnerCancellation.Request(state.JobId);
+					// A lost or failed job still runs its error-mode cleanup; cancelling interrupts it.
+					string diagnostic = state.Outcome == "canceled" ? TestRunnerCancellation.Request(state.JobId) : "";
 					if (now - state.StopRequested >= 30000)
 						diagnostic += " Waiting: " + TestRunnerCancellation.RunningReason();
 					if (!string.IsNullOrEmpty(diagnostic) && diagnostic != state.CancellationDiagnostic)
@@ -100,6 +122,27 @@ namespace AgentBridge
 				AgentTestRunner.FinalizeCancellation(state.Id, state.Outcome, state.Reason);
 				SessionState.EraseString(Key);
 				return;
+			}
+			// Reached only while the run has no outcome: a submitted job that shows no activity
+			// anywhere for the grace window has ended without delivering RunFinished.
+			if (!terminal && hasRecord && state.Submitted)
+			{
+				bool idle = !EditorApplication.isPlayingOrWillChangePlaymode
+					&& !EditorApplication.isCompiling
+					&& !PlayModeSceneRecovery.IsPending
+					&& !AgentTestRunner.HasPendingFinalization(state.Id)
+					&& !TestRunnerCancellation.IsRunning();
+				long inactiveSince = TrackInactivity(idle, state.InactiveSince, now);
+				if (inactiveSince != state.InactiveSince)
+				{
+					state.InactiveSince = inactiveSince;
+					Save(state);
+				}
+				if (IsLost(inactiveSince, now))
+				{
+					RequestStop(state.Id, "runtime_error", "Unity test job ended without RunFinished; no results for " + (LostRunGraceMs / 1000) + " s");
+					return;
+				}
 			}
 			if (terminal && !PlayModeSceneRecovery.IsPending && !TestRunnerCancellation.IsRunning()) SessionState.EraseString(Key);
 		}

@@ -44,7 +44,9 @@ namespace AgentBridge
 					if (jobs != null) foreach (object job in jobs)
 						if ((bool)job.GetType().GetField("isRunning", Flags).GetValue(job)) return "Unity persisted test job still running: " + job.GetType().GetField("guid", Flags).GetValue(job);
 				}
-				if (HasRunner("UnityEditor.TestTools.TestRunner.EditModeRunner")) return "Unity EditMode runner object remains";
+				// An EditModeRunner ScriptableObject is not evidence of activity: it is only
+				// disposed by RunFinished, so error and cancellation paths leak it across reloads.
+				// The framework job checks above cover every run that is really alive.
 				// Resources also returns loaded prefab assets and controllers left after exit.
 				// This MonoBehaviour cannot run its test coroutine in Edit Mode. Framework
 				// jobs above still protect any editor-side cleanup that is actually running.

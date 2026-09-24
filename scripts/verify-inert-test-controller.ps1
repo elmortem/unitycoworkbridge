@@ -29,9 +29,7 @@ public static class PROBE_NAME
 	{
 		if (EditorApplication.isPlayingOrWillChangePlaymode || TestRunnerCancellation.IsRunning())
 			throw new Exception("Expected idle Edit Mode before probe");
-		var type = AppDomain.CurrentDomain.GetAssemblies()
-			.Select(a => a.GetType("UnityEngine.TestTools.TestRunner.PlaymodeTestsController"))
-			.First(t => t != null);
+		var type = Find("UnityEngine.TestTools.TestRunner.PlaymodeTestsController");
 		var controller = new GameObject("Inert test controller regression") { hideFlags = HideFlags.HideAndDontSave };
 		try
 		{
@@ -44,8 +42,25 @@ public static class PROBE_NAME
 			if (TestRunnerCancellation.IsRunning()) throw new Exception("Inactive controller blocks queue");
 		}
 		finally { UnityEngine.Object.DestroyImmediate(controller); }
+		// EditModeRunner is disposed only by RunFinished, so error and cancellation paths leak it.
+		var runnerType = Find("UnityEditor.TestTools.TestRunner.EditModeRunner");
+		var orphan = ScriptableObject.CreateInstance(runnerType);
+		orphan.hideFlags = HideFlags.HideAndDontSave;
+		try
+		{
+			if (Resources.FindObjectsOfTypeAll(runnerType).Length == 0)
+				throw new Exception("Probe did not create a discoverable EditModeRunner");
+			string reason = TestRunnerCancellation.RunningReason();
+			if (!string.IsNullOrEmpty(reason)) throw new Exception("Orphan EditModeRunner blocks queue: " + reason);
+		}
+		finally { UnityEngine.Object.DestroyImmediate(orphan); }
 		if (TestRunnerCancellation.IsRunning()) throw new Exception("Probe left a running executor");
-		return Task.FromResult("PASS: active and inactive inert controllers do not block Edit Mode");
+		return Task.FromResult("PASS: inert controllers and orphan EditModeRunner do not block Edit Mode");
+	}
+
+	private static Type Find(string name)
+	{
+		return AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType(name)).First(t => t != null);
 	}
 }
 '@

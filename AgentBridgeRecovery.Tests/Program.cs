@@ -16,6 +16,7 @@ void Case(string name, Action body)
 	EditorApplication.Reset();
 	SessionState.Clear();
 	TestRunnerCancellation.Requests = AgentTestRunner.CancellationFinalizations = 0;
+	AgentTestRunner.PendingFinalizationTaskId = null;
 	EditorSceneManager.Restores = 0;
 	EditorSceneManager.OnRestore = null;
 	TestRunnerCancellation.Running = false;

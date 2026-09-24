@@ -316,7 +316,7 @@ package.json       версия и зависимости пакета
 | `TestRunResult.cs`, `TestCaseResult.cs`, `TestFailure.cs` | DTO результатов |
 | `TestRunCoalescer.cs` | присоединение новой задачи к уже идущему подходящему прогону вместо повторного запуска; окно наблюдения открывается через `OpenAsync` и делит наблюдатель самого прогона |
 | `TestRunAttachments.cs` | раздача результата присоединённым задачам; непокрытые фильтром отцепляются |
-| `TestRunLifecycle.cs` | владелец прогона, дедлайн и состояние остановки сквозь domain reload |
+| `TestRunLifecycle.cs` | владелец прогона, дедлайн и состояние остановки сквозь domain reload; детектор джоба, закончившегося без `RunFinished` (`runtime_error` через 25 с бездействия) |
 | `TestRunnerCancellation.cs` | изоляция различий API отмены между версиями Test Framework |
 
 ### 6.6 Сцены и плеймод
@@ -526,8 +526,8 @@ unity-bridge-plugin.zip        собранный артефакт: закомм
 |---|---|
 | `verify-coordination.ps1` | coordination-v1 через реальный CLI и редактор |
 | `verify-coordination-batches.ps1` | три пакета без действий клиентов, frozen payload, fail-fast, цепочка compile/EditMode/PlayMode/compile |
-| `verify-test-cancellation.ps1` | живая отмена тестового прогона, восстановление и запуск следующей задачи |
-| `verify-inert-test-controller.ps1` | оставшийся PlayMode-контроллер не блокирует свободный Edit Mode. Обязательно **вне** NUnit: сам проверочный прогон делает TestRunner активным |
+| `verify-test-cancellation.ps1` | живая отмена тестового прогона, восстановление и запуск следующей задачи; сценарий `lost` — джоб без `RunFinished` завершается сам |
+| `verify-inert-test-controller.ps1` | оставшийся PlayMode-контроллер и сирота `EditModeRunner` не блокируют свободный Edit Mode. Обязательно **вне** NUnit: сам проверочный прогон делает TestRunner активным |
 | `verify-scene-recovery.ps1` | нормальный `RunFinished` → domain reload → cleanup, после чего очередь **продвигается** ещё одной задачей; зелёный NUnit сам по себе доказательством не считается |
 | `verify-long-running-tasks.ps1` | защита долгой задачи от чужой отмены и снятие защиты после 300 с |
 | `verify-immediate-commands.ps1` | немедленные команды на прогретом кэше |

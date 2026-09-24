@@ -61,6 +61,23 @@ public class TestCancellationPolicyTests
 	}
 
 	[Test]
+	public void InactivityTrackingStartsOnceAndResetsOnActivity()
+	{
+		Assert.AreEqual(0, TestRunLifecycle.TrackInactivity(false, 0, 1000));
+		Assert.AreEqual(0, TestRunLifecycle.TrackInactivity(false, 123, 1000));
+		Assert.AreEqual(1000, TestRunLifecycle.TrackInactivity(true, 0, 1000));
+		Assert.AreEqual(500, TestRunLifecycle.TrackInactivity(true, 500, 1000));
+	}
+
+	[Test]
+	public void LostRunNeedsTheWholeGraceWindow()
+	{
+		Assert.IsFalse(TestRunLifecycle.IsLost(0, long.MaxValue));
+		Assert.IsFalse(TestRunLifecycle.IsLost(1000, 1000 + TestRunLifecycle.LostRunGraceMs - 1));
+		Assert.IsTrue(TestRunLifecycle.IsLost(1000, 1000 + TestRunLifecycle.LostRunGraceMs));
+	}
+
+	[Test]
 	public void CancellationIsNotATerminalState()
 	{
 		Assert.IsFalse(TaskCoordinator.IsTerminal("canceling"));
