@@ -39,6 +39,17 @@ internal static class AgentBridgeApplication
 		var command = options.Arguments[0];
 		var commandArguments = options.Arguments.Skip(1).ToArray();
 
+		// A run of the whole suite is refused before the editor is asked for anything: the caller
+		// must confirm it deliberately, because some projects hold very many long tests.
+		if (command == "tests")
+		{
+			var refusal = RefuseUnconfirmedAllTests(commandArguments, options);
+			if (refusal != null)
+			{
+				return refusal.Value;
+			}
+		}
+
 		// Coordination answers before the editor is asked for anything. Registering, waiting and
 		// reading the queue must work while Unity is busy, reloading, or not even running.
 		if (command == "coord")
@@ -177,6 +188,21 @@ internal static class AgentBridgeApplication
 		}
 	}
 
+	private static int? RefuseUnconfirmedAllTests(string[] commandArguments, CliOptions options)
+	{
+		if (!TryParseTests(commandArguments, out var mode, out var assemblies, out var tests, out var categories, out var error))
+		{
+			return WriteError("bad_usage", error, options.Format);
+		}
+
+		if (!AllTestsConfirmation.IsRequired(assemblies, tests, categories, options.ConfirmAllTests))
+		{
+			return null;
+		}
+
+		return WriteError(AllTestsConfirmation.Code, AllTestsConfirmation.Message(mode), options.Format);
+	}
+
 	private static bool TryParseTests(
 		string[] args,
 		out string mode,
@@ -198,7 +224,7 @@ internal static class AgentBridgeApplication
 				assemblies = Array.Empty<string>();
 				tests = Array.Empty<string>();
 				categories = Array.Empty<string>();
-				error = "usage: agentbridge tests [--mode EditMode|PlayMode] [--assembly A] [--test T] [--category C] [--fresh]";
+				error = "usage: agentbridge tests [--mode EditMode|PlayMode] [--assembly A] [--test T] [--category C] [--fresh] [--confirm-all]";
 				return false;
 			}
 
@@ -369,7 +395,8 @@ internal static class AgentBridgeApplication
 			  ui <file.ui.json>
 			  sceneshot <file.sceneshot.json>
 			  compile [--fresh]
-			  tests [--mode EditMode|PlayMode] [--assembly A] [--test T] [--category C] [--fresh]
+			  tests [--mode EditMode|PlayMode] [--assembly A] [--test T] [--category C] [--fresh] [--confirm-all]
+			                            a run with no filter is the whole suite and needs --confirm-all
 			  release --session <id>     give the editor back to the other agent sessions
 			  play [--seconds N] --note <intent> --session <id>   open a play session; only csharp and sceneshot run inside it
 			  stopplay [--session <id>]  immediately stop Play Mode, including an active PlayMode test
@@ -385,6 +412,7 @@ internal static class AgentBridgeApplication
 			  --session <id>     agent session for fair scheduling
 			  --note <text>      intent shown to the session holding the editor
 			  --fresh            diagnostic compile requires --note; overlapping compile requests share a new cycle; tests rerun
+			  --confirm-all      tests only: confirm a deliberate run of the whole suite (no --test/--category/--assembly)
 			  --coord-window <token>  window token from 'coord request', required once a project is coordinated
 			  --coord-step <id>       the planned step this task executes
 			  --version

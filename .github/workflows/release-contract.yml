@@ -42,10 +42,13 @@ jobs:
             symbol: UNITY_EDITOR_LINUX
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
+      - name: Checkout source
+        shell: pwsh
+        run: |
+          git init .
+          git remote add origin "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY.git"
+          git fetch --depth 1 --no-tags origin "$env:GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
       - name: Verify hashes, input snapshots and observers on the host OS
         run: dotnet run --project AgentBridgeCoordination.Tests -c Release -p:HashPlatform=${{ matrix.symbol }} -- --group state
 
@@ -82,11 +85,6 @@ jobs:
       - name: Verify line-ending regression protection
         shell: pwsh
         run: ./scripts/verify-plugin-line-endings.ps1
-
-      - name: Setup .NET for scene recovery regression tests
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
 
       - name: Verify scene recovery lifecycle
         shell: pwsh

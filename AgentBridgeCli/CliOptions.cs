@@ -9,6 +9,7 @@ internal sealed class CliOptions
 	public string? Session { get; private set; }
 	public string? Note { get; private set; }
 	public bool Fresh { get; private set; }
+	public bool ConfirmAllTests { get; private set; }
 
 	// coordination-v1
 	public string? SpecId { get; private set; }
@@ -43,6 +44,12 @@ internal sealed class CliOptions
 			if (argument == "--fresh")
 			{
 				options.Fresh = true;
+				continue;
+			}
+
+			if (argument == AllTestsConfirmation.Flag)
+			{
+				options.ConfirmAllTests = true;
 				continue;
 			}
 
@@ -332,6 +339,8 @@ internal sealed class CliOptions
 
 		if (options.Arguments.Count > 0 && options.Arguments[0] == "compile" && options.Fresh && string.IsNullOrWhiteSpace(options.Note))
 			options.Error = "compile --fresh requires --note with a diagnostic reason; after edits or waiting use ordinary compile";
+		if (options.ConfirmAllTests && (options.Arguments.Count == 0 || options.Arguments[0] != "tests"))
+			options.Error = AllTestsConfirmation.Flag + " applies only to the tests command";
 		return options;
 	}
 

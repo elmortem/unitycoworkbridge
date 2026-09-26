@@ -198,9 +198,11 @@ agentbridge coord status --session AB_20260813_1500_a1f --format human
 
 Every command also accepts `--session <id>` and `--note <text>`, which identify the agent session behind the task; see [Multi-Agent Sessions](#multi-agent-sessions). The `coord` group is described in [Coordinating Several Agents](#coordinating-several-agents).
 
-Exit codes: `0` success, `1` a terminal task failure including `test_failure`, `no_tests_matched`, `ambiguous_test_filter`, `stale_input` and `evidence_unavailable`, `2` client wait exhausted (the task is still running — retry with `agentbridge wait <TaskId>`), `3` project/bridge unavailable, protocol mismatch, or bad usage.
+Exit codes: `0` success, `1` a terminal task failure including `test_failure`, `no_tests_matched`, `ambiguous_test_filter`, `stale_input` and `evidence_unavailable`, `2` client wait exhausted (the task is still running — retry with `agentbridge wait <TaskId>`), `3` project/bridge unavailable, protocol mismatch, bad usage, or an unconfirmed run of all tests (`all_tests_confirmation_required`).
 
 `tests --test` accepts an exact full test/fixture name or a unique short name. Every repeated `--test` must match at least one case within the assembly/category filters. An ambiguous name returns `ambiguous_test_filter` with candidate full names; use a full name or `--assembly` to disambiguate. A missing name or a zero-case run returns `no_tests_matched` and exit code `1`. The CLI also rejects an empty `success` response from older packages.
+
+`tests` without any `--test`, `--category` or `--assembly` filter selects the whole suite of the mode. Some projects have very many long-running tests, so the CLI refuses such a run with `all_tests_confirmation_required` (exit code `3`) before contacting the editor. The agent has to repeat the command with `--confirm-all` to confirm that it really needs every test; the bundled skill tells it to do so only with a strong reason.
 
 Short and full names both use the result cache. Each new result set stores the complete discovered test catalog for its mode, so alias resolution and coverage checks work without another Unity run. A subset is served only if every selected case is present, including parameterized cases. Project input changes invalidate reuse; filters select cases rather than change the input digest. Older cache entries without a catalog require one fresh run. `--fresh` still bypasses reuse.
 

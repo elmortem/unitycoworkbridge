@@ -12,6 +12,7 @@ try
 	Expect(CliOptions.Parse(new[] { "compile", "--fresh", "--note", "Investigate inconsistent compiler output" }).Error == null, "explicit diagnostic compile allowed");
 	Expect(CliOptions.Parse(new[] { "compile" }).Error == null, "ordinary compile needs no reason");
 	Expect(CliOptions.Parse(new[] { "tests", "--fresh" }).Error == null, "flaky test retry remains supported");
+	await RunAllTestsConfirmationTests(root);
 	RunResultClassificationTests();
 	RunHumanResultFormattingTests();
 	RunHealthTests(root);
@@ -296,6 +297,52 @@ static void RunSessionOptionTests()
 
 	var none = CliOptions.Parse(new[] { "csharp", "Task.cs" });
 	Expect(none.Session == null && none.Note == null, "omitted session and note must stay unset");
+}
+
+static async Task RunAllTestsConfirmationTests(string root)
+{
+	var none = Array.Empty<string>();
+	var one = new[] { "X" };
+	Expect(AllTestsConfirmation.IsRequired(none, none, none, false), "an unfiltered run must require confirmation");
+	Expect(!AllTestsConfirmation.IsRequired(none, none, none, true), "--confirm-all must allow the whole suite");
+	Expect(!AllTestsConfirmation.IsRequired(one, none, none, false), "an assembly filter is an explicit selection");
+	Expect(!AllTestsConfirmation.IsRequired(none, one, none, false), "a test filter is an explicit selection");
+	Expect(!AllTestsConfirmation.IsRequired(none, none, one, false), "a category filter is an explicit selection");
+	var message = AllTestsConfirmation.Message("PlayMode");
+	Expect(message.Contains("PlayMode") && message.Contains(AllTestsConfirmation.Flag), "the refusal must name the mode and the confirming flag");
+
+	var confirmed = CliOptions.Parse(new[] { "tests", "--confirm-all" });
+	Expect(confirmed.Error == null && confirmed.ConfirmAllTests, "--confirm-all must parse for tests");
+	Expect(!CliOptions.Parse(new[] { "tests" }).ConfirmAllTests, "confirmation is never implied");
+	Expect(CliOptions.Parse(new[] { "compile", "--confirm-all" }).Error != null, "--confirm-all outside tests is a usage error");
+
+	var project = Path.Combine(root, "AllTestsConfirmation");
+	CreateProject(project);
+	var refused = await RunCliCaptured("tests", "--mode", "PlayMode", "--project", project);
+	Expect(refused.Code == 3, "an unconfirmed full run must exit 3");
+	Expect(refused.Output.Contains(AllTestsConfirmation.Code), "an unconfirmed full run must report " + AllTestsConfirmation.Code);
+	Expect(!Directory.Exists(new BridgePaths(project).Scratch), "the refusal must come before the editor is inspected");
+
+	var filtered = await RunCliCaptured("tests", "--test", "MyTests", "--project", project);
+	Expect(!filtered.Output.Contains(AllTestsConfirmation.Code), "a filtered run must not ask for confirmation");
+	var all = await RunCliCaptured("tests", "--confirm-all", "--project", project);
+	Expect(!all.Output.Contains(AllTestsConfirmation.Code), "a confirmed full run must not ask again");
+}
+
+static async Task<(int Code, string Output)> RunCliCaptured(params string[] args)
+{
+	var previous = Console.Out;
+	var writer = new StringWriter();
+	Console.SetOut(writer);
+	try
+	{
+		var code = await AgentBridgeApplication.RunAsync(args);
+		return (code, writer.ToString());
+	}
+	finally
+	{
+		Console.SetOut(previous);
+	}
 }
 
 static void RunCoordinationOptionTests()

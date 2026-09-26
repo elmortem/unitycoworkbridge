@@ -116,7 +116,7 @@ scripts/                           Сборка плагина, вендорин
 | `0` | успех |
 | `1` | терминальный отказ задачи (`test_failure`, `stale_input`, `evidence_unavailable`, `no_tests_matched`, `ambiguous_test_filter`) |
 | `2` | клиентское ожидание исчерпано (задача может продолжать идти) |
-| `3` | проект/мост недоступны или ошибка использования |
+| `3` | проект/мост недоступны или ошибка использования, включая неподтверждённый прогон всех тестов (`all_tests_confirmation_required`) |
 
 ---
 
@@ -198,6 +198,7 @@ Namespace `AgentBridge.Cli`, file-scoped. Собирается в исполня
 | `EditorWakeAttempts.cs` | учёт уже сделанных попыток, чтобы не долбить редактор |
 | `EditorWaker.cs` | реализация: `WM_NULL`, фокус-тычок как крайняя мера |
 | `ManualPlayPolicy.cs` | решение о захвате «ничейного» плеймода: CLI сам гасит его перед задачей агента |
+| `AllTestsConfirmation.cs` | гейт полного прогона: `tests` без `--test`/`--category`/`--assembly` отклоняется до обращения к редактору (`all_tests_confirmation_required`), пока не передан `--confirm-all` |
 
 ### Координация (клиентская часть)
 
