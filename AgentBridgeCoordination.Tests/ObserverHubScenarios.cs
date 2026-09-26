@@ -46,13 +46,21 @@ internal static class ObserverHubScenarios
 			Expect(WaitUntil(() => wide.EventCount > 0 && narrow.EventCount > 0, 5000),
 				"a change inside the shared root reaches every window");
 
-			int wideBefore = wide.EventCount;
-			int narrowBefore = narrow.EventCount;
-			File.WriteAllText(Path.Combine(skipped, "artifact.bin"), "editor output");
-			Expect(WaitUntil(() => wide.EventCount > wideBefore, 5000),
+			// A single write can raise several events (Windows) or arrive late (macOS FSEvents): let
+			// the stream settle so a trailing Thing.cs event is not blamed on the excluded write.
+			WaitForQuiet(() => wide.EventCount + narrow.EventCount, 500, 5000);
+			int narrowPathsBefore = narrow.Paths.Length;
+			string artifact = Path.Combine(skipped, "artifact.bin");
+			File.WriteAllText(artifact, "editor output");
+			Expect(WaitUntil(() => wide.Paths.Any(IsArtifact), 5000),
 				"a path only the second window excludes is still a change for the first");
-			Thread.Sleep(200);
-			Expect(narrow.EventCount == narrowBefore, "and it is not a change for the window that excluded it");
+			Thread.Sleep(1000);
+			var leaked = narrow.Paths.Skip(narrowPathsBefore).Where(IsArtifact).ToArray();
+			Expect(leaked.Length == 0,
+				"and it is not a change for the window that excluded it: " + string.Join(", ", leaked));
+
+			static bool IsArtifact(string path) =>
+				string.Equals(Path.GetFileName(path), "artifact.bin", StringComparison.OrdinalIgnoreCase);
 		}
 	}
 
