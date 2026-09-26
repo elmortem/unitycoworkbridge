@@ -8,6 +8,7 @@
     <Compile Include="$(CompileSourceDirectory)/CompileFingerprint.cs" Link="CompileFingerprint.cs" />
     <Compile Include="$(CompileSourceDirectory)/CompileCacheEntry.cs" Link="CompileCacheEntry.cs" />
     <Compile Include="$(CompileSourceDirectory)/CompileCacheStore.cs" Link="CompileCacheStore.cs" />
+    <Compile Include="$(CompileSourceDirectory)/Coordination/SharedFile.cs" Link="SharedFile.cs" />
     <Compile Include="$(CompileSourceDirectory)/ContentHash.cs" Link="ContentHash.cs" />
     <Compile Include="$(CompileSourceDirectory)/ValidationInputMonitor.cs" Link="ValidationInputMonitor.cs" />
     <Compile Include="$(CompileSourceDirectory)/InputWatchRoot.cs" Link="InputWatchRoot.cs" />

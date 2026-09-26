@@ -255,7 +255,7 @@ package.json       версия и зависимости пакета
 | `TaskFileHash.cs` / `CachedHash.cs` | хэш пары «task.json + payload» с кэшем по длине и времени записи |
 | `PendingTaskInfo.cs` / `QueuedTaskStatus.cs` | представление задачи в очереди |
 | `TaskCancellationPolicy.cs` | политика отмены: чужую задачу можно снять только после 300 с (`long-running-tasks-v1`); человек в редакторе политику обходит |
-| `BridgeStatus.cs` / `BridgeStatusWriter.cs` | модель и запись `status.json` |
+| `BridgeStatus.cs` / `BridgeStatusWriter.cs` | модель и запись `status.json` и `heartbeat`; запись best-effort: сбой не выходит в жизненный цикл задачи, снимок дописывается на следующем тике |
 | `ProjectIdentity.cs` | создание и чтение стабильного `project-id` |
 | `HostPlatform.cs` | платформа хоста для `status.json` |
 
@@ -419,6 +419,7 @@ package.json       версия и зависимости пакета
 | `CoordinationDigest.cs` | SHA-256 и hex |
 | `CoordinationText.cs` | нормализация текста |
 | `CoordinationFileStore.cs` | межпроцессная транзакция поверх файлов (`ICoordinationStore`) |
+| `SharedFile.cs` | общий протокол файлов моста: атомарная запись с коротким повтором и чтение с `FileShare.ReadWrite \| Delete`. Им пишут `status.json`, `heartbeat`, журнал и кэши, им же читает CLI — иначе `File.Replace` в редакторе падает, пока CLI держит файл |
 | `CoordinationStoreException.cs` | ошибки хранилища |
 | `CoordinationWaiter.cs` | ожидание изменения состояния |
 | `CoordinationPathPolicy.cs` | отказ от UNC, сетевых дисков, симлинков и junction'ов |
@@ -484,7 +485,7 @@ ProjectSettings/CoworkBridge.json            настройки предыдущ
 | Проект | Что покрывает | Как запустить |
 |---|---|---|
 | `AgentBridgeCli.Tests/` | разбор флагов, форматирование результата, политика пробуждения, клиентская логика | `dotnet run --project AgentBridgeCli.Tests/AgentBridgeCli.Tests.csproj -c Release` |
-| `AgentBridgeCoordination.Tests/` | coordination-v1 и evidence-v1; `Harness.cs` — стенд, `Child.cs`/`BatchHost.cs` — дочерние процессы для гонок и обрывов, `Scenarios.cs`/`BatchScenarios.cs`/`HashingScenarios.cs`/`ObserverHubScenarios.cs`/`StatManifestScenarios.cs`/`CacheLookupScenarios.cs` — сценарии | `dotnet run --project AgentBridgeCoordination.Tests/AgentBridgeCoordination.Tests.csproj -c Release -- --group all` (также `--group state\|store`) |
+| `AgentBridgeCoordination.Tests/` | coordination-v1 и evidence-v1; `Harness.cs` — стенд, `Child.cs`/`BatchHost.cs` — дочерние процессы для гонок и обрывов, `Scenarios.cs`/`BatchScenarios.cs`/`HashingScenarios.cs`/`ObserverHubScenarios.cs`/`StatManifestScenarios.cs`/`CacheLookupScenarios.cs`/`SharedFileScenarios.cs` — сценарии | `dotnet run --project AgentBridgeCoordination.Tests/AgentBridgeCoordination.Tests.csproj -c Release -- --group all` (также `--group state\|store`) |
 | `AgentBridgeCompile.Tests/` | executor, отпечаток и кэш компиляции с управляемыми compilation callbacks (`Stubs.cs`) | `dotnet run --project AgentBridgeCompile.Tests -c Release` |
 | `AgentBridgeRecovery.Tests/` | восстановление сцен: повторный вход, ожидание cleanup, повторная финализация (`EditorStubs.cs`) | `dotnet run --project AgentBridgeRecovery.Tests -c Release` |
 

@@ -648,9 +648,7 @@ internal sealed class BridgeClient
 	{
 		try
 		{
-			using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-			using var reader = new StreamReader(stream, Encoding.UTF8);
-			json = reader.ReadToEnd();
+			json = AgentBridge.Coordination.SharedFile.ReadAllText(path);
 			return !string.IsNullOrWhiteSpace(json);
 		}
 		catch

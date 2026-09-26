@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using AgentBridge.Coordination;
 
 namespace AgentBridge.Cli;
 
@@ -32,7 +33,9 @@ internal static class BridgeInspector
 		{
 			try
 			{
-				var json = File.ReadAllText(paths.StatusFile);
+				// The editor replaces status.json in place; a reader without FILE_SHARE_DELETE makes that
+				// replace fail inside the editor, so every bridge file is read through SharedFile.
+				var json = SharedFile.ReadAllText(paths.StatusFile);
 				health.Bridge = JsonSerializer.Deserialize<BridgeStatus>(json, JsonSupport.Read);
 				if (health.Bridge == null)
 				{
@@ -208,7 +211,7 @@ internal static class BridgeInspector
 	{
 		try
 		{
-			var value = File.ReadAllText(path).Trim();
+			var value = SharedFile.ReadAllText(path).Trim();
 			if (!long.TryParse(value, out var timestamp))
 			{
 				return null;
@@ -240,7 +243,7 @@ internal static class BridgeInspector
 	{
 		try
 		{
-			return File.ReadAllText(path).Trim();
+			return SharedFile.ReadAllText(path).Trim();
 		}
 		catch
 		{

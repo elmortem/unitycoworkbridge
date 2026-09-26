@@ -56,6 +56,8 @@ internal static class Child
 				return 0;
 			case "crash":
 				return Crash(project);
+			case "shared-reader":
+				return SharedFileScenarios.Read(project);
 			default:
 				Console.Error.WriteLine("unknown child role: " + role);
 				return 3;

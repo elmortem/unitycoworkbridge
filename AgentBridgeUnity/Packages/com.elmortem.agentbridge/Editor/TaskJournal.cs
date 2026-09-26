@@ -9,19 +9,9 @@ namespace AgentBridge
 		public static void Write(TaskRecord record)
 		{
 			string path = Path.Combine(BridgePaths.Journal, record.Id + ".json");
-			string tempPath = path + ".tmp";
-
 			string json = JsonUtility.ToJson(record, true);
-			File.WriteAllText(tempPath, json);
-
-			if (File.Exists(path))
-			{
-				File.Replace(tempPath, path, null);
-			}
-			else
-			{
-				File.Move(tempPath, path);
-			}
+			// Every waiting CLI polls this file; SharedFile survives a reader caught mid-replace.
+			Coordination.SharedFile.WriteAtomic(path, json);
 		}
 
 		public static bool TryRead(string id, out TaskRecord record)

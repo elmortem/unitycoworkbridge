@@ -16,18 +16,7 @@ namespace AgentBridge
 		}
 		public static void Write(CompileCacheEntry entry)
 		{
-			string path = FilePath();
-			string tempPath = path + ".tmp";
-			File.WriteAllText(tempPath, JsonUtility.ToJson(entry));
-
-			if (File.Exists(path))
-			{
-				File.Replace(tempPath, path, null);
-			}
-			else
-			{
-				File.Move(tempPath, path);
-			}
+			Coordination.SharedFile.WriteAtomic(FilePath(), JsonUtility.ToJson(entry));
 		}
 
 		public static bool TryRead(out CompileCacheEntry entry)

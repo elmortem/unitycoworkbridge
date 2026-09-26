@@ -498,7 +498,7 @@ internal static class CoordinationCommands
 		{
 			if (File.Exists(file))
 			{
-				var existing = File.ReadAllText(file).Trim();
+				var existing = SharedFile.ReadAllText(file).Trim();
 				if (existing.Length > 0)
 				{
 					return existing;

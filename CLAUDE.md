@@ -85,7 +85,9 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
 - Координация: общая папка `Coordination/` (namespace `AgentBridge.Coordination`, без UnityEngine —
   эти же исходники компилирует CLI): `CoordinationEngine.cs` (чистая машина состояний),
   `CoordinationFileStore.cs` (межпроцессная транзакция), `CoordinationWaiter.cs`,
-  `CoordinationPathPolicy.cs`, `CoordinationScope.cs`, `CoordinationPlanRules.cs`, DTO по файлам.
+  `CoordinationPathPolicy.cs`, `CoordinationScope.cs`, `CoordinationPlanRules.cs`, DTO по файлам,
+  `SharedFile.cs` (запись/чтение файлов моста между процессами — любой новый читатель файлов
+  редактора в CLI обязан идти через него, иначе ломает `File.Replace` на Windows).
   Адаптеры вне общей папки: `CoordinationUnityCodec.cs` (JsonUtility), `CoordinationEditorAdapter.cs`
   (одна неблокирующая попытка блокировки за тик, подтверждение окна), `CoordinationGate.cs`
   (единственный вход для запуска, кэша и присоединения)

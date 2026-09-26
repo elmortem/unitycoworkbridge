@@ -212,17 +212,7 @@ namespace AgentBridge
 
 		private static void WriteAtomic(string path, string json)
 		{
-			string tempPath = path + ".tmp";
-			File.WriteAllText(tempPath, json);
-
-			if (File.Exists(path))
-			{
-				File.Replace(tempPath, path, null);
-			}
-			else
-			{
-				File.Move(tempPath, path);
-			}
+			Coordination.SharedFile.WriteAtomic(path, json);
 		}
 	}
 }

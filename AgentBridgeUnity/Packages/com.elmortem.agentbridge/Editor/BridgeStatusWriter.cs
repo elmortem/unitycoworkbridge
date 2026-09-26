@@ -21,6 +21,17 @@ namespace AgentBridge
 		private static double _lastBeatTime = double.MinValue;
 		private static double _lastCoordinationSync = double.MinValue;
 
+		// status.json and heartbeat are snapshots of in-memory state, so a missed write is only
+		// postponed: the next tick publishes the then-current state. A failure must never reach
+		// the task lifecycle that happened to trigger the write.
+		private static bool _statusPending;
+		private static bool _writeFailureReported;
+		private static double _retryAfter = double.MinValue;
+
+		// SharedFile already retries for about 100 ms; during a longer lock the editor waits this
+		// long between attempts instead of sleeping on every tick.
+		private const double FailedWriteBackoffSeconds = 0.5d;
+
 		static BridgeStatusWriter()
 		{
 			if (Suspended)
@@ -101,7 +112,7 @@ namespace AgentBridge
 			}
 
 			string json = UnityEngine.JsonUtility.ToJson(Current, true);
-			WriteAtomic(BridgePaths.StatusFile, json);
+			_statusPending = !TryWriteAtomic(BridgePaths.StatusFile, json);
 		}
 
 		public static void Beat()
@@ -117,14 +128,23 @@ namespace AgentBridge
 				return;
 			}
 
-			_lastBeatTime = now;
 			long unixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-			WriteAtomic(BridgePaths.HeartbeatFile, unixMs.ToString());
+			// A failed beat leaves the clock alone, so the next tick tries again instead of
+			// letting the heartbeat age past the CLI's liveness threshold.
+			if (TryWriteAtomic(BridgePaths.HeartbeatFile, unixMs.ToString()))
+			{
+				_lastBeatTime = now;
+			}
 		}
 
 		private static void OnUpdate()
 		{
 			Beat();
+			if (_statusPending)
+			{
+				Write();
+			}
+
 			string compilation = CompileTaskExecutor.LastCycleStatus;
 			string finished = CompileTaskExecutor.LastCycleFinishedUtc;
 			if (Current.CompilationState != compilation || Current.LastCompileFinishedUtc != finished)
@@ -223,18 +243,38 @@ namespace AgentBridge
 			Write();
 		}
 
-		private static void WriteAtomic(string path, string content)
+		private static bool TryWriteAtomic(string path, string content)
 		{
-			string tempPath = path + ".tmp";
-			File.WriteAllText(tempPath, content);
-
-			if (File.Exists(path))
+			double now = EditorApplication.timeSinceStartup;
+			if (_writeFailureReported && now < _retryAfter)
 			{
-				File.Replace(tempPath, path, null);
+				return false;
 			}
-			else
+
+			try
 			{
-				File.Move(tempPath, path);
+				Coordination.SharedFile.WriteAtomic(path, content);
+				if (_writeFailureReported)
+				{
+					_writeFailureReported = false;
+					UnityEngine.Debug.Log("[AgentBridge] Status files are written again.");
+				}
+
+				return true;
+			}
+			catch (Exception exception)
+			{
+				// One warning per failure streak: the editor retries every tick, and a locked file
+				// would otherwise flood the console.
+				_retryAfter = now + FailedWriteBackoffSeconds;
+				if (!_writeFailureReported)
+				{
+					_writeFailureReported = true;
+					UnityEngine.Debug.LogWarning("[AgentBridge] Could not write " + Path.GetFileName(path)
+						+ ", retrying on the next tick: " + exception.Message);
+				}
+
+				return false;
 			}
 		}
 	}

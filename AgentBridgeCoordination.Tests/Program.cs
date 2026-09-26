@@ -53,6 +53,7 @@ try
 		StatManifestScenarios.Run(root, covered);
 		CacheLookupScenarios.Run(root, covered);
 		BatchScenarios.Run(root, covered);
+		SharedFileScenarios.Run(root, covered);
 	}
 
 	if (group is "all" or "store")
@@ -61,6 +62,7 @@ try
 		Scenarios.C05_CrashAndCorruption(root, covered);
 		Scenarios.C08_Waiting(root, covered);
 		LeaseScenarios.CrossProcess(root, covered);
+		SharedFileScenarios.CrossProcess(root, covered);
 	}
 
 	Console.WriteLine("scenarios: " + string.Join(", ", covered));
