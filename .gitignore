@@ -27,6 +27,7 @@ AgentBridgeCli.Tests/bin/
 AgentBridgeCoordination.Tests/bin/
 AgentBridgeCoordination.Tests/obj/
 AgentBridgeRecovery.Tests/bin/
+AgentBridgeCompile.Tests/bin/
 
 # MemoryCaptures can get excessive in size.
 # They also could contain extremely sensitive data
@@ -59,6 +60,7 @@ ExportedObj/
 !AgentBridgeCli.Tests/AgentBridgeCli.Tests.csproj
 !AgentBridgeCoordination.Tests/AgentBridgeCoordination.Tests.csproj
 !AgentBridgeRecovery.Tests/AgentBridgeRecovery.Tests.csproj
+!AgentBridgeCompile.Tests/AgentBridgeCompile.Tests.csproj
 *.unityproj
 *.sln
 *.suo

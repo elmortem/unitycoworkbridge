@@ -484,10 +484,16 @@ internal static class Scenarios
 			Expect(after.Digest == before.Digest, "a change that was reverted leaves the digest equal");
 			Expect(monitor.EventCount > 0, "and the observer is what turns it into a stale verdict");
 
-			var eventsBeforeTemp = monitor.EventCount;
+			// FSEvents on macOS delivers with latency: the revert above may still be in flight. Let the
+			// stream settle so a late Assets event is not blamed on the Temp write below.
+			WaitForQuiet(() => monitor.EventCount, 500, 5000);
+			var pathsBeforeTemp = monitor.Paths.Length;
 			File.WriteAllText(Path.Combine(temp, "AgentBridge.log"), "ordinary editor output");
-			Thread.Sleep(400);
-			Expect(monitor.EventCount == eventsBeforeTemp, "an excluded artifact must not invalidate the evidence");
+			Thread.Sleep(1000);
+			var leaked = monitor.Paths.Skip(pathsBeforeTemp)
+				.Where(p => string.Equals(Path.GetFileName(p), "AgentBridge.log", StringComparison.OrdinalIgnoreCase))
+				.ToArray();
+			Expect(leaked.Length == 0, "an excluded artifact must not invalidate the evidence: " + string.Join(", ", leaked));
 		}
 
 		using (var blind = new ValidationInputMonitor(new[] { Path.Combine(root, "gone") }, Array.Empty<string>()))

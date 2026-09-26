@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings>
+    <CompileSourceDirectory Condition="'$(CompileSourceDirectory)' == ''">../AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor</CompileSourceDirectory>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(CompileSourceDirectory)/CompileTaskExecutor.cs" Link="CompileTaskExecutor.cs" />
+    <Compile Include="$(CompileSourceDirectory)/CompileFingerprint.cs" Link="CompileFingerprint.cs" />
+    <Compile Include="$(CompileSourceDirectory)/CompileCacheEntry.cs" Link="CompileCacheEntry.cs" />
+    <Compile Include="$(CompileSourceDirectory)/CompileCacheStore.cs" Link="CompileCacheStore.cs" />
+    <Compile Include="$(CompileSourceDirectory)/ContentHash.cs" Link="ContentHash.cs" />
+    <Compile Include="$(CompileSourceDirectory)/ValidationInputMonitor.cs" Link="ValidationInputMonitor.cs" />
+    <Compile Include="$(CompileSourceDirectory)/InputWatchRoot.cs" Link="InputWatchRoot.cs" />
+    <Compile Include="$(CompileSourceDirectory)/InputWatchHub.cs" Link="InputWatchHub.cs" />
+    <Compile Include="$(CompileSourceDirectory)/ValidationInputSnapshot.cs" Link="ValidationInputSnapshot.cs" />
+  </ItemGroup>
+</Project>

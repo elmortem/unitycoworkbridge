@@ -144,6 +144,28 @@ internal static class Harness
 		}
 	}
 
+	// Waits until a counter stops moving for quietMs, or until timeoutMs passes.
+	public static void WaitForQuiet(Func<int> counter, int quietMs, int timeoutMs)
+	{
+		var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+		var last = counter();
+		var stableSince = DateTime.UtcNow;
+		while (DateTime.UtcNow < deadline)
+		{
+			Thread.Sleep(20);
+			var current = counter();
+			if (current != last)
+			{
+				last = current;
+				stableSince = DateTime.UtcNow;
+			}
+			else if ((DateTime.UtcNow - stableSince).TotalMilliseconds >= quietMs)
+			{
+				return;
+			}
+		}
+	}
+
 	public static bool WaitUntil(Func<bool> condition, int timeoutMs)
 	{
 		var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
