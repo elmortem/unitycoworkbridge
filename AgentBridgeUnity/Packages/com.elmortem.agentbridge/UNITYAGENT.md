@@ -68,7 +68,24 @@ PlayMode-прогон надёжен при любой настройке Enter 
 
 Не вызывай `EditorSceneManager.OpenScene`, `NewScene`, `CloseScene`, `RestoreSceneManagerSetup` и runtime `SceneManager.LoadScene*` напрямую: guardrail отклонит задачу. Используй `AgentBridge.AgentSceneManager` с теми же основными операциями. Перед переходом он сохраняет dirty-сцены с путём, удаляет тестовые сцены и применяет политику dirty untitled-сцен без модального окна.
 
-Guardrail также отклоняет модальные и интерактивные Editor API: `EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo` / `SaveModifiedScenesIfUserWantsTo`, `EditorApplication.EnterPlaymode` / `ExitPlaymode` / `Exit` / `ExecuteMenuItem`, присваивание `EditorApplication.isPlaying` и `isPaused`, `EditorUtility.DisplayDialog` / `DisplayDialogComplex` / `OpenFilePanel` / `OpenFolderPanel` / `SaveFilePanel` / `SaveFilePanelInProject`, `PrefabStageUtility.OpenPrefab`, `AssetDatabase.OpenAsset`, `TestRunnerApi.Execute`.
+Guardrail также отклоняет модальные и интерактивные Editor API: `EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo` / `SaveModifiedScenesIfUserWantsTo`, `EditorApplication.EnterPlaymode` / `ExitPlaymode` / `Exit` / `ExecuteMenuItem`, присваивание `EditorApplication.isPlaying` и `isPaused`, `EditorUtility.DisplayDialog` / `DisplayDialogComplex` / `OpenFilePanel` / `OpenFolderPanel` / `SaveFilePanel` / `SaveFilePanelInProject`, `AssetDatabase.OpenAsset`, `TestRunnerApi.Execute`.
+
+## Режим префаба (Prefab Stage)
+
+Открывай и закрывай префаб в режиме редактирования только через `AgentBridge.AgentSceneManager`:
+
+```csharp
+PrefabStage stage = AgentSceneManager.OpenPrefab("Assets/Editor/LevelEditor.prefab");
+GameObject root = stage.prefabContentsRoot;
+// ... работа внутри префаба ...
+AgentSceneManager.ClosePrefab();
+```
+
+- `OpenPrefab` бросает `ArgumentException`, если путь не ведёт к `.prefab`-ассету. Повторный вызов для уже открытого префаба возвращает текущий стейдж и ничего не переключает. `GetOpenPrefab()` возвращает текущий стейдж или `null`; `ClosePrefab()` возвращает `false`, если стейдж не был открыт.
+- Перед сменой стейджа работает тот же префлайт, что и перед сменой сцены: несохранённый стейдж тихо сохраняется при `DirtyScenePolicy = Save`, а при `Block` вызов бросает `InvalidOperationException` и стейдж остаётся открытым. Правки внутри стейджа во время задачи сохраняются в ассет по той же политике.
+- Прямые `PrefabStageUtility.OpenPrefab`, `StageUtility.GoToMainStage` и `StageUtility.GoToStage` guardrail отклоняет: уход с несохранённого стейджа открывает модальный save-диалог.
+- Стейдж остаётся открытым после задачи и возвращается к твоей сессии после ротации. Закрывай его, когда закончил.
+- Если режим префаба не нужен, а нужно только прочитать или поправить содержимое, используй `PrefabUtility.LoadPrefabContents` / `SaveAsPrefabAsset` / `UnloadPrefabContents`: так редактор человека не переключается.
 
 ## Плей мод
 
@@ -107,7 +124,9 @@ agentbridge stopplay [--session <id>]
 
 Чтобы посмотреть на открытую сцену, не пиши C#-таск со `SceneView` и захватом пикселей — есть отдельный тип задачи: `agentbridge sceneshot <файл>.sceneshot.json`. Декларативный JSON перечисляет ракурсы (`frame` — автокадрирование объекта, `pose` — явная поза камеры), мост снимает каждый в PNG и возвращает пути в `Artifacts`. Снимок делается перерисовкой вью в текстуру, поэтому не зависит от того, виден ли редактор на экране. Служебное окно показывается без активации, так что снимок не выдёргивает Unity поверх того, в чём работает человек; для `"view": "game"` уже открытый Game View берётся как есть и не фокусируется. Формат и ограничения — в скилле `unity-bridge`.
 
-Снимается текущая открытая сцена; сам таск её не меняет, но перед ним отрабатывает общий префлайт сцен — при `DirtyScenePolicy = Save` несохранённая сцена будет тихо сохранена, при `Block` таск завершится `runtime_error`. Нужна другая сцена — сначала открой её C#-таском через `AgentBridge.AgentSceneManager`.
+Чтобы снять префаб в режиме префаба, добавь в JSON поле верхнего уровня `"prefab": "Assets/.../X.prefab"`: мост откроет стейдж перед первым кадром и вернёт прежний после последнего, в том числе при ошибке, отмене и таймауте. Пока открыт Prefab Stage, `frame.target` ищется только внутри префаба: имя, путь от корня префаба (`Board/Cell`) или полный путь с именем файла префаба первым сегментом. Если стейдж уже открыт через `AgentSceneManager.OpenPrefab`, поле не нужно: снимается то, что показывает Scene View.
+
+Без поля `prefab` снимается текущая открытая сцена или открытый Prefab Stage; сам таск их не меняет, но перед ним отрабатывает общий префлайт сцен — при `DirtyScenePolicy = Save` несохранённая сцена будет тихо сохранена, при `Block` таск завершится `runtime_error`. Нужна другая сцена — сначала открой её C#-таском через `AgentBridge.AgentSceneManager`.
 
 ## Примечания
 

@@ -327,7 +327,7 @@ package.json       версия и зависимости пакета
 | `SceneSafetyGuard.cs` | решение, безопасно ли выполнять задачу в текущем состоянии сцен |
 | `SceneDirtyWatcher.cs` / `SceneDirtyScanner.cs` / `SceneDirtyReport.cs` | обнаружение и описание несохранённых изменений |
 | `ScenePolicyMode.cs` | режим политики сцен из настроек |
-| `AgentSceneManager.cs` | открытие/закрытие сцен для задачи агента |
+| `AgentSceneManager.cs` | открытие/закрытие сцен и Prefab Stage для задачи агента через префлайт scene safety |
 | `PlayModeSceneState.cs` / `PlayModeSceneRecovery.cs` | сохранение набора сцен до плеймода и его восстановление после; повторный вход и ожидание cleanup — отдельные регрессии |
 | `SceneSetupStateConverter.cs` | конверсия `SceneSetup` в сериализуемую форму |
 | `PlaySessionManager.cs` / `PlaySessionState.cs` / `PlaySessionStore.cs` | владение плеймод-сессией и её персист |
@@ -350,13 +350,13 @@ package.json       версия и зависимости пакета
 
 | Файл | Роль |
 |---|---|
-| `SceneShotTaskExecutor.cs` | исполнитель задачи `sceneshot` |
+| `SceneShotTaskExecutor.cs` | исполнитель задачи `sceneshot`; при поле `prefab` открывает Prefab Stage до кадров и возвращает прежний стейдж после (включая отмену и таймаут через `Abandon`) |
 | `SceneShotPayloadParser.cs` | разбор `<id>.sceneshot.json` |
 | `SceneShotItem.cs` | описание одного снимка |
 | `SceneShotPose.cs` / `SceneShotPoseMode.cs` | положение камеры и способ его задания |
-| `SceneShotFramer.cs` | кадрирование по целевым объектам |
+| `SceneShotFramer.cs` | кадрирование по целевым объектам; при открытом Prefab Stage ищет только внутри него |
 | `SceneShotResolution.cs` | разрешение снимка |
-| `SceneViewGrabber.cs` | собственно захват SceneView в текстуру |
+| `SceneViewGrabber.cs` | собственно захват SceneView в текстуру; высота и обрезка breadcrumb-заголовка стейджа |
 
 ### 6.9 Декларативный UI — `Editor/Ui/`
 

@@ -64,6 +64,9 @@ namespace AgentBridge
 
 		private const string ModalApiReason = "modal or interactive editor API is not allowed in agent tasks";
 
+		private const string PrefabStageReason =
+			"direct prefab stage change is not allowed; use AgentBridge.AgentSceneManager.OpenPrefab / ClosePrefab";
+
 		private const string PlayModeReason =
 			"play mode control is not allowed in agent tasks; use agentbridge play/stopplay";
 
@@ -108,6 +111,16 @@ namespace AgentBridge
 				return;
 			}
 
+			// Switching away from a dirty prefab stage raises Unity's save prompt, so stage
+			// changes go through the same preflight as scene changes.
+			bool stageTransition = (typeName == "PrefabStageUtility" && methodName == "OpenPrefab")
+				|| (typeName == "StageUtility" && (methodName == "GoToMainStage" || methodName == "GoToStage"));
+			if (stageTransition)
+			{
+				AddViolation(violations, invocation, PrefabStageReason);
+				return;
+			}
+
 			if (typeName == "EditorApplication" && methodName == "ExecuteMenuItem")
 			{
 				AddViolation(violations, invocation, "ExecuteMenuItem is not allowed in agent tasks");
@@ -149,8 +162,6 @@ namespace AgentBridge
 						|| methodName == "OpenFolderPanel"
 						|| methodName == "SaveFilePanel"
 						|| methodName == "SaveFilePanelInProject";
-				case "PrefabStageUtility":
-					return methodName == "OpenPrefab";
 				case "AssetDatabase":
 					return methodName == "OpenAsset";
 				default:

@@ -29,6 +29,7 @@ namespace AgentBridge
 		private static TaskRecord _activeRecord;
 		private static CSharpTaskExecutor _activeCSharpExecutor;
 		private static SceneShot.SceneShotTaskExecutor _activeShotExecutor;
+		private static bool _assemblyReloading;
 		private static TaskContext _activeShotContext;
 		private static List<string> _activeRestoreLogs;
 		private static TaskRequest _activeRequest;
@@ -1391,9 +1392,19 @@ namespace AgentBridge
 			_activeRestoreLogs = null;
 
 			// Timeout, cancel and domain reload drop the executor without ever
-			// ticking it again, so its temporary window has to be closed here.
+			// ticking it again, so its temporary window has to be closed here and a
+			// prefab stage it opened is left for the previous one.
 			if (_activeShotExecutor != null)
 			{
+				try
+				{
+					_activeShotExecutor.Abandon(!_assemblyReloading);
+				}
+				catch (Exception ex)
+				{
+					Debug.LogWarning("[AgentBridge] scene shot cleanup failed: " + ex.GetBaseException().Message);
+				}
+
 				SceneShot.SceneShotTaskExecutor.CloseOrphanWindows();
 			}
 
@@ -1406,6 +1417,9 @@ namespace AgentBridge
 
 		private static void OnBeforeAssemblyReload()
 		{
+			// The domain is about to be replaced, so the flag never needs resetting.
+			_assemblyReloading = true;
+
 			if (_activeRecord == null)
 			{
 				return;

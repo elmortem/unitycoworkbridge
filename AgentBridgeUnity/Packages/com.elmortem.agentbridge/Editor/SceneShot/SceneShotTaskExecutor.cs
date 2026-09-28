@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
 
 namespace AgentBridge.SceneShot
@@ -20,6 +21,7 @@ namespace AgentBridge.SceneShot
 
 		private readonly TaskContext _context;
 		private readonly List<SceneShotItem> _items;
+		private readonly string _prefabPath;
 		private readonly List<string> _logs = new List<string>();
 		private readonly List<string> _summary = new List<string>();
 		private readonly HashSet<string> _usedFileNames = new HashSet<string>();
@@ -27,6 +29,7 @@ namespace AgentBridge.SceneShot
 		private int _index;
 		private SceneView _window;
 		private Vector2Int _targetPx;
+		private int _headerPx;
 		private double _settleUntil;
 		private bool _awaitingSettle;
 		private bool _awaitingGameFile;
@@ -35,11 +38,16 @@ namespace AgentBridge.SceneShot
 		private long _gameLastLength;
 		private bool _completed;
 		private string _status = "success";
+		private bool _stagePrepared;
+		private bool _restoreStage;
+		private string _previousStagePath;
 
-		private SceneShotTaskExecutor(TaskContext context, List<SceneShotItem> items)
+		private SceneShotTaskExecutor(TaskContext context, List<SceneShotItem> items, string prefabPath)
 		{
 			_context = context;
 			_items = items;
+			_prefabPath = prefabPath;
+			_stagePrepared = string.IsNullOrEmpty(prefabPath);
 		}
 
 		public bool IsCompleted
@@ -49,8 +57,9 @@ namespace AgentBridge.SceneShot
 
 		public static SceneShotTaskExecutor Begin(string payloadPath, TaskContext context)
 		{
-			List<SceneShotItem> items = SceneShotPayloadParser.Parse(File.ReadAllText(payloadPath));
-			return new SceneShotTaskExecutor(context, items);
+			string prefabPath;
+			List<SceneShotItem> items = SceneShotPayloadParser.Parse(File.ReadAllText(payloadPath), out prefabPath);
+			return new SceneShotTaskExecutor(context, items, prefabPath);
 		}
 
 		// A domain reload, a timeout or a crash can leave the temporary window
@@ -83,6 +92,37 @@ namespace AgentBridge.SceneShot
 				return;
 			}
 
+			TickStep();
+
+			// Every way out — last shot, failed shot, cancellation — hands the editor back
+			// in the stage it was in before the task.
+			if (_completed)
+			{
+				RestoreStage();
+			}
+		}
+
+		// The coordinator drops an executor without ticking it again on timeout and
+		// cancellation. The window and the stage are cleaned up here; stage switching is
+		// skipped while assemblies reload, the reloaded editor keeps whatever stage is open.
+		public void Abandon(bool restoreStage)
+		{
+			CloseWindow();
+			if (!restoreStage)
+			{
+				return;
+			}
+
+			int logged = _logs.Count;
+			RestoreStage();
+			for (int i = logged; i < _logs.Count; i++)
+			{
+				Debug.Log("[AgentBridge] " + _logs[i]);
+			}
+		}
+
+		private void TickStep()
+		{
 			if (_context.CancellationToken.IsCancellationRequested)
 			{
 				CloseWindow();
@@ -104,15 +144,71 @@ namespace AgentBridge.SceneShot
 					return;
 				}
 
+				if (!_stagePrepared)
+				{
+					PrepareStage();
+					return;
+				}
+
 				TickPrepare();
 			}
 			catch (Exception ex)
 			{
 				string name = _index < _items.Count ? _items[_index].Name : "<unknown>";
-				_logs.Add("shot '" + name + "': " + ex.GetBaseException().Message);
+				_logs.Add((_stagePrepared ? "shot '" + name + "': " : "prefab '" + _prefabPath + "': ")
+					+ ex.GetBaseException().Message);
 				_status = "runtime_error";
 				CloseWindow();
 				_completed = true;
+			}
+		}
+
+		// Opened a tick ahead of the first shot, so the stage scene and the environment Unity
+		// builds around the prefab exist before the first Scene View window syncs to it.
+		private void PrepareStage()
+		{
+			PrefabStage current = PrefabStageUtility.GetCurrentPrefabStage();
+			_previousStagePath = current != null ? current.assetPath : null;
+
+			PrefabStage stage = AgentSceneManager.OpenPrefab(_prefabPath);
+			_stagePrepared = true;
+
+			if (current != null && current == stage)
+			{
+				_logs.Add("prefab stage " + _prefabPath + " was already open");
+				return;
+			}
+
+			_restoreStage = true;
+			FocusGuard.BeginWindowGuard();
+			_logs.Add("opened prefab stage " + _prefabPath);
+		}
+
+		private void RestoreStage()
+		{
+			if (!_restoreStage)
+			{
+				return;
+			}
+
+			_restoreStage = false;
+
+			try
+			{
+				if (string.IsNullOrEmpty(_previousStagePath))
+				{
+					AgentSceneManager.ClosePrefab();
+					_logs.Add("closed prefab stage " + _prefabPath);
+				}
+				else
+				{
+					AgentSceneManager.OpenPrefab(_previousStagePath);
+					_logs.Add("reopened prefab stage " + _previousStagePath);
+				}
+			}
+			catch (Exception ex)
+			{
+				_logs.Add("prefab stage " + _prefabPath + " was left open: " + ex.GetBaseException().Message);
 			}
 		}
 
@@ -135,9 +231,14 @@ namespace AgentBridge.SceneShot
 				? SceneShotFramer.Frame(item.FrameTarget, item.FrameMargin, item.FrameRotation, item.Orthographic)
 				: item.Pose;
 
+			_window = ScriptableObject.CreateInstance<SceneView>();
+
 			int ppp = Mathf.Max(1, Mathf.RoundToInt(EditorGUIUtility.pixelsPerPoint));
 			Rect workArea = EditorGUIUtility.GetMainWindowPosition();
-			_targetPx = SceneShotResolution.Fit(item.Width, item.Height, ppp, workArea);
+			float headerPoints = StageUtility.GetCurrentStage() is MainStage ? 0f : SceneViewGrabber.StageHeaderPoints(_window);
+			_headerPx = Mathf.CeilToInt(headerPoints * ppp);
+			Rect fitArea = new Rect(workArea.x, workArea.y, workArea.width, Mathf.Max(0f, workArea.height - headerPoints));
+			_targetPx = SceneShotResolution.Fit(item.Width, item.Height, ppp, fitArea);
 
 			if (_targetPx.x != item.Width || _targetPx.y != item.Height)
 			{
@@ -145,7 +246,6 @@ namespace AgentBridge.SceneShot
 					+ " does not fit the screen, reduced to " + _targetPx.x + "x" + _targetPx.y);
 			}
 
-			_window = ScriptableObject.CreateInstance<SceneView>();
 			_window.titleContent = new GUIContent(WindowTitle);
 			_window.drawGizmos = item.Gizmos;
 			_window.showGrid = item.Grid;
@@ -157,7 +257,7 @@ namespace AgentBridge.SceneShot
 					workArea.x + SceneShotResolution.Border / (float)ppp,
 					workArea.y + SceneShotResolution.Border / (float)ppp,
 					_targetPx.x / (float)ppp,
-					_targetPx.y / (float)ppp),
+					(_targetPx.y + _headerPx) / (float)ppp),
 				message => _logs.Add(message));
 			FocusGuard.BeginWindowGuard();
 			_window.Repaint();
@@ -270,7 +370,13 @@ namespace AgentBridge.SceneShot
 
 		private void Write(SceneShotItem item)
 		{
-			Texture2D texture = SceneViewGrabber.Grab(_window, _targetPx.x, _targetPx.y);
+			Texture2D texture = SceneViewGrabber.Grab(_window, _targetPx.x, _targetPx.y + _headerPx);
+			if (_headerPx > 0)
+			{
+				Texture2D full = texture;
+				texture = SceneViewGrabber.CropTop(full, _headerPx);
+				UnityEngine.Object.DestroyImmediate(full);
+			}
 
 			try
 			{

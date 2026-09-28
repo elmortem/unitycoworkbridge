@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reflection;
 using System.Threading;
 using AgentBridge;
+using AgentBridge.SceneShot;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -17,6 +18,7 @@ public class AgentBridgeProbeTests
 	private const string TestScenePath = "Assets/InitTestSceneAgentBridgeSafety.unity";
 	private const string MissingMetaSourcePath = "Assets/AgentBridgeMissingMetaProbe.cs";
 	private const string PrefabProbePath = "Assets/AgentBridgePrefabStageProbe.prefab";
+	private const string SecondPrefabProbePath = "Assets/AgentBridgePrefabStageProbeB.prefab";
 	private const string WatcherLogsKey = SceneDirtyWatcher.OwnerTaskKey + "_Logs";
 
 	private SceneSetup[] _originalSetup;
@@ -47,6 +49,7 @@ public class AgentBridgeProbeTests
 		AssetDatabase.DeleteAsset(SavedScenePath);
 		AssetDatabase.DeleteAsset(TestScenePath);
 		AssetDatabase.DeleteAsset(PrefabProbePath);
+		AssetDatabase.DeleteAsset(SecondPrefabProbePath);
 		string projectRoot = Path.GetDirectoryName(Application.dataPath);
 		File.Delete(Path.Combine(projectRoot, MissingMetaSourcePath));
 		File.Delete(Path.Combine(projectRoot, MissingMetaSourcePath + ".meta"));
@@ -154,6 +157,19 @@ public class AgentBridgeProbeTests
 		EditorSceneManager.MarkSceneDirty(stage.scene);
 		Assert.IsTrue(stage.scene.isDirty);
 		return stage;
+	}
+
+	private static void CreateProbePrefab(string path)
+	{
+		var root = new GameObject("ProbeRoot");
+		var holder = new GameObject("Holder");
+		holder.transform.SetParent(root.transform);
+		GameObject target = GameObject.CreatePrimitive(PrimitiveType.Cube);
+		target.name = "Target";
+		target.transform.SetParent(holder.transform);
+		target.transform.localPosition = new Vector3(3f, 0f, 0f);
+		PrefabUtility.SaveAsPrefabAsset(root, path);
+		UnityEngine.Object.DestroyImmediate(root);
 	}
 
 	private static void AssertGuardrailRejects(string className, string body)
@@ -445,6 +461,121 @@ public static class SafeSceneTransition
 		AssertGuardrailRejects("ModalIsPlayingAssignment", "UnityEditor.EditorApplication.isPlaying = true;");
 		AssertGuardrailRejects("ModalDisplayDialog",
 			"UnityEditor.EditorUtility.DisplayDialog(\"title\", \"message\", \"ok\");");
+	}
+
+	[Test]
+	public void SourceGuardrail_RejectsDirectPrefabStageChange()
+	{
+		AssertGuardrailRejects("DirectOpenPrefab",
+			"UnityEditor.SceneManagement.PrefabStageUtility.OpenPrefab(\"Assets/A.prefab\");");
+		AssertGuardrailRejects("DirectGoToMainStage", "UnityEditor.SceneManagement.StageUtility.GoToMainStage();");
+
+		string source = "public static class DirectOpenPrefabHint\n{\n\tpublic static void Run()\n\t{\n\t\t"
+			+ "UnityEditor.SceneManagement.PrefabStageUtility.OpenPrefab(\"Assets/A.prefab\");\n\t}\n}";
+		CompileResult result = RoslynCompiler.Compile(source, "DirectOpenPrefabHint.cs", "DirectOpenPrefabHint", CancellationToken.None);
+		StringAssert.Contains("AgentSceneManager.OpenPrefab", result.Diagnostics[0].Message);
+	}
+
+	[Test]
+	public void SourceGuardrail_AllowsAgentSceneManagerPrefab()
+	{
+		const string source = @"using AgentBridge;
+public static class SafePrefabStage
+{
+	public static void Run()
+	{
+		AgentSceneManager.OpenPrefab(""Assets/A.prefab"");
+		AgentSceneManager.ClosePrefab();
+	}
+}";
+
+		CompileResult result = RoslynCompiler.Compile(source, "SafePrefabStage.cs", "SafePrefabStage", CancellationToken.None);
+		Assert.IsFalse(result.GuardrailRejected);
+	}
+
+	[Test]
+	public void AgentSceneManager_OpensAndClosesPrefabStage()
+	{
+		CreateProbePrefab(PrefabProbePath);
+
+		PrefabStage stage = AgentSceneManager.OpenPrefab(PrefabProbePath);
+		Assert.IsNotNull(stage);
+		Assert.AreEqual(PrefabProbePath, PrefabStageUtility.GetCurrentPrefabStage().assetPath);
+		Assert.AreSame(stage, AgentSceneManager.OpenPrefab(PrefabProbePath), "Reopening the open prefab must keep its stage.");
+
+		Assert.IsTrue(AgentSceneManager.ClosePrefab());
+		Assert.IsNull(PrefabStageUtility.GetCurrentPrefabStage());
+		Assert.IsFalse(AgentSceneManager.ClosePrefab(), "Closing with no prefab stage open is a no-op.");
+	}
+
+	[Test]
+	public void AgentSceneManager_SavesDirtyStageBeforeSwitchingPrefab()
+	{
+		CreateProbePrefab(SecondPrefabProbePath);
+		OpenDirtyProbePrefabStage();
+
+		AgentSceneManager.OpenPrefab(SecondPrefabProbePath);
+
+		Assert.AreEqual(SecondPrefabProbePath, PrefabStageUtility.GetCurrentPrefabStage().assetPath);
+		GameObject asset = AssetDatabase.LoadAssetAtPath<GameObject>(PrefabProbePath);
+		Assert.IsNotNull(asset.transform.Find("StageChange"), "The left stage must be saved, not prompted for.");
+	}
+
+	[Test]
+	public void AgentSceneManager_ClosePrefabThrowsUnderBlockPolicy()
+	{
+		AgentBridgeSettingsStore.SetSaveDirtyScenes(false);
+		PrefabStage stage = OpenDirtyProbePrefabStage();
+
+		Assert.Throws<InvalidOperationException>(() => AgentSceneManager.ClosePrefab());
+		Assert.AreSame(stage, PrefabStageUtility.GetCurrentPrefabStage(), "Policy Block must leave the stage open.");
+		Assert.IsTrue(stage.scene.isDirty);
+	}
+
+	[Test]
+	public void AgentSceneManager_OpenPrefabRejectsMissingAsset()
+	{
+		Assert.Throws<ArgumentException>(() => AgentSceneManager.OpenPrefab("Assets/AgentBridgeNoSuchPrefab.prefab"));
+		Assert.Throws<ArgumentException>(() => AgentSceneManager.OpenPrefab(SavedScenePath));
+		Assert.IsNull(PrefabStageUtility.GetCurrentPrefabStage());
+	}
+
+	[Test]
+	public void SceneShotPayloadParser_ReadsPrefab()
+	{
+		string prefab;
+		List<SceneShotItem> items = SceneShotPayloadParser.Parse(
+			"{ \"prefab\": \"Assets\\\\Editor.prefab\", \"shots\": [ { \"name\": \"a\", \"frame\": { \"target\": \"Target\" } } ] }",
+			out prefab);
+		Assert.AreEqual(1, items.Count);
+		Assert.AreEqual("Assets/Editor.prefab", prefab);
+
+		SceneShotPayloadParser.Parse("{ \"shots\": [ { \"name\": \"a\", \"frame\": { \"target\": \"T\" } } ] }", out prefab);
+		Assert.IsNull(prefab);
+
+		Assert.Throws<Exception>(() => SceneShotPayloadParser.Parse(
+			"{ \"prefab\": \"Assets/Level.unity\", \"shots\": [ { \"name\": \"a\", \"frame\": { \"target\": \"T\" } } ] }", out prefab));
+		Assert.Throws<Exception>(() => SceneShotPayloadParser.Parse(
+			"{ \"prefab\": \"Assets/A.prefab\", \"shots\": [ { \"name\": \"hud\", \"view\": \"game\" } ] }", out prefab));
+	}
+
+	[Test]
+	public void SceneShotFramer_ResolvesTargetInsideOpenPrefabStage()
+	{
+		CreateProbePrefab(PrefabProbePath);
+		Assert.Throws<Exception>(() => SceneShotFramer.Frame("Target", 1.1f, Vector3.zero, false),
+			"A prefab asset that is not open must not be framable.");
+
+		PrefabStage stage = AgentSceneManager.OpenPrefab(PrefabProbePath);
+		Vector3 expected = stage.prefabContentsRoot.transform.Find("Holder/Target").position;
+		string rootName = stage.prefabContentsRoot.name;
+
+		SceneShotPose byName = SceneShotFramer.Frame("Target", 1.1f, Vector3.zero, false);
+		SceneShotPose byRelativePath = SceneShotFramer.Frame("Holder/Target", 1.1f, Vector3.zero, false);
+		SceneShotPose byRootPath = SceneShotFramer.Frame(rootName + "/Holder/Target", 1.1f, Vector3.zero, false);
+		Assert.Less(Vector3.Distance(expected, byName.Pivot), 0.01f);
+		Assert.Less(Vector3.Distance(expected, byRelativePath.Pivot), 0.01f);
+		Assert.Less(Vector3.Distance(expected, byRootPath.Pivot), 0.01f);
 	}
 
 	[Test]

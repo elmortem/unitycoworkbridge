@@ -16,7 +16,41 @@ namespace AgentBridge.SceneShot
 		private static MethodInfo _grabPixels;
 		private static PropertyInfo _overlayCanvas;
 		private static MethodInfo _setOverlaysEnabled;
+		private static FieldInfo _stageHandlingField;
+		private static PropertyInfo _breadcrumbHeight;
 		private static bool _resolved;
+
+		// Outside the main stage a Scene View draws a breadcrumb bar above its camera. It is
+		// editor chrome, not content, so the shot reserves its height and cuts it off again.
+		// Zero when the internal API is missing: the bar then stays in the image.
+		public static float StageHeaderPoints(SceneView view)
+		{
+			Resolve();
+
+			if (_stageHandlingField == null || _breadcrumbHeight == null)
+			{
+				return 0f;
+			}
+
+			object handling = _stageHandlingField.GetValue(view);
+			if (handling == null)
+			{
+				return 0f;
+			}
+
+			object height = _breadcrumbHeight.GetValue(handling);
+			return height is float points && points > 0f ? points : 0f;
+		}
+
+		// Keeps the bottom rows of a top-down texture, dropping the given number of rows at the top.
+		public static Texture2D CropTop(Texture2D source, int rows)
+		{
+			int height = source.height - rows;
+			Texture2D cropped = new Texture2D(source.width, height, TextureFormat.RGB24, false);
+			cropped.SetPixels(source.GetPixels(0, 0, source.width, height));
+			cropped.Apply();
+			return cropped;
+		}
 
 		public static void HideOverlays(EditorWindow window, Action<string> warn)
 		{
@@ -137,6 +171,14 @@ namespace AgentBridge.SceneShot
 			_overlayCanvas = typeof(EditorWindow).GetProperty(
 				"overlayCanvas",
 				BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+			_stageHandlingField = typeof(SceneView).GetField("m_StageHandling", BindingFlags.Instance | BindingFlags.NonPublic);
+			if (_stageHandlingField != null)
+			{
+				_breadcrumbHeight = _stageHandlingField.FieldType.GetProperty(
+					"breadcrumbHeight",
+					BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+			}
 
 			if (_parentField == null)
 			{

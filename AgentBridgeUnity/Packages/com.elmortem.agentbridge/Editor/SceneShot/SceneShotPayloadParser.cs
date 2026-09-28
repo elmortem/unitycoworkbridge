@@ -13,6 +13,15 @@ namespace AgentBridge.SceneShot
 
 		public static List<SceneShotItem> Parse(string json)
 		{
+			string prefab;
+			return Parse(json, out prefab);
+		}
+
+		// 'prefab' is optional: when set, the executor opens that prefab stage before the first
+		// shot and returns the editor to the previous stage after the last one.
+		public static List<SceneShotItem> Parse(string json, out string prefab)
+		{
+			prefab = null;
 			object parsed = UiJson.Parse(json);
 			if (!(parsed is Dictionary<string, object> doc))
 			{
@@ -33,6 +42,26 @@ namespace AgentBridge.SceneShot
 				}
 
 				items.Add(ParseItem(shot));
+			}
+
+			if (doc.TryGetValue("prefab", out object prefabObj))
+			{
+				if (!(prefabObj is string prefabPath) || string.IsNullOrEmpty(prefabPath)
+					|| !prefabPath.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase))
+				{
+					throw new Exception("'prefab' must be a prefab asset path like \"Assets/Path/Name.prefab\"");
+				}
+
+				// The game view shows the running game, never the prefab stage.
+				foreach (SceneShotItem item in items)
+				{
+					if (item.View == "game")
+					{
+						throw new Exception("shot '" + item.Name + "': 'prefab' cannot be combined with \"view\": \"game\"");
+					}
+				}
+
+				prefab = prefabPath.Replace('\\', '/');
 			}
 
 			return items;

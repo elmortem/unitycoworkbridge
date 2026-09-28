@@ -1,3 +1,5 @@
+using System;
+using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -46,6 +48,62 @@ namespace AgentBridge
 		{
 			SceneSafetyGuard.EnsureSafeForSceneChange();
 			return SceneManager.UnloadSceneAsync(sceneName);
+		}
+
+		// Leaving a dirty prefab stage is what raises Unity's own save prompt, so the stage
+		// switch goes through the same preflight as a scene change: saved under policy Save,
+		// refused with an exception under policy Block. Opening the prefab that is already
+		// open keeps the current stage and its unsaved state.
+		public static PrefabStage OpenPrefab(string prefabPath)
+		{
+			if (string.IsNullOrEmpty(prefabPath))
+			{
+				throw new ArgumentException("prefab path is empty");
+			}
+
+			string normalized = prefabPath.Replace('\\', '/');
+			if (!normalized.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase))
+			{
+				throw new ArgumentException("not a prefab asset path: " + prefabPath);
+			}
+
+			if (AssetDatabase.LoadAssetAtPath<GameObject>(normalized) == null)
+			{
+				throw new ArgumentException("prefab not found: " + prefabPath);
+			}
+
+			PrefabStage current = PrefabStageUtility.GetCurrentPrefabStage();
+			if (current != null && string.Equals(current.assetPath, normalized, StringComparison.OrdinalIgnoreCase))
+			{
+				return current;
+			}
+
+			SceneSafetyGuard.EnsureSafeForSceneChange();
+			PrefabStage stage = PrefabStageUtility.OpenPrefab(normalized);
+			if (stage == null)
+			{
+				throw new InvalidOperationException("prefab stage did not open: " + prefabPath);
+			}
+
+			return stage;
+		}
+
+		public static PrefabStage GetOpenPrefab()
+		{
+			return PrefabStageUtility.GetCurrentPrefabStage();
+		}
+
+		// Returns to the main stage. False when no prefab stage was open.
+		public static bool ClosePrefab()
+		{
+			if (PrefabStageUtility.GetCurrentPrefabStage() == null)
+			{
+				return false;
+			}
+
+			SceneSafetyGuard.EnsureSafeForSceneChange();
+			StageUtility.GoToMainStage();
+			return true;
 		}
 	}
 }
