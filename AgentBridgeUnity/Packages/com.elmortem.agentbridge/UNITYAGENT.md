@@ -59,6 +59,7 @@ agentbridge tests --mode EditMode --assembly MyGame.Tests --wait 600
 - Код выхода `1` и `Status: "test_failure"` → есть упавшие или inconclusive тесты; покажи `Tests.failures` пользователю.
 - `Status: "runtime_error"` и `Tests.aborted == true` → прогон не стартовал или сорвался; `Tests.message` обычно говорит «выйди из Play Mode и перезапусти». Сообщения `ended without RunFinished` и `Unity test run failed:` означают сбой самого Test Framework, а не падение тестов: просто перезапусти прогон.
 - Код выхода `2` → таймаут ожидания клиента, прогон ещё идёт (PlayMode может быть долгим) — дождись через `agentbridge wait <TaskId> --wait <секунды>`.
+- Код выхода `3` с `access_denied` или `io_error` → CLI не смог выполнить файловую операцию. Проверь права проекта/песочницы и блокировки файлов; не удаляй состояние координации. Уже отправленная задача могла продолжить работу: сначала проверь её статус, затем решай о повторе.
 
 ## PlayMode
 

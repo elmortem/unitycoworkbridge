@@ -200,6 +200,8 @@ Every command also accepts `--session <id>` and `--note <text>`, which identify 
 
 Exit codes: `0` success, `1` a terminal task failure including `test_failure`, `no_tests_matched`, `ambiguous_test_filter`, `stale_input` and `evidence_unavailable`, `2` client wait exhausted (the task is still running — retry with `agentbridge wait <TaskId>`), `3` project/bridge unavailable, protocol mismatch, bad usage, or an unconfirmed run of all tests (`all_tests_confirmation_required`).
 
+Filesystem failures return exit `3` with `access_denied` or `io_error` in the selected JSON/human format instead of crashing the CLI. Check the reported filesystem error, project permissions, sandbox access and file locks. Do not delete coordination state to recover access. An I/O failure is not proof that an already submitted task stopped; inspect its status before resubmitting.
+
 `tests --test` accepts an exact full test/fixture name or a unique short name. Every repeated `--test` must match at least one case within the assembly/category filters. An ambiguous name returns `ambiguous_test_filter` with candidate full names; use a full name or `--assembly` to disambiguate. A missing name or a zero-case run returns `no_tests_matched` and exit code `1`. The CLI also rejects an empty `success` response from older packages.
 
 `tests` without any `--test`, `--category` or `--assembly` filter selects the whole suite of the mode. Some projects have very many long-running tests, so the CLI refuses such a run with `all_tests_confirmation_required` (exit code `3`) before contacting the editor. The agent has to repeat the command with `--confirm-all` to confirm that it really needs every test; the bundled skill tells it to do so only with a strong reason.
@@ -417,6 +419,8 @@ Five different kinds of "it stopped", and they are not interchangeable:
 `coord abandon --target-session S --reason "<text>"` remains an explicit emergency override for a still-live session, not routine expiry cleanup. It requires an explicit human decision after that session's writers are confirmed stopped, refuses while that session has a running Unity task, closes only that session's rights, and bumps only its generation. Idle registrations and expired edit grants need no such override.
 
 State lives in `Library/AgentBridge/Coordination/` behind one persistent `transaction.lock`. `coordination-v1` supports an ordinary local physical tree only: UNC paths, network drives and symlinked project roots are refused rather than falsely declared protected. The lock file is never deleted to "recover"; a damaged `state.json` is reported as `coordination_corrupt`, and a missing state next to a live marker as `coordination_recovery_required`.
+
+On Windows, replacing the coordination snapshot does not require permission to change file ACLs (`WRITE_DAC`). Publication stays atomic; if optional metadata cannot be carried over, the temporary file keeps the permissions inherited from the same coordination directory. Real write/delete restrictions and incompatible file locks still cause a failure, preserving the previous snapshot. Brief replacement conflicts are retried within a bounded interval.
 
 The coordinator hands out rights. It is **not** a filesystem sandbox: a tool that ignores the protocol can still write to disk. The defence against that is invalid evidence, below — not a promise to stop every OS write.
 

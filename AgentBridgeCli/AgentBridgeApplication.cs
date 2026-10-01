@@ -6,8 +6,43 @@ internal static class AgentBridgeApplication
 {
 	public static async Task<int> RunAsync(string[] args)
 	{
-		Console.OutputEncoding = System.Text.Encoding.UTF8;
 		var options = CliOptions.Parse(args);
+		try
+		{
+			Console.OutputEncoding = System.Text.Encoding.UTF8;
+			return await RunCommandAsync(options);
+		}
+		catch (UnauthorizedAccessException error)
+		{
+			return WriteIoError("access_denied", error, options);
+		}
+		catch (IOException error)
+		{
+			return WriteIoError("io_error", error, options);
+		}
+	}
+
+	private static int WriteIoError(string code, Exception error, CliOptions options)
+	{
+		var message = $"{error.GetType().Name} (0x{error.HResult:X8}): {error.Message} "
+			+ $"Project: {options.ProjectPath ?? Environment.CurrentDirectory}. "
+			+ "Check filesystem permissions, sandbox access and file locks; do not delete coordination state.";
+		try
+		{
+			return WriteError(code, message, options.Format);
+		}
+		catch (Exception outputError) when (outputError is IOException or UnauthorizedAccessException)
+		{
+			// The caller can close its output pipe while a command is still running. Reporting
+			// that failure through the same pipe must not itself become an unhandled exception.
+			try { Console.Error.WriteLine($"agentbridge: {code}: {message}"); }
+			catch (Exception stderrError) when (stderrError is IOException or UnauthorizedAccessException) { }
+			return 3;
+		}
+	}
+
+	private static async Task<int> RunCommandAsync(CliOptions options)
+	{
 		if (options.Error != null)
 		{
 			return WriteError("bad_usage", options.Error, options.Format);

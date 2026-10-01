@@ -162,7 +162,7 @@ Namespace `AgentBridge.Cli`, file-scoped. Собирается в исполня
 | Файл | Роль |
 |---|---|
 | `Program.cs` | top-level entry, целиком делегирует в `AgentBridgeApplication` |
-| `AgentBridgeApplication.cs` | диспетчер команд: `csharp`, `ui`, `sceneshot`, `compile`, `tests`, `play`, `stopplay`, `release`, `cancel`, `wait`, а также `status`/`doctor`/`coord` |
+| `AgentBridgeApplication.cs` | диспетчер команд: `csharp`, `ui`, `sceneshot`, `compile`, `tests`, `play`, `stopplay`, `release`, `cancel`, `wait`, а также `status`/`doctor`/`coord`; ошибки файловой системы возвращает как `access_denied`/`io_error` с кодом выхода 3, включая закрытый канал вывода |
 | `CliOptions.cs` | разбор аргументов и валидация флагов; неизвестный флаг — ошибка использования, а не позиционный аргумент |
 | `BridgeConstants.cs` | версия протокола, допуски свежести heartbeat, id пакета |
 | `HostPlatform.cs` | определение ОС клиента и хоста (важно для Linux-песочницы агента) |
@@ -425,6 +425,8 @@ package.json       версия и зависимости пакета
 | `CoordinationPathPolicy.cs` | отказ от UNC, сетевых дисков, симлинков и junction'ов |
 | `CoordinationSystemClock.cs` | системная реализация `ICoordinationClock` |
 | `ICoordinationStore.cs`, `ICoordinationTransaction.cs`, `ICoordinationCodec.cs`, `ICoordinationClock.cs` | границы, через которые подключаются адаптеры Unity и CLI |
+
+Атомарная публикация в `CoordinationFileStore` не требует переноса необязательных метаданных/ACL: Windows-песочнице достаточно прав изменения файлов в каталоге координации. Реальные запреты записи не обходятся. `AgentBridgeCli.Tests/IoFailureTests.cs` проверяет замену из песочницы, JSON/human-ошибки доступа, сохранность состояния, повтор после снятия запрета и закрытые stdout/stderr.
 
 ### Адаптеры Unity (вне общей папки, в `Editor/`)
 

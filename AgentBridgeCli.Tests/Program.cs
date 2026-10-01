@@ -21,6 +21,7 @@ try
 	RunSessionOptionTests();
 	RunCoordinationOptionTests();
 	CoordinationLeaseTests.Run(root);
+	await IoFailureTests.RunAsync(root);
 	RunEvidenceFormattingTests();
 	RunContentionFormattingTests();
 	RunWakePolicyTests();

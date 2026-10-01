@@ -245,38 +245,48 @@ namespace AgentBridge.Coordination
 			string temporary = Path.Combine(_root, TempPrefix + _newId() + TempSuffix);
 			byte[] bytes = new UTF8Encoding(false).GetBytes(content);
 
-			using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-			{
-				stream.Write(bytes, 0, bytes.Length);
-				stream.Flush(true);
-			}
-
 			try
 			{
-				Rename(temporary, destination);
+				using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+				{
+					stream.Write(bytes, 0, bytes.Length);
+					stream.Flush(true);
+				}
+
+				for (int attempt = 1; ; attempt++)
+				{
+					try
+					{
+						Rename(temporary, destination);
+						return;
+					}
+					catch (Exception error) when ((error is IOException || error is UnauthorizedAccessException)
+						&& attempt < SharedFile.WriteAttempts)
+					{
+						// Antivirus or a reader can briefly prevent replacement. Keep publication
+						// atomic; never fall back to truncating/copying the live coordination state.
+						System.Threading.Thread.Sleep(SharedFile.RetryDelayMs * attempt);
+					}
+				}
 			}
-			catch (IOException)
+			finally
 			{
-				// One retry: a reader holding the file for a moment is the ordinary cause. If the
-				// rename fails again the exception travels out of Commit and nothing is published.
-				// Copying would write the file in pieces, and half a state is worse than no write.
-				System.Threading.Thread.Sleep(20);
-				Rename(temporary, destination);
+				// Clean only this attempt's temporary, without masking the original write failure.
+				try { File.Delete(temporary); }
+				catch (IOException) { }
+				catch (UnauthorizedAccessException) { }
 			}
 		}
 
-		// Atomic publish, using only what Unity's Mono profile actually implements: Replace when the
-		// destination exists, a plain rename when it does not.
+		// Keep the Unity-compatible atomic replacement and reader sharing semantics. The temporary
+		// lives beside the state and inherits this internal directory's permissions. A sandbox can
+		// grant Modify without WRITE_DAC, so merging the old file's metadata/ACL must be optional.
 		private static void Rename(string temporary, string destination)
 		{
 			if (File.Exists(destination))
-			{
-				File.Replace(temporary, destination, null);
-			}
+				File.Replace(temporary, destination, null, ignoreMetadataErrors: true);
 			else
-			{
 				File.Move(temporary, destination);
-			}
 		}
 
 		// Only our own leftovers, and only in a directory we have already proved is the

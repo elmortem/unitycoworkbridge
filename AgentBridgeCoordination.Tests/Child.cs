@@ -39,6 +39,16 @@ internal static class Child
 
 	public static int Run(string[] args)
 	{
+		try { return RunCore(args); }
+		catch (Exception error)
+		{
+			Console.Error.WriteLine(error);
+			return 1;
+		}
+	}
+
+	private static int RunCore(string[] args)
+	{
 		var role = args[0];
 		var project = args[1];
 		var session = args.Length > 2 ? args[2] : "";

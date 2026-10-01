@@ -79,31 +79,37 @@ internal static class SharedFileScenarios
 			var output = reader.StandardOutput.ReadToEnd().Trim();
 			Expect(reader.ExitCode == 0, "shared reader failed: " + output + " " + reader.StandardError.ReadToEnd());
 			var parts = output.Split('|');
-			Expect(parts.Length == 2 && int.Parse(parts[0]) > 0 && parts[1] == "0",
-				"reads must happen and none may be torn: " + output);
+			Expect(parts.Length == 3 && int.Parse(parts[0]) > 0 && parts[1] == "0" && int.Parse(parts[2]) > 1,
+				"readers must see multiple complete publications while the writer runs, with no torn reads: " + output);
 		}
 
 		Expect(writes > 50, "the writer must actually race the readers: " + writes);
 		covered.Add("C25x");
 	}
 
-	// Child role: reads for a little longer than the writer runs and reports "reads|torn".
+	// Child role: reads for a little longer than the writer runs and reports "reads|torn|versions".
 	public static int Read(string path)
 	{
 		var reads = 0;
 		var torn = 0;
+		var versions = new HashSet<string>();
 		var clock = Stopwatch.StartNew();
 		while (clock.ElapsedMilliseconds < 3_500)
 		{
-			var text = SharedFile.ReadAllText(path);
+			// Like the bridge pollers, tolerate a temporarily unavailable snapshot. ReadAllText
+			// deliberately throws after its bounded retry, including under a saturated writer;
+			// requiring it to always succeed made this test crash even on the unchanged code.
+			// Multiple distinct snapshots below prove that this does not skip concurrent reading.
+			if (!SharedFile.TryReadAllText(path, out var text)) continue;
 			reads++;
 			if (!text.StartsWith("seq:", StringComparison.Ordinal) || !text.EndsWith(Tail, StringComparison.Ordinal))
 			{
 				torn++;
 			}
+			else versions.Add(text.Substring(0, text.IndexOf('|')));
 		}
 
-		Console.Out.WriteLine(reads + "|" + torn);
+		Console.Out.WriteLine(reads + "|" + torn + "|" + versions.Count);
 		return 0;
 	}
 
