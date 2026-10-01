@@ -8,6 +8,10 @@ internal static class IoFailureTests
 	public static async Task RunAsync(string root)
 	{
 		var project = Path.Combine(root, "io-failure");
+		Directory.CreateDirectory(project);
+		project = TestPaths.PhysicalDirectory(project);
+		Check(CoordinationPathPolicy.TryResolveProjectRoot(project, out _, out var pathError),
+			$"I/O fixture must reach file operations through a supported physical path: {pathError}");
 		Directory.CreateDirectory(Path.Combine(project, "Assets"));
 		Directory.CreateDirectory(Path.Combine(project, "Packages"));
 		Directory.CreateDirectory(Path.Combine(project, "ProjectSettings"));
@@ -64,8 +68,9 @@ internal static class IoFailureTests
 			{
 				var locked = await Invoke(denied);
 				using var json = JsonDocument.Parse(locked.Output);
-				Check(locked.Exit == 3 && json.RootElement.GetProperty("code").GetString() is "io_error" or "access_denied",
-					"an incompatible reader must cause a structured failure, never a torn write or a crash");
+				Check(locked.Exit == 3 && json.RootElement.TryGetProperty("code", out var lockedCode)
+					&& lockedCode.ValueKind == JsonValueKind.String && lockedCode.GetString() is "io_error" or "access_denied",
+					$"an incompatible reader must cause a structured failure; exit={locked.Exit}, reply={locked.Output}");
 			}
 			Check(before.SequenceEqual(File.ReadAllBytes(state)), "a locked publication must preserve the previous state");
 			Check((await Invoke(denied)).Exit == 0, "retry after restoring access must succeed without state recovery");
@@ -88,16 +93,20 @@ internal static class IoFailureTests
 	private static async Task ExpectError(string[] arguments, string code, bool human)
 	{
 		var result = await Invoke(arguments.Concat(new[] { "--format", human ? "human" : "json" }).ToArray());
-		Check(result.Exit == 3, "filesystem errors must return exit 3");
+		var context = $"expected={code}, exit={result.Exit}, reply={result.Output}";
+		Check(result.Exit == 3, "filesystem errors must return exit 3: " + context);
 		if (human)
 		{
-			Check(result.Output.StartsWith($"agentbridge: error ({code})"), "human output must name the failure");
+			Check(result.Output.StartsWith($"agentbridge: error ({code})"), "human output must name the failure: " + context);
 		}
 		else
 		{
 			using var json = JsonDocument.Parse(result.Output);
-			Check(!json.RootElement.GetProperty("ok").GetBoolean(), "failed writes must never look successful");
-			Check(json.RootElement.GetProperty("code").GetString() == code, "JSON output must name the failure");
+			Check(json.RootElement.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.False,
+				"failed writes must report ok=false: " + context);
+			Check(json.RootElement.TryGetProperty("code", out var actualCode)
+				&& actualCode.ValueKind == JsonValueKind.String && actualCode.GetString() == code,
+				"JSON output must name the failure: " + context);
 		}
 	}
 

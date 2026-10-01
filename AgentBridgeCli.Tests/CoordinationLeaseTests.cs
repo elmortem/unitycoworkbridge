@@ -10,7 +10,7 @@ internal static class CoordinationLeaseTests
 		Directory.CreateDirectory(project);
 		// macOS temporary paths may contain /var -> /private/var. The fixture needs a
 		// physical project path so these tests reach the lease contract, not path rejection.
-		project = PhysicalDirectory(project);
+		project = TestPaths.PhysicalDirectory(project);
 		Check(CoordinationPathPolicy.TryResolveProjectRoot(project, out _, out var pathError),
 			$"lease fixture must use a supported physical path: {pathError}");
 		string bridge = Path.Combine(project, "Library", "AgentBridge");
@@ -63,21 +63,4 @@ internal static class CoordinationLeaseTests
 		if (!condition) throw new InvalidOperationException(message);
 	}
 
-	private static string PhysicalDirectory(string path)
-	{
-		var directory = new DirectoryInfo(path);
-		if (directory.Parent == null) return directory.FullName;
-		var physical = new DirectoryInfo(Path.Combine(PhysicalDirectory(directory.Parent.FullName), directory.Name));
-		try
-		{
-			if ((physical.Attributes & FileAttributes.ReparsePoint) != 0)
-				return physical.ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? physical.FullName;
-		}
-		catch (UnauthorizedAccessException)
-		{
-			// A sandbox can expose the temp directory without exposing ancestor metadata.
-			// Keep that ancestor spelling; the fixture still passes the production path check.
-		}
-		return physical.FullName;
-	}
 }

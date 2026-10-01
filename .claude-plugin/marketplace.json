@@ -1,0 +1,16 @@
+{
+	"$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+	"name": "unity-bridge-local",
+	"description": "Private marketplace carrying the unity bridge plugin.",
+	"owner": {
+		"name": "elmortem",
+		"email": "elmortem@gmail.com"
+	},
+	"plugins": [
+		{
+			"name": "unity-bridge",
+			"source": "./unity-bridge-plugin",
+			"category": "development"
+		}
+	]
+}
