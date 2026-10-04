@@ -470,6 +470,7 @@ ProjectSettings/CoworkBridge.json            настройки предыдущ
 | `TaskQueueSnapshotTests.cs`, `TaskQueueWindowTests.cs` | наблюдение очереди и её окно |
 | `TestCancellationPolicyTests.cs` | политика отмены задач |
 | `UnfocusedWindowTests.cs` | показ окна без захвата фокуса |
+| `UiTextWrappingTests.cs` | переключение переноса TMP через декларацию и сохранение режима при отсутствии `wrap`; совместим со старым и новым API |
 
 ### PlayMode-тесты (`Assets/Tests/PlayMode/`)
 

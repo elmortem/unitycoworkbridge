@@ -13,6 +13,27 @@ namespace AgentBridge.Ui
 	// resolved here — they go into the queue and are applied after the whole task.
 	public static class UiComponentSync
 	{
+		// TMP moved from a bool to an enum independently of the editor version.
+		// Resolve the public setter once, without a compile-time reference to either API:
+		// recent TMP marks the old property Obsolete(error: true).
+		private static readonly Action<TMP_Text, bool> SetWordWrapping = CreateWordWrappingSetter();
+
+		private static Action<TMP_Text, bool> CreateWordWrappingSetter()
+		{
+			var mode = typeof(TMP_Text).GetProperty("textWrappingMode");
+			if (mode != null)
+			{
+				object normal = Enum.Parse(mode.PropertyType, "Normal");
+				object noWrap = Enum.Parse(mode.PropertyType, "NoWrap");
+				return (text, wrap) => mode.SetValue(text, wrap ? normal : noWrap);
+			}
+
+			var legacy = typeof(TMP_Text).GetProperty("enableWordWrapping");
+			if (legacy == null)
+				throw new MissingMemberException(typeof(TMP_Text).FullName, "textWrappingMode / enableWordWrapping");
+			return (text, wrap) => legacy.SetValue(text, wrap);
+		}
+
 		public static void Sync(GameObject go, Dictionary<string, object> comp, UiRefQueue refs, List<string> log)
 		{
 			string typeName = (string)comp["type"];
@@ -69,7 +90,7 @@ namespace AgentBridge.Ui
 			if (comp.TryGetValue("align", out object align))
 				text.alignment = (TextAlignmentOptions)Enum.Parse(typeof(TextAlignmentOptions), (string)align, true);
 			if (comp.TryGetValue("wrap", out object wrap))
-				text.enableWordWrapping = UiValue.B(wrap);
+				SetWordWrapping(text, UiValue.B(wrap));
 
 			if (comp.TryGetValue("font", out object font))
 			{

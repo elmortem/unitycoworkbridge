@@ -1,7 +1,8 @@
 {
     "name": "AgentBridge.ProbeTests",
     "references": [
-        "AgentBridge"
+        "AgentBridge",
+        "Unity.TextMeshPro"
     ],
     "includePlatforms": ["Editor"],
     "excludePlatforms": [],

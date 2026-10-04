@@ -147,15 +147,17 @@ internal static class ObserverHubScenarios
 
 		using (var holder = new ValidationInputMonitor(new[] { assets }, Array.Empty<string>()))
 		{
-			var closed = new ValidationInputMonitor(new[] { assets }, Array.Empty<string>());
+			using var closed = new ValidationInputMonitor(new[] { assets }, Array.Empty<string>());
 			File.WriteAllText(script, "changed once");
 			Expect(WaitUntil(() => closed.EventCount > 0, 5000), "the window counts while it is open");
-			int counted = closed.EventCount;
 			closed.Dispose();
+			// A trailing event before Dispose is legitimate; compare with the closed count.
+			int counted = closed.EventCount;
 
-			int holderBefore = holder.EventCount;
-			File.WriteAllText(script, "changed twice");
-			Expect(WaitUntil(() => holder.EventCount > holderBefore, 5000), "the shared watcher still serves the open window");
+			string afterClose = Path.Combine(assets, "AfterClose.cs");
+			File.WriteAllText(afterClose, "changed after close");
+			Expect(WaitUntil(() => holder.Paths.Any(path => Path.GetFileName(path) == "AfterClose.cs"), 5000),
+				"the shared watcher still serves the open window");
 			Thread.Sleep(200);
 			Expect(closed.EventCount == counted, "a closed window counts nothing more");
 			Expect(closed.Observed, "and still reports the verdict it closed with");

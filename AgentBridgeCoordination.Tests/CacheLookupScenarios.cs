@@ -25,6 +25,7 @@ internal static class CacheLookupScenarios
 			ExcludedAndIgnoredAreNotInputs(root);
 			AnUnreachableRootIsUnknown(root);
 			AClosedWitnessCountsNothing(root);
+			AnInFlightEventCannotChangeAClosedWitness(root);
 			AMissIsRememberedUntilSomethingChanges();
 			covered.Add("C24_cache_lookup");
 		}
@@ -122,17 +123,55 @@ internal static class CacheLookupScenarios
 		var script = Path.Combine(assets, "Thing.cs");
 		using var holder = new ValidationInputMonitor(new[] { assets }, Array.Empty<string>());
 
-		var witness = Open(assets, Array.Empty<string>(), null);
+		using var witness = Open(assets, Array.Empty<string>(), null);
 		File.WriteAllText(script, "changed once");
 		Expect(WaitUntil(() => witness.Monitor.EventCount > 0, 5000), "an open witness counts changes");
-		var counted = witness.Monitor.EventCount;
 		witness.Dispose();
+		// Events may still arrive between the first observation and Dispose. Only the count
+		// after Dispose returns is frozen; sampling it earlier races the watcher on every OS.
+		var counted = witness.Monitor.EventCount;
 
-		var holderBefore = holder.EventCount;
-		File.WriteAllText(script, "changed twice");
-		Expect(WaitUntil(() => holder.EventCount > holderBefore, 5000), "the shared watcher still serves the open window");
+		var afterClose = Path.Combine(assets, "AfterClose.cs");
+		File.WriteAllText(afterClose, "changed after close");
+		Expect(WaitUntil(() => holder.Paths.Any(path => Path.GetFileName(path) == "AfterClose.cs"), 5000),
+			"the shared watcher still serves the open window");
 		Thread.Sleep(200);
 		Expect(witness.Monitor.EventCount == counted, "a closed witness counts nothing more");
+	}
+
+	// Reproduce a callback already inside Record when the witness closes, without depending on
+	// filesystem event timing. Filtering happens outside the monitor lock, so pause it there.
+	private static void AnInFlightEventCannotChangeAClosedWitness(string project)
+	{
+		var assets = NewTree(project, "in-flight-close");
+		var latePath = Path.Combine(assets, "Delayed.cs");
+		using var entered = new ManualResetEventSlim();
+		using var resume = new ManualResetEventSlim();
+		using var witness = Open(assets, Array.Empty<string>(), path =>
+		{
+			if (path != latePath) return false;
+			entered.Set();
+			if (!resume.Wait(5000)) throw new InvalidOperationException("the paused callback must be released");
+			return false;
+		});
+		var callback = Task.Run(() => witness.Monitor.Record(latePath));
+		try
+		{
+			Expect(entered.Wait(5000), "the callback must enter the open window before it closes");
+			witness.Dispose();
+			var counted = witness.Monitor.EventCount;
+			var paths = witness.Monitor.Paths;
+			resume.Set();
+			Expect(callback.Wait(5000), "the in-flight callback must finish after close");
+			witness.Monitor.Record(Path.Combine(assets, "DeliveredAfterClose.cs"));
+			Expect(witness.Monitor.EventCount == counted, "in-flight and later callbacks must not change the closed count");
+			Expect(witness.Monitor.Paths.SequenceEqual(paths), "in-flight and later callbacks must not change the closed paths");
+		}
+		finally
+		{
+			resume.Set();
+			Expect(callback.Wait(5000), "the controlled callback must finish before its signals are disposed");
+		}
 	}
 
 	// The memo never answers for the digest — it answers for the miss, and only while the two cheap
