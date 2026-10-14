@@ -176,7 +176,7 @@ Namespace `AgentBridge.Cli`, file-scoped. Собирается в исполня
 |---|---|
 | `BridgeClient.cs` | приём задачи через диспетчер, ограниченное ожидание, отдельный EditorState |
 | `QueueClient.cs` | файловые запросы/ответы и скрытый автозапуск отдельного queue-server |
-| `QueueRuntime.cs` | исполняемый снимок CLI по хешу содержимого в системном временном каталоге `AgentBridgeQueueRuntime`; сервер не блокирует обновление/пересборку CLI на Windows. Новый клиент обновляет `launch.json`, а сервер уступает владение между транзакциями при смене runtime |
+| `QueueRuntime.cs` | исполняемый снимок CLI по хешу содержимого в системном временном каталоге `AgentBridgeQueueRuntime`; сервер не блокирует обновление/пересборку CLI на Windows. Сравнение runtime разрешает ссылки во всех предках пути (включая `/var` → `/private/var` на macOS); при запуске через `dotnet` сравнивает путь CLI-сборки. Новый клиент обновляет `launch.json`, а сервер уступает владение между транзакциями при смене runtime |
 | `QueueServer.cs` | один процесс на физический проект, владение очередью и мутациями координации |
 | `QueueTaskStore.cs`, `QueueTask.cs` | устойчивые запросы/payload, claims, отмена, порядок, учёт результатов и будущих batch-шагов |
 | `QueueCommands.cs` | `queue list`, `status <id>`, `cancel <id>`, `move <id> [before-id]`, `shutdown` |
@@ -498,7 +498,7 @@ ProjectSettings/CoworkBridge.json            настройки предыдущ
 
 | Проект | Что покрывает | Как запустить |
 |---|---|---|
-| `AgentBridgeCli.Tests/` | разбор флагов, форматирование результата, политика пробуждения, клиентская логика | `dotnet run --project AgentBridgeCli.Tests/AgentBridgeCli.Tests.csproj -c Release` |
+| `AgentBridgeCli.Tests/` | разбор флагов, форматирование результата, политика пробуждения, клиентская логика; `QueueRuntimeTests.cs` — реальные серверы со ссылкой в предках runtime, автозапуск из временного каталога через ссылку, запуск через `dotnet` и передача владения при смене runtime | `dotnet run --project AgentBridgeCli.Tests/AgentBridgeCli.Tests.csproj -c Release` |
 | `AgentBridgeCoordination.Tests/` | coordination-v1 и evidence-v1; `Harness.cs` — стенд, `Child.cs`/`BatchHost.cs` — дочерние процессы для гонок и обрывов, `Scenarios.cs`/`BatchScenarios.cs`/`HashingScenarios.cs`/`ObserverHubScenarios.cs`/`StatManifestScenarios.cs`/`CacheLookupScenarios.cs`/`SharedFileScenarios.cs` — сценарии | `dotnet run --project AgentBridgeCoordination.Tests/AgentBridgeCoordination.Tests.csproj -c Release -- --group all` (также `--group state\|store`) |
 | `AgentBridgeCompile.Tests/` | executor, отпечаток и кэш компиляции с управляемыми compilation callbacks (`Stubs.cs`) | `dotnet run --project AgentBridgeCompile.Tests -c Release` |
 | `AgentBridgeRecovery.Tests/` | восстановление сцен: повторный вход, ожидание cleanup, повторная финализация (`EditorStubs.cs`) | `dotnet run --project AgentBridgeRecovery.Tests -c Release` |

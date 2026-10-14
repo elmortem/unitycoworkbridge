@@ -7,6 +7,7 @@ var root = Path.Combine(Path.GetTempPath(), "AgentBridgeCliTests_" + Guid.NewGui
 try
 {
 	Directory.CreateDirectory(root);
+	await QueueRuntimeTests.RunAsync(root);
 	RunProjectDiscoveryTests(root);
 	RunTaskIdTests();
 	Expect(CliOptions.Parse(new[] { "compile", "--fresh" }).Error != null, "fresh compile must require a diagnostic reason before submitting");

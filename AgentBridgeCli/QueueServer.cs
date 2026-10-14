@@ -51,15 +51,21 @@ internal sealed class QueueServer
 		Directory.CreateDirectory(Path.Combine(_root, "Requests"));
 		_lastUse = Environment.TickCount64;
 		long lastBeat = 0, lastSync = 0, lastCleanup = 0;
+		string? lastLaunchJson = null;
 		while (!_stop)
 		{
 			long now = Environment.TickCount64;
 			// A newer CLI publishes its immutable runtime before sending a request. Yield
 			// ownership between transactions; its client restarts us without losing the queue.
-			if (SharedFile.TryReadAllText(Path.Combine(_root, "launch.json"), out var launchJson))
+			if (SharedFile.TryReadAllText(Path.Combine(_root, "launch.json"), out var launchJson) && launchJson != lastLaunchJson)
 			{
 				var launch = JsonSerializer.Deserialize<QueueLaunch>(launchJson, QueueClient.Json);
-				if (launch != null && !string.Equals(launch.Executable, Environment.ProcessPath, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)) break;
+				if (launch != null && !QueueRuntime.IsCurrent(launch))
+				{
+					Log("queue_runtime_changed", "", "", launch.Executable);
+					break;
+				}
+				lastLaunchJson = launchJson;
 			}
 			if (now - lastBeat >= 1000)
 			{

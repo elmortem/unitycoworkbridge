@@ -141,7 +141,7 @@ After installation, just ask Claude to do something inside the Unity Editor (e.g
 
 Submission, task inspection, ordering, cancellation and `coord` commands do not require a readable Unity status or heartbeat. A successful admission freezes the request and payload in `Library/AgentBridge/Queue/` before acknowledging it. The dispatcher restarts automatically after an idle shutdown or process exit; accepted tasks retain their IDs. Execution claims check the same durable request/payload hash. An unresolved execution is never replayed merely because a heartbeat became stale.
 
-The dispatcher runs from a content-hashed copy of the CLI under the system temporary directory `AgentBridgeQueueRuntime`, so it does not lock the installed CLI during an update or rebuild on Windows. A newer client updates `launch.json`; the server hands over ownership between transactions when the runtime changes.
+The dispatcher runs from a content-hashed copy of the CLI under the system temporary directory `AgentBridgeQueueRuntime`, so it does not lock the installed CLI during an update or rebuild on Windows. Runtime paths resolve directory and file links, including macOS temporary-directory aliases such as `/var` and `/private/var`. A newer client updates `launch.json`; the server hands over ownership between transactions when the runtime changes. With a `dotnet` launcher, the CLI assembly identifies the runtime.
 
 ```bash
 agentbridge compile --wait 0
