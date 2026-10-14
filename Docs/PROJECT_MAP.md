@@ -12,26 +12,23 @@
 
 ## 1. Что это за система
 
-Unity Agent Bridge соединяет ИИ-агента с **живым** Unity Editor. Агент не запускает Unity в batch —
-он кладёт задачу в очередь уже открытого редактора, пакет внутри редактора выполняет её на главном
-потоке и возвращает логи, диагностику и артефакты.
+Unity Agent Bridge принимает задачи независимо от состояния Unity. Агентский CLI автоматически
+запускает скрытый внешний диспетчер очереди; он принимает, показывает, отменяет и переставляет
+задания при занятой, зависшей и закрытой Unity. Пакет в интерактивном редакторе подтверждает начало
+исполнения, выполняет Unity-операции на главном потоке и возвращает логи, диагностику и артефакты.
 
-Обмен идёт **через файлы на диске**, а не через сокет: агентский CLI и редактор — два независимых
-процесса, каждый из которых может упасть или перезапуститься (domain reload), поэтому весь протокол
-устроен как журнал и атомарные записи в `Library/AgentBridge/`.
+Обмен идёт **через файлы на диске**: краткоживущие клиенты, внешний `queue-server` и Unity имеют
+разные жизненные циклы. Диспетчер единолично меняет очередь и координацию; принятые запросы,
+подтверждения запуска, намерения отмены и результаты сохраняются в `Library/AgentBridge/Queue/`.
 
 ```
-┌──────────────┐   task.json + payload   ┌──────────────────────┐
-│  агент / CLI │ ──────────────────────► │ Library/AgentBridge/ │
-│ `agentbridge`│ ◄────────────────────── │  Inbox / Journal     │
-└──────────────┘   record.json + логи    └──────────────────────┘
-                                                    ▲
-                                                    │ тик редактора
-                                          ┌─────────┴──────────┐
-                                          │  Unity Editor      │
-                                          │  пакет AgentBridge │
-                                          │  Roslyn в памяти   │
-                                          └────────────────────┘
+агент / CLI ── запросы / ответы ── queue-server (отдельный процесс)
+                                      │
+                         Library/AgentBridge/Queue/
+                                      │ подтверждение запуска
+                             Inbox / Journal
+                                      │
+                             Unity Editor (пакет)
 ```
 
 ### Три версионируемых компонента
@@ -42,7 +39,7 @@ Unity Agent Bridge соединяет ИИ-агента с **живым** Unity 
 | Unity-пакет | `AgentBridgeUnity/Packages/com.elmortem.agentbridge/` | `version` в `package.json` | UPM по git URL |
 | Плагин агента | `unity-bridge-plugin/` | `version` в `.claude-plugin/plugin.json` | ZIP закоммичен в репозиторий |
 
-Каталог `Editor/Coordination/` физически лежит в пакете, но **компилируется и CLI** (через
+Каталоги `Editor/Coordination/` и `Editor/Queueing/` физически лежат в пакете, но **компилируются и CLI** (через
 `<Compile Include>` в csproj). Правка там задевает оба компонента — обе версии поднимаются.
 
 ---
@@ -69,21 +66,24 @@ scripts/                           Сборка плагина, вендорин
 
 Понимание этой цепочки объясняет, зачем существует большинство файлов пакета.
 
-1. **Постановка.** CLI (`BridgeClient`) проверяет здоровье моста (`BridgeInspector`), генерирует id
-   (`TaskIdGenerator`), пишет `Inbox/<id>.task.json` и, если нужно, файл полезной нагрузки
-   (`<id>.cs`, `<id>.ui.json`, `<id>.sceneshot.json`).
-2. **Пробуждение редактора.** Уснувший редактор не тикает. `WakePolicy` решает, что делать,
-   `EditorWaker` шлёт `WM_NULL`, а внутри редактора `EditorTickPump` + `BackgroundTickTimer`
-   продолжают качать тик даже без фокуса.
-3. **Приём.** `TaskCoordinator` на тике сканирует `Inbox`, читает запросы (`TaskRequestReader`),
-   упорядочивает (`TaskQueueOrder`), выбирает следующую с учётом сессии
-   (`AgentSessionScheduler`) и координации (`CoordinationGate`).
-4. **Преflight.** Проверки перед исполнением: безопасность сцен (`SceneSafetyGuard`,
+1. **Постановка.** `BridgeClient` создаёт id и передаёт запрос через `QueueClient` внешнему
+   `QueueServer`. `QueueTaskStore` сохраняет запрос и payload до ответа о приёме. Здоровье Unity
+   не является условием постановки; все TaskIds пакета доступны сразу после `coord submit`.
+2. **Допуск исполнителя.** Диспетчер публикует `Inbox/<id>.task.json` и payload для совместимого
+   редактора с `independent-queue-v1`. Старый пакет оставляет новые задачи в независимой очереди.
+   `EditorTickPump` и `BackgroundTickTimer` поддерживают тики редактора; зависание не блокирует
+   внешние операции очереди.
+3. **Подтверждение запуска.** `TaskCoordinator` читает `Inbox`, выбирает задачу с учётом сессий
+   и координации и через `CoordinationGate` / `QueueEditorAdapter` получает подтверждение
+   диспетчера для тех же принятых байтов. Оно сериализовано с отменой: снятая до запуска задача
+   не исполняется. Unity не держит блокировку диспетчера или транзакцию координации.
+4. **Проверки перед исполнением.** Безопасность сцен (`SceneSafetyGuard`,
    `SceneDirtyWatcher`), плеймод (`PlaySessionArbiter`, `UnsanctionedPlayGuard`), валидность
    исходников проекта (`SourceImportVerifier`), запрещённые API в скрипте (`SourceGuardrail`).
 5. **Кэш.** Для `compile` и `tests` сначала ищется готовый результат по отпечатку входов
    (`CompileFingerprint`/`CompileCacheStore`, `TestFingerprint`/`TestCacheQuery`), выдаёт его
-   `CachedResultServer` без запуска редактора. Дорогая часть — не поиск, а доказательство: пока
+   `CachedResultServer` без повторного исполнения задачи. Кэш и присоединение тоже получают
+   подтверждение диспетчера; проверки достоверности сохраняются. Дорогая часть — не поиск, а доказательство: пока
    дешёвый отпечаток источников не назвал ни одной записи-кандидата, `CacheLookupWitness` не
    открывается и дайджест входов не считается вовсе. Появился кандидат — свидетели открываются один
    раз за скан, и выдача `tests` требует чистого stat-манифеста вокруг обоих замеров дайджеста, а не
@@ -106,17 +106,18 @@ scripts/                           Сборка плагина, вендорин
    `EvidenceRecord`.
 8. **Завершение.** `TaskJournal` атомарно пишет `Journal/<id>.json`, артефакты уходят в
    `Artifacts/<id>/`, `BridgeStatusWriter` обновляет `status.json`.
-9. **Выдача.** CLI дожидается записи журнала и печатает результат (`TaskResultFormatter`) в
-   `json` или `human`.
+9. **Выдача.** Диспетчер сохраняет результат в своём учёте, CLI печатает его в `json` или `human`.
+   `--wait 0` возвращает принятие с `Accepted: true`; положительный бюджет при истечении оставляет
+   тот же Id и возвращает код 2, `Accepted: true`, команду продолжения и `EditorState`.
 
 ### Коды выхода CLI
 
 | Код | Значение |
 |---|---|
-| `0` | успех |
+| `0` | успех операции/исполнения или принятие задачи с `--wait 0` |
 | `1` | терминальный отказ задачи (`test_failure`, `stale_input`, `evidence_unavailable`, `no_tests_matched`, `ambiguous_test_filter`) |
-| `2` | клиентское ожидание исчерпано (задача может продолжать идти) |
-| `3` | проект/мост недоступны или ошибка использования, включая неподтверждённый прогон всех тестов (`all_tests_confirmation_required`) |
+| `2` | бюджет ожидания исчерпан; задача принята, сохранена и ожидает/исполняется |
+| `3` | проект/диспетчер недоступен, файловая ошибка или ошибка использования; health-команды отдельно отражают недоступность редактора |
 
 ---
 
@@ -126,6 +127,8 @@ scripts/                           Сборка плагина, вендорин
 
 ```
 <project>/Library/AgentBridge/          рабочий корень (переживает всё, кроме чистки Library)
+	Queue/                              внешний диспетчер: Tasks/, Requests/, Replies/, server.lock,
+	                                    server.json, heartbeat, launch.json, order.txt
 	Inbox/                              <id>.task.json + payload (.cs / .ui.json / .sceneshot.json)
 	Journal/                            <id>.json — записи результатов задач
 	Artifacts/<id>/                     скриншоты, дампы тестов, прочие файлы задачи
@@ -162,7 +165,7 @@ Namespace `AgentBridge.Cli`, file-scoped. Собирается в исполня
 | Файл | Роль |
 |---|---|
 | `Program.cs` | top-level entry, целиком делегирует в `AgentBridgeApplication` |
-| `AgentBridgeApplication.cs` | диспетчер команд: `csharp`, `ui`, `sceneshot`, `compile`, `tests`, `play`, `stopplay`, `release`, `cancel`, `wait`, а также `status`/`doctor`/`coord`; ошибки файловой системы возвращает как `access_denied`/`io_error` с кодом выхода 3, включая закрытый канал вывода |
+| `AgentBridgeApplication.cs` | диспетчер команд: `csharp`, `ui`, `sceneshot`, `compile`, `tests`, `play`, `stopplay`, `release`, `cancel`, `wait`, а также `status`/`doctor`/`coord`/`queue` и внутренний `queue-server`; ошибки файловой системы возвращает как `access_denied`/`io_error` с кодом выхода 3, включая закрытый канал вывода |
 | `CliOptions.cs` | разбор аргументов и валидация флагов; неизвестный флаг — ошибка использования, а не позиционный аргумент |
 | `BridgeConstants.cs` | версия протокола, допуски свежести heartbeat, id пакета |
 | `HostPlatform.cs` | определение ОС клиента и хоста (важно для Linux-песочницы агента) |
@@ -171,7 +174,12 @@ Namespace `AgentBridge.Cli`, file-scoped. Собирается в исполня
 
 | Файл | Роль |
 |---|---|
-| `BridgeClient.cs` | запись задачи в `Inbox`, ожидание записи в `Journal`, обработка обрывов |
+| `BridgeClient.cs` | приём задачи через диспетчер, ограниченное ожидание, отдельный EditorState |
+| `QueueClient.cs` | файловые запросы/ответы и скрытый автозапуск отдельного queue-server |
+| `QueueRuntime.cs` | исполняемый снимок CLI по хешу содержимого в системном временном каталоге `AgentBridgeQueueRuntime`; сервер не блокирует обновление/пересборку CLI на Windows. Новый клиент обновляет `launch.json`, а сервер уступает владение между транзакциями при смене runtime |
+| `QueueServer.cs` | один процесс на физический проект, владение очередью и мутациями координации |
+| `QueueTaskStore.cs`, `QueueTask.cs` | устойчивые запросы/payload, claims, отмена, порядок, учёт результатов и будущих batch-шагов |
+| `QueueCommands.cs` | `queue list`, `status <id>`, `cancel <id>`, `move <id> [before-id]`, `shutdown` |
 | `TaskRequest.cs` | DTO запроса задачи (то, что попадает в `<id>.task.json`) |
 | `TaskIdGenerator.cs` | генерация стабильных id задач |
 | `QueuedTaskStatus.cs` | клиентское представление задачи в очереди |
@@ -204,7 +212,7 @@ Namespace `AgentBridge.Cli`, file-scoped. Собирается в исполня
 
 | Файл | Роль |
 |---|---|
-| `CoordinationCommands.cs` | группа `coord` (`request`/`submit`, `wait`, `ok`, `end`, …); диспетчеризуется **до** требования живого редактора |
+| `CoordinationCommands.cs` | группа `coord`: чтение/ожидание и мутации через диспетчер, без требования живой Unity или её capabilities для приёма |
 | `CoordinationJsonCodec.cs` | строгий разбор scope/plan через System.Text.Json (реализация `ICoordinationCodec`) |
 | `CoordinationResultFormatter.cs` | вывод результатов координации |
 
@@ -218,6 +226,7 @@ asmdef `AgentBridge` собирается под `includePlatforms: ["Editor"]`.
 ```
 Editor/            вся кодовая база пакета
 	Coordination/  общая с CLI папка (без UnityEngine)
+	Queueing/      общий с CLI транспорт независимой очереди (без UnityEngine)
 	SceneShot/     скриншоты сцены
 	Ui/            декларативная вёрстка uGUI
 Roslyn~/           вендоренный Roslyn; тильда прячет папку от импорта Unity
@@ -230,10 +239,12 @@ package.json       версия и зависимости пакета
 | Файл | Роль |
 |---|---|
 | `AgentBridge.cs` | bootstrap: подписка на тик редактора, поднятие подсистем |
-| `TaskCoordinator.cs` | самый крупный файл: очередь, выбор задачи, preflight, исполнение, финализация |
+| `TaskCoordinator.cs` | выбор принятой задачи, подтверждение запуска, preflight, исполнение и финализация Unity |
+| `QueueEditorAdapter.cs` | неблокирующие сообщения диспетчеру: claim, координация, отмена, перестановка и возврат в очередь |
+| `Queueing/` | общий с CLI файловый транспорт и DTO протокола independent-queue-v1 |
 | `TaskCoordinator.Queue.cs` | вторая половина partial-класса: работа с очередью |
 | `TaskQueueSnapshot.cs` | **наблюдение** очереди без побочных эффектов (не допускает и не отклоняет работу) |
-| `TaskQueueOrder.cs` | ручной порядок очереди, переживающий domain reload через `SessionState` |
+| `TaskQueueOrder.cs` | чтение устойчивого ручного порядка очереди из Queue/order.txt |
 | `AgentSessionScheduler.cs` | ротация между агентскими сессиями |
 | `SchedulerState.cs` / `SchedulerStateStore.cs` | состояние ротации и его персист |
 | `SessionContext.cs` / `SessionContextSwitcher.cs` | сохранение и восстановление контекста сессии (сцены) при переключении; анонимная сессия контекста не имеет |
@@ -433,8 +444,8 @@ package.json       версия и зависимости пакета
 | Файл | Роль |
 |---|---|
 | `CoordinationUnityCodec.cs` | кодек на `JsonUtility` (в CLI его место занимает `CoordinationJsonCodec`) |
-| `CoordinationEditorAdapter.cs` | одна неблокирующая попытка блокировки за тик, подтверждение окна |
-| `CoordinationGate.cs` | единственный вход для запуска, кэша и присоединения задач под координацией |
+| `CoordinationEditorAdapter.cs` | чтение снимка и неблокирующие запросы диспетчеру; подтверждение свободного редактора для окна |
+| `CoordinationGate.cs` | подтверждение у диспетчера перед запуском, кэшем и присоединением; учёт координационного шага |
 | `CoordinationBatchPump.cs` | публикация шагов сохранённого пакета, сверка журнала после обрывов, автозакрытие окна после восстановления редактора |
 
 ---

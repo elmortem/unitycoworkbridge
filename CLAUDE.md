@@ -4,8 +4,9 @@
 
 ## Что это
 
-Unity Agent Bridge — мост между ИИ-агентом и живым Unity Editor. Агент пишет C#-скрипт или
-декларативную задачу, CLI кладёт её в очередь проекта, пакет внутри редактора компилирует скрипт в
+Unity Agent Bridge — мост между ИИ-агентом и Unity Editor с независимой очередью. Агент пишет
+C#-скрипт или декларативную задачу, CLI через скрытый внешний queue-server сохраняет её даже при
+закрытой или зависшей Unity; пакет внутри доступного редактора компилирует скрипт в
 памяти через Roslyn (без domain reload, без файлов в `Assets/`) и выполняет на главном потоке,
 возвращая логи и результат в stdout.
 
@@ -48,15 +49,21 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
 ### CLI (`AgentBridgeCli/`)
 
 Команды: `csharp`, `ui`, `sceneshot`, `compile`, `tests`, `play`, `stopplay`, `release`, `wait`,
-`status`, `doctor`, `coord`, `cancel <TaskId>`. Общие флаги: `--project`, `--wait`, `--format json|human`, `--session`,
+`status`, `doctor`, `coord`, `queue`, `cancel <TaskId>`. Общие флаги: `--project`, `--wait`, `--format json|human`, `--session`,
 `--note`, `--coord-window`, `--coord-step`. Неизвестный флаг — ошибка использования, а не позиционный
-аргумент. Коды выхода: `0` успех, `1` терминальный отказ задачи (включая `test_failure`,
-`stale_input`, `evidence_unavailable`), `2` ожидание клиента исчерпано, `3` проект/мост недоступны
-или ошибка использования.
+аргумент. Коды выхода: `0` успех операции/исполнения или принятие с `--wait 0`, `1` отказ
+(включая `test_failure`, `stale_input`, `evidence_unavailable`), `2` бюджет клиента исчерпан,
+`3` проект/диспетчер недоступен, файловая ошибка или ошибка использования. Принятая задача при
+выходе 2 сохраняет Id; ответ содержит `Accepted: true`, команду продолжения и `EditorState`.
+Недоступность редактора не запрещает постановку и операции `queue`/`coord`.
 
 - `AgentBridgeApplication.cs` — диспетчер команд
 - `CliOptions.cs` — разбор аргументов и валидация флагов
-- `BridgeClient.cs` — постановка задачи в очередь и ожидание результата
+- `BridgeClient.cs` — постановка через диспетчер и ожидание результата с отдельным EditorState
+- `QueueClient.cs`, `QueueServer.cs` — скрытый автозапуск отдельного CLI-процесса на проект и файловые сообщения; сервер единолично меняет очередь и координацию
+- `QueueRuntime.cs` — снимок исполняемых файлов CLI по хешу содержимого в системном временном каталоге `AgentBridgeQueueRuntime`, чтобы долгоживущий сервер не блокировал обновление/пересборку CLI на Windows. Новый клиент обновляет `launch.json`; при смене runtime сервер уступает владение между транзакциями.
+- `QueueTaskStore.cs`, `QueueTask.cs` — устойчивые запросы/payload, claims, намерения отмены, порядок и результаты в `Library/AgentBridge/Queue/`
+- `QueueCommands.cs` — `queue list`, `status <id>`, `cancel <id>`, `move <id> [before-id]`, `shutdown`; работают без Unity
 - `BridgeInspector.cs` — `status` / `doctor`, фатальные `Problems` и нефатальные `Warnings`
 - `TaskResultFormatter.cs` — вывод `json` (стабильный контракт) и `human`
 - `ProjectLocator.cs`, `BridgePaths.cs` — поиск проекта и раскладка `Library/AgentBridge/`
@@ -65,16 +72,18 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
 - `ManualPlayPolicy.cs` — решение о захвате ничейного плеймода: CLI сам гасит его перед задачей агента
 - `TelemetryLog.cs` — клиентская половина телеметрии в `Logs/AgentBridge-client-*.jsonl`;
   включённость берётся из `status.json`, а не из настроек проекта
-- Координация: `CoordinationCommands.cs` (группа `coord`, диспетчеризуется до требования живого
-  редактора), `CoordinationJsonCodec.cs` (System.Text.Json, строгий разбор scope/plan),
+- Координация: `CoordinationCommands.cs` (группа `coord`, мутации через диспетчер без зависимости
+  от status/heartbeat редактора), `CoordinationJsonCodec.cs` (System.Text.Json, строгий разбор scope/plan),
   `CoordinationResultFormatter.cs`
-- Готовые пакеты: `coord submit` (синоним `coord request`) сохраняет содержимое PayloadFile при подаче и возвращает TaskIds; требует capability `coordination-batch-v1`. `CoordinationBatch.cs` проверяет готовность и выдаёт стабильные id, `CoordinationBatchPump.cs` публикует шаги из сохранённого пакета, сверяет журнал после обрывов и автоматически закрывает окно после восстановления редактора. `scripts/verify-coordination-batches.ps1` проверяет три пакета без действий клиентов, frozen payload, fail-fast и compile/EditMode/PlayMode/compile через реальную Unity.
+- Готовые пакеты: `coord submit` (синоним `coord request`) сохраняет PayloadFile и сразу регистрирует все TaskIds, включая будущие шаги. `CoordinationBatch.cs` проверяет готовность и выдаёт стабильные id; `CoordinationBatchPump.cs` публикует шаги, сверяет журнал после обрывов и закрывает окно после восстановления. При закрытии пакета неисполненные шаги получают терминальные результаты. `scripts/verify-coordination-batches.ps1` проверяет frozen payload, fail-fast и compile/EditMode/PlayMode/compile через реальную Unity.
+- Совместимость: обновляй CLI и пакет вместе. `independent-queue-v1` требуется исполнителю для запуска принятых задач; старый пакет оставляет их в очереди. Приём и координационные мутации не блокируются отсутствующим capability в status.json.
 - Известная ошибка Unity compiler включает `InputRepairPending`: input edits проходят перед заблокированными validation-пакетами; `edit-end` или новый успешный цикл снимает блокировку. Та же живая проверка воспроизводит double→float и проверяет исправление перед двумя уже ожидающими соседними прогонами без их отмены.
 
 ### Пакет (`AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/`)
 
-- Ядро: `AgentBridge.cs` (bootstrap), `TaskCoordinator.cs` (очередь и жизненный цикл задачи —
-  самый крупный файл), `AgentSessionScheduler.cs` (ротация между агентскими сессиями)
+- Ядро: `AgentBridge.cs` (bootstrap), `TaskCoordinator.cs` (выбор и жизненный цикл исполнения Unity —
+  самый крупный файл), `AgentSessionScheduler.cs` (ротация между агентскими сессиями),
+  `QueueEditorAdapter.cs` (неблокирующие запросы диспетчеру), `Queueing/` (общие с CLI транспорт и DTO)
 - Исполнители: `CSharpTaskExecutor.cs`, `CompileTaskExecutor.cs`, `AgentTestRunner.cs`,
   `SceneShot/SceneShotTaskExecutor.cs`, `Ui/UiTaskRunner.cs`
 - Отмена тестов: `TestRunLifecycle.cs` хранит владельца, дедлайн и состояние остановки сквозь domain reload; `TestRunnerCancellation.cs` изолирует совместимость с API разных версий Test Framework. `scripts/verify-test-cancellation.ps1` проверяет живую отмену, восстановление и запуск следующей задачи.
@@ -89,8 +98,10 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
   `SharedFile.cs` (запись/чтение файлов моста между процессами — любой новый читатель файлов
   редактора в CLI обязан идти через него, иначе ломает `File.Replace` на Windows).
   Адаптеры вне общей папки: `CoordinationUnityCodec.cs` (JsonUtility), `CoordinationEditorAdapter.cs`
-  (одна неблокирующая попытка блокировки за тик, подтверждение окна), `CoordinationGate.cs`
-  (единственный вход для запуска, кэша и присоединения)
+  (чтение снимка и запросы внешнему диспетчеру, подтверждение окна), `CoordinationGate.cs`
+  (подтверждение принятого hash перед запуском, кэшем и присоединением). Unity не держит блокировку
+  диспетчера/координации. Отмена до claim терминальна; после claim — только намерение до остановки
+  исполнителя и восстановления сцен. Защита чужой выполняющейся задачи в первые 300 секунд сохраняется.
 - Достоверность: `EvidenceRecord.cs`, `ValidationInputSnapshot.cs` (SHA-256 содержимого входов),
   `ValidationInputMonitor.cs` (окно над общими наблюдателями; `OpenAsync` для ежесекундных путей),
   `InputWatchHub.cs` + `InputWatchRoot.cs` + `InputWatchHubLifetime.cs` (один `FileSystemWatcher` на
@@ -147,7 +158,7 @@ unity-bridge-plugin.zip             собранный артефакт, зак�
 1. Определи, какие из трёх компонентов задеты (`AgentBridgeCli/*`, `AgentBridgeCli.Tests/*` → CLI;
    `AgentBridgeUnity/Packages/com.elmortem.agentbridge/*` → пакет;
    `unity-bridge-plugin/.claude-plugin/*` или `unity-bridge-plugin/skills/*` → плагин).
-   Особый случай: `AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/Coordination/*` живёт в
+   Особый случай: `AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/Coordination/*` и `Editor/Queueing/*` живут в
    пакете, но компилируется и в CLI через `<Compile Include>` — правка там задевает **оба**
    компонента, обе версии поднимаются.
 2. Подними версию каждого задетого компонента в его файле версии (таблица выше). Багфикс — patch,

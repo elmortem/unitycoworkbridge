@@ -165,7 +165,7 @@ namespace AgentBridge
 			var capabilities = new System.Collections.Generic.List<string>
 			{
 				"csharp", "ui", "sceneshot", "compile", "tests", "release", "play", "stopplay",
-				"evidence-v1", "test-cache-v2", "cancel-v1", TaskCancellationPolicy.Capability
+				"evidence-v1", "test-cache-v2", "cancel-v1", TaskCancellationPolicy.Capability, Queueing.QueueFiles.Capability
 			};
 
 			if (CoordinationEditorAdapter.Available)

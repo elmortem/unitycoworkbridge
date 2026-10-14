@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>agentbridge</AssemblyName>
     <RootNamespace>AgentBridge.Cli</RootNamespace>
-    <Version>1.23.3</Version>
+    <Version>1.24.0</Version>
     <InvariantGlobalization>true</InvariantGlobalization>
     <PublishSingleFile Condition="'$(RuntimeIdentifier)' != ''">true</PublishSingleFile>
     <SelfContained Condition="'$(RuntimeIdentifier)' != ''">true</SelfContained>
@@ -20,5 +20,7 @@
     <!-- The coordination protocol is one implementation shared by both halves of the bridge.
          The CLI compiles the package sources; it never keeps a copy of them. -->
     <Compile Include="../AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/Coordination/**/*.cs" LinkBase="Coordination" />
+	<Compile Include="../AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/Queueing/**/*.cs" LinkBase="Queueing" />
+	<Compile Include="../AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/TaskCancellationPolicy.cs" Link="TaskCancellationPolicy.cs" />
   </ItemGroup>
 </Project>

@@ -296,6 +296,7 @@ namespace AgentBridge
 		private static void OnUpdate()
 		{
 			using var timing = new CoordinatorTiming("update", _activeTaskId);
+			QueueEditorAdapter.Tick();
 			if (_finalizingCompile) TryFinalizePendingCompileTask();
 			ProcessCancelRequests();
 			TestRunLifecycle.Tick();
@@ -1540,6 +1541,8 @@ namespace AgentBridge
 				if (request.Kind != "cancel") continue;
 				TaskRecord answer;
 				if (TaskJournal.TryRead(request.Id, out answer)) continue;
+				string claimReason;
+				if (!CoordinationGate.TryReserve(request, request.Id, out claimReason)) continue;
 				string target = request.TargetTaskId ?? "";
 				string result = "task_not_found";
 				bool ok = false;
@@ -1560,10 +1563,11 @@ namespace AgentBridge
 						long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 						bool running = exists && (_activeTaskId == target || TestRunLifecycle.TaskId == target
 							|| record.Status == "running" || record.Status == "compiling" || record.Status == "canceling");
+						bool authorized = QueueEditorAdapter.IsAuthorizedCancellation(request.Id, target);
 						string reason = TaskCancellationPolicy.Reason(owner, request.AgentSessionId, exists ? record.StartedAtUtc : null, nowMs);
-						if (running && TaskCancellationPolicy.IsProtected(owner, request.AgentSessionId, record.StartedAtUtc, nowMs))
+						if (!authorized && running && TaskCancellationPolicy.IsProtected(owner, request.AgentSessionId, record.StartedAtUtc, nowMs))
 							result = "task_protected: " + target + "; foreign cancellation is allowed after 300 seconds of execution";
-						else if (!running && IsCancellationProtected(grant, owner, request.AgentSessionId, nowMs)) result = "coordinated_window_held:" + owner;
+						else if (!authorized && !running && IsCancellationProtected(grant, owner, request.AgentSessionId, nowMs)) result = "coordinated_window_held:" + owner;
 						else if (TestRunLifecycle.RequestStop(target, "canceled", reason)) { ok = true; result = "cancel_requested"; }
 						else if (_activeTaskId == target && _activeRecord.Kind == "csharp") { RequestCSharpStop("canceled", reason); ok = true; result = "cancel_requested"; }
 						else if (exists && record.Status == "attached")
@@ -1593,6 +1597,8 @@ namespace AgentBridge
 			if (TaskJournal.TryRead(request.Id, out record) && IsTerminal(record.Status)) return;
 			if (record == null)
 			{
+				string reason;
+				if (!CoordinationGate.TryReserve(request, request.Id, out reason)) return;
 				record = new TaskRecord { Id = request.Id, Kind = "stopplay", Status = "running",
 					Hash = TaskFileHash.HashOf(path, null), AgentSessionId = request.AgentSessionId,
 					SessionId = BridgeStatusWriter.Current.SessionId, StartedAtUtc = DateTime.UtcNow.ToString("o") };

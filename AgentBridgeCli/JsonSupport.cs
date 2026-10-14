@@ -13,6 +13,7 @@ internal static class JsonSupport
 	public static JsonSerializerOptions Output { get; } = new()
 	{
 		PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+		IncludeFields = true,
 		WriteIndented = true,
 		Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
 	};

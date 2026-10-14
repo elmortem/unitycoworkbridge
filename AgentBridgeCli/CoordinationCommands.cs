@@ -8,8 +8,7 @@ namespace AgentBridge.Cli;
 // cross-process transaction.
 internal static class CoordinationCommands
 {
-	public const string CliContracts = "coordination-v1,coordination-batch-v1,coordination-edit-leases-v1,evidence-v1,test-cache-v2";
-	private const int LockBudgetMs = 5000;
+	public const string CliContracts = "independent-queue-v1,coordination-v1,coordination-batch-v1,coordination-edit-leases-v1,evidence-v1,test-cache-v2";
 
 	public static int Run(string projectRoot, string[] arguments, CliOptions options)
 	{
@@ -41,20 +40,6 @@ internal static class CoordinationCommands
 		{
 			return Capabilities(projectRoot, canonical, options);
 		}
-		if (command is "register" or "scope" or "edit-begin" or "edit-end" or "renew"
-			or "finish" or "request" or "submit" or "cancel" or "leave" or "abandon")
-		{
-			var capabilities = BridgeInspector.Inspect(projectRoot).Bridge?.Capabilities ?? Array.Empty<string>();
-			if (!capabilities.Contains(CoordinationLimits.EditLeasesCapability))
-				return Fail(options, CoordinationCodes.SchemaUnsupported,
-					"update the Unity package to advertise coordination-edit-leases-v1 before changing coordination state; update all CLI clients too");
-		}
-		if (command is "submit" or "request")
-		{
-			var capabilities = BridgeInspector.Inspect(projectRoot).Bridge?.Capabilities ?? Array.Empty<string>();
-			if (!capabilities.Contains(CoordinationBatch.Capability))
-				return Fail(options, CoordinationCodes.SchemaUnsupported, "package must advertise coordination-batch-v1 before submitting executable packages");
-		}
 
 		var store = new CoordinationFileStore(
 			CoordinationPathPolicy.CoordinationRoot(canonical),
@@ -69,17 +54,17 @@ internal static class CoordinationCommands
 			{
 				"status" => Status(store, options),
 				"wait" => Wait(store, options),
-				"register" => Mutate(store, options, BuildRegister),
-				"scope" => Mutate(store, options, BuildScope),
-				"edit-begin" => Mutate(store, options, BuildEditBegin),
-				"edit-end" => Mutate(store, options, BuildTokenCommand(CoordinationEngine.OpEditEnd)),
-				"renew" => Mutate(store, options, BuildTokenCommand(CoordinationEngine.OpRenew)),
-				"finish" => Mutate(store, options, BuildTokenCommand(CoordinationEngine.OpFinish)),
-				"request" => Mutate(store, options, BuildRequest),
-				"submit" => Mutate(store, options, BuildRequest),
-				"cancel" => Mutate(store, options, BuildCancel),
-				"leave" => Mutate(store, options, BuildLeave),
-				"abandon" => Mutate(store, options, BuildAbandon),
+				"register" => Mutate(canonical, options, BuildRegister),
+				"scope" => Mutate(canonical, options, BuildScope),
+				"edit-begin" => Mutate(canonical, options, BuildEditBegin),
+				"edit-end" => Mutate(canonical, options, BuildTokenCommand(CoordinationEngine.OpEditEnd)),
+				"renew" => Mutate(canonical, options, BuildTokenCommand(CoordinationEngine.OpRenew)),
+				"finish" => Mutate(canonical, options, BuildTokenCommand(CoordinationEngine.OpFinish)),
+				"request" => Mutate(canonical, options, BuildRequest),
+				"submit" => Mutate(canonical, options, BuildRequest),
+				"cancel" => Mutate(canonical, options, BuildCancel),
+				"leave" => Mutate(canonical, options, BuildLeave),
+				"abandon" => Mutate(canonical, options, BuildAbandon),
 				_ => Usage(options, "unknown coord command: " + command)
 			};
 		}
@@ -176,7 +161,7 @@ internal static class CoordinationCommands
 
 	private delegate int Builder(CliOptions options, out CoordinationCommand command, out string error);
 
-	private static int Mutate(CoordinationFileStore store, CliOptions options, Builder builder)
+	private static int Mutate(string project, CliOptions options, Builder builder)
 	{
 		CoordinationCommand command;
 		string error;
@@ -188,13 +173,10 @@ internal static class CoordinationCommands
 
 		command.Nonce = Guid.NewGuid().ToString("N");
 
-		using var transaction = store.BeginWithRetry(LockBudgetMs);
-		var reply = new CoordinationEngine().Apply(
-			transaction.State, command, CoordinationSystemClock.Instance.UtcNowMs);
-		if (reply.Changed)
-		{
-			transaction.Commit();
-		}
+		var answer = new QueueClient(project).Call(new AgentBridge.Queueing.QueueMessage
+		{ Op = "coord", CoordinationJson = JsonSerializer.Serialize(command, QueueClient.Json) });
+		if (string.IsNullOrEmpty(answer.CoordinationJson)) return Fail(options, answer.Code, answer.Message);
+		var reply = JsonSerializer.Deserialize<CoordinationReply>(answer.CoordinationJson, QueueClient.Json)!;
 
 		CoordinationResultFormatter.Write(Redact(reply, options.Session), options.Format, null);
 		return reply.Ok ? 0 : 1;
@@ -527,6 +509,7 @@ internal static class CoordinationCommands
 
 	private static int Fail(CliOptions options, string code, string message)
 	{
+		if (code is "io_error" or "access_denied") return AgentBridgeApplication.WriteError(code, message, options.Format);
 		CoordinationResultFormatter.Write(CoordinationReply.Fail(code, message), options.Format, null);
 		return 3;
 	}

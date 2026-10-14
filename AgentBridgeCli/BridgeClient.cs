@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using AgentBridge.Queueing;
 
 namespace AgentBridge.Cli;
 
@@ -78,19 +79,10 @@ internal sealed class BridgeClient
 		Decorate(request);
 		var requestBytes = JsonSerializer.SerializeToUtf8Bytes(request, JsonSupport.Task);
 		var payloadBytes = await File.ReadAllBytesAsync(fullSourcePath);
-		var expectedHash = ComputeHash(requestBytes, payloadBytes);
-
-		if (TryResolveExisting(taskId, kind, expectedHash, out var replay))
-		{
-			return replay.HasValue
-				? replay.Value
-				: await WaitForTaskAsync(taskId, waitSeconds, kind);
-		}
-
-		Directory.CreateDirectory(_paths.Inbox);
-		Directory.CreateDirectory(_paths.Journal);
-		AtomicWrite(Path.Combine(_paths.Inbox, payloadName), payloadBytes);
-		AtomicWrite(Path.Combine(_paths.Inbox, taskId + ".task.json"), requestBytes);
+		var admitted = await new QueueClient(_projectRoot).CallAsync(new QueueMessage
+		{ Op = "submit", TaskId = taskId, RequestJson = Encoding.UTF8.GetString(requestBytes), Payload = Convert.ToBase64String(payloadBytes) });
+		if (!admitted.Ok) return WriteError(admitted.Code, admitted.Message);
+		Console.Error.WriteLine("[agentbridge] accepted " + taskId);
 
 		_telemetry.Write("cli_submit", _session, request.Id, new Dictionary<string, object?>
 		{
@@ -126,11 +118,14 @@ internal sealed class BridgeClient
 		return await SubmitRequestAsync(request, waitSeconds);
 	}
 
-	public Task<int> SubmitCancelAsync(string taskId, int waitSeconds)
+	public async Task<int> SubmitCancelAsync(string taskId, int waitSeconds)
 	{
-		if (!IsSafeTaskId(taskId)) return Task.FromResult(WriteError("invalid_task_id", "Invalid target task id."));
-		return SubmitRequestAsync(new TaskRequest { Id = TaskIdGenerator.NewId(), Kind = "cancel", TargetTaskId = taskId,
-			AgentSessionId = _session ?? "", Note = _note ?? "" }, waitSeconds);
+		if (!IsSafeTaskId(taskId)) return WriteError("invalid_task_id", "Invalid target task id.");
+		var reply = await new QueueClient(_projectRoot).CallAsync(new QueueMessage { Op = "cancel", TaskId = taskId, Session = _session ?? "" });
+		if (!reply.Ok) return WriteError(reply.Code, reply.Message);
+		WriteResult(JsonSerializer.Serialize(new { Id = taskId, Kind = "cancel", Status = reply.Code, Accepted = true,
+			TargetStatus = reply.Task?.Status, Resume = "agentbridge wait " + taskId }, JsonSupport.Task));
+		return 0;
 	}
 
 	public async Task<int> SubmitPlayAsync(int seconds, int waitSeconds)
@@ -183,196 +178,53 @@ internal sealed class BridgeClient
 
 	public async Task<int> WaitForTaskAsync(string taskId, int waitSeconds, string kind)
 	{
-		DateTime? runningSince = null;
-		var queuedSince = DateTime.UtcNow;
-		var nextProgress = TimeSpan.Zero;
-		var nextQueueReport = TimeSpan.Zero;
-		var attempts = new EditorWakeAttempts();
-		var nextHealthPoll = DateTime.MinValue;
-		var manualStops = 0;
-		BridgeHealth? lastHealth = null;
-
-		// Every exit from this method is an answer to the agent, and the whole point of the
-		// client half of the telemetry is that no answer leaves without being recorded.
-		int Complete(int code, string status)
-		{
-			var finishedUtc = DateTime.UtcNow;
-			var runningMs = runningSince == null
-				? 0
-				: (long)(finishedUtc - runningSince.Value).TotalMilliseconds;
-			var queuedMs = (long)((runningSince ?? finishedUtc) - queuedSince).TotalMilliseconds;
-
-			_telemetry.Write("cli_exit", _session, taskId, new Dictionary<string, object?>
-			{
-				["Cmd"] = kind,
-				["Code"] = code,
-				["Status"] = status,
-				["QueuedMs"] = queuedMs,
-				["RunningMs"] = runningMs,
-				["Posts"] = attempts.PostAttempts,
-				["Focuses"] = attempts.FocusAttempts
-			});
-
-			return code;
-		}
-
-		if (!IsSafeTaskId(taskId))
-		{
-			return Complete(
-				WriteError("invalid_task_id", "Task id contains invalid path characters."),
-				"invalid_task_id");
-		}
-
-		var journalFile = Path.Combine(_paths.Journal, taskId + ".json");
-
+		if (!IsSafeTaskId(taskId)) return WriteError("invalid_task_id", "Invalid task id.");
+		var watch = System.Diagnostics.Stopwatch.StartNew();
+		var client = new QueueClient(_projectRoot);
+		var health = BridgeInspector.Inspect(_projectRoot);
+		var nextHealth = TimeSpan.Zero;
+		int posts = 0, manualStops = 0;
 		while (true)
 		{
-			var hasRecord = TryReadFile(journalFile, out var json);
-			if (hasRecord && TryGetTerminalStatus(json, out _))
+			var reply = await client.CallAsync(new QueueMessage { Op = "get", TaskId = taskId });
+			if (!reply.Ok) return WriteError(reply.Code, reply.Message);
+			var task = reply.Task!;
+			if (QueueFiles.Terminal(task.Status))
 			{
-				WriteResult(json);
-				return Complete(ClassifyResult(json), StatusOf(json));
+				WriteResult(reply.ResultJson);
+				int code = ClassifyResult(reply.ResultJson);
+				_telemetry.Write("cli_exit", _session, taskId, new Dictionary<string, object?> { ["Cmd"] = kind, ["Code"] = code, ["Status"] = task.Status });
+				return code;
 			}
-
-			var now = DateTime.UtcNow;
-
-			// A running task needs the same watchdog as a queued one: the editor can fall asleep
-			// mid-run, and then nothing but an external poke gets the main loop ticking again.
-			if (now >= nextHealthPoll)
+			if (watch.Elapsed >= nextHealth)
 			{
-				nextHealthPoll = now.AddSeconds(3);
-				var pulse = BridgeInspector.Inspect(_projectRoot);
-				lastHealth = pulse;
-				var recoverable = WakePolicy.CanRecover(pulse);
-				var asleep = pulse.HeartbeatAgeMs >= WakePolicy.StaleThresholdMs;
-
-				if (!pulse.BridgeReady && !recoverable)
+				health = BridgeInspector.Inspect(_projectRoot);
+				nextHealth = watch.Elapsed.Add(TimeSpan.FromSeconds(3));
+				if (WakePolicy.CanRecover(health) && health.HeartbeatAgeMs >= WakePolicy.StaleThresholdMs && posts < WakePolicy.MaxPostAttempts)
 				{
-					return Complete(
-						WriteError("bridge_unavailable", "Bridge became unavailable while the task was waiting: " + pulse.Code),
-						"bridge_unavailable");
-				}
-
-				attempts.Observe(pulse.HeartbeatAgeMs, DateTime.UtcNow);
-				if (asleep && recoverable)
-				{
-					var pid = pulse.Bridge?.EditorPid ?? 0;
-					var action = WakePolicy.Decide(
-						pulse.HeartbeatAgeMs,
-						EditorWaker.IsEditorForeground(pid),
-						attempts.PostAttempts,
-						attempts.FocusAttempts,
-						(now - attempts.LastAttemptUtc).TotalSeconds);
-
-					if (action == WakeAction.Post)
-					{
-						attempts.PostAttempts++;
-						attempts.LastAttemptUtc = now;
-						var sent = EditorWaker.TryPost(pid);
-						Console.Error.WriteLine("[agentbridge] editor asleep for "
-							+ (pulse.HeartbeatAgeMs ?? 0) / 1000 + "s, waking (post #" + attempts.PostAttempts + ")");
-						WriteWakeEvent(taskId, "post", pulse.HeartbeatAgeMs, sent);
-					}
-					else if (action == WakeAction.Focus)
-					{
-						attempts.FocusAttempts++;
-						attempts.LastAttemptUtc = now;
-						var sent = EditorWaker.TryFocus(pid);
-						Console.Error.WriteLine("[agentbridge] editor still asleep, focus poke");
-						WriteWakeEvent(taskId, "focus", pulse.HeartbeatAgeMs, sent);
-					}
-					else if (attempts.TimedOut(now))
-					{
-						return Complete(
-							WriteError(
-								"bridge_asleep",
-								"No editor heartbeat progress for 120 seconds. The editor may be busy, blocked by a dialog, "
-								+ "or asleep. Inspect Unity; the task is still queued/running. Resume with agentbridge wait " + taskId + "."),
-							"bridge_asleep");
-					}
-				}
-				else
-				{
-					attempts.PostAttempts = 0;
-					attempts.FocusAttempts = 0;
+					posts++;
+					WriteWakeEvent(taskId, "post", health.HeartbeatAgeMs, EditorWaker.TryPost(health.Bridge!.EditorPid));
 				}
 			}
-
-			// One budget covers both queueing and execution. Expiry never resubmits or cancels.
-			if (hasRecord)
+			if (watch.Elapsed.TotalSeconds >= waitSeconds)
 			{
-				runningSince ??= now;
-				var running = now - runningSince.Value;
-				if ((now - queuedSince).TotalSeconds >= waitSeconds)
-				{
-					WriteResult(json);
-					return Complete(2, "running");
-				}
-
-				if (running >= nextProgress)
-				{
-					Console.Error.WriteLine("[agentbridge] " + taskId + " running " + (int)running.TotalSeconds + "s");
-					nextProgress += TimeSpan.FromSeconds(5);
-				}
-
-				await Task.Delay(250);
-				continue;
+				int code = waitSeconds == 0 ? 0 : 2;
+				WriteResult(JsonSerializer.Serialize(new { Id = taskId, Kind = task.Kind, Status = task.Status, Accepted = true,
+					WaitExpired = waitSeconds > 0, CancelRequested = task.CancelRequested, EditorAvailable = health.BridgeReady && health.Bridge?.Capabilities.Contains(QueueFiles.Capability) == true,
+					EditorState = health.BridgeReady && health.Bridge?.Capabilities.Contains(QueueFiles.Capability) != true ? "executor_update_required" : health.Code, Reason = task.BatchRequestId.Length > 0 ? "batch_step_pending" : "awaiting_executor",
+					Resume = "agentbridge wait " + taskId }, JsonSupport.Task));
+				_telemetry.Write("cli_exit", _session, taskId, new Dictionary<string, object?> { ["Cmd"] = kind, ["Code"] = code, ["Status"] = task.Status, ["EditorState"] = health.Code });
+				return code;
 			}
-
-			// No journal record and no task file means there is nothing in the editor queue to
-			// wait for: an unknown id must not consume the whole queue budget.
-			if (!File.Exists(Path.Combine(_paths.Inbox, taskId + ".task.json")))
-			{
-				return Complete(
-					WriteError("task_not_found", "No queued or recorded task with id " + taskId + "."),
-					"task_not_found");
-			}
-
-			// A play mode nobody owns outranks nothing: the coordinator only takes stopplay out of
-			// the queue while it runs, so the task would sit here until the cap. Clearing the last
-			// health forces a fresh status read before another takeover can be decided.
-			if ((now - queuedSince).TotalSeconds < waitSeconds && ManualPlayPolicy.ShouldStop(lastHealth, kind, manualStops))
+			if (ManualPlayPolicy.ShouldStop(health, kind, manualStops))
 			{
 				manualStops++;
-				Console.Error.WriteLine("[agentbridge] " + taskId
-					+ " editor is in play mode without an agent session; stopping it (stopplay #" + manualStops + ")");
-				await StopManualPlayAsync(taskId, queuedSince.AddSeconds(waitSeconds));
-				lastHealth = null;
-				nextHealthPoll = DateTime.MinValue;
-				continue;
+				await StopManualPlayAsync(taskId, DateTime.UtcNow.AddSeconds(Math.Max(0, waitSeconds - watch.Elapsed.TotalSeconds)));
 			}
-
-			var queued = now - queuedSince;
-			if (queued.TotalSeconds >= waitSeconds)
-			{
-				var payload = new Dictionary<string, object?>
-				{
-					["Id"] = taskId,
-					["Status"] = "queued"
-				};
-				payload["Reason"] = lastHealth?.Bridge?.QueueBlockReason ?? "queued";
-				payload["Resume"] = "agentbridge wait " + taskId;
-				if (ManualPlayPolicy.IsManualPlaying(lastHealth?.Bridge))
-				{
-					payload["Reason"] = "editor_playing_manual";
-				}
-
-				WriteResult(JsonSerializer.Serialize(payload, JsonSupport.Task));
-				return Complete(2, "queued");
-			}
-
-			if (queued >= nextQueueReport && lastHealth != null)
-			{
-				nextQueueReport = queued + TimeSpan.FromSeconds(5);
-				Console.Error.WriteLine("[agentbridge] " + taskId + " " + DescribeQueuePosition(lastHealth, taskId, (int)queued.TotalSeconds));
-			}
-
 			await Task.Delay(250);
 		}
 	}
 
-	// The stopplay is an implementation detail of waiting for the original task, so it keeps its
-	// whole life on stderr: stdout carries exactly one result, and that result is the agent's task.
 	private async Task StopManualPlayAsync(string forTaskId, DateTime clientDeadline)
 	{
 		var stopId = TaskIdGenerator.NewId();
@@ -383,11 +235,8 @@ internal sealed class BridgeClient
 			AgentSessionId = _session ?? "",
 			Note = "auto-stop manual play for " + forTaskId
 		};
-		Directory.CreateDirectory(_paths.Inbox);
-		Directory.CreateDirectory(_paths.Journal);
-		AtomicWrite(
-			Path.Combine(_paths.Inbox, stopId + ".task.json"),
-			JsonSerializer.SerializeToUtf8Bytes(request, JsonSupport.Task));
+		await new QueueClient(_projectRoot).CallAsync(new QueueMessage { Op = "submit", TaskId = stopId,
+			RequestJson = JsonSerializer.Serialize(request, JsonSupport.Task) });
 
 		var journalFile = Path.Combine(_paths.Journal, stopId + ".json");
 		var deadline = DateTime.UtcNow.AddSeconds(StopManualPlaySeconds);
@@ -520,10 +369,10 @@ internal sealed class BridgeClient
 	private async Task<int> SubmitRequestAsync(TaskRequest request, int waitSeconds)
 	{
 		Decorate(request);
-		Directory.CreateDirectory(_paths.Inbox);
-		Directory.CreateDirectory(_paths.Journal);
-		var requestBytes = JsonSerializer.SerializeToUtf8Bytes(request, JsonSupport.Task);
-		AtomicWrite(Path.Combine(_paths.Inbox, request.Id + ".task.json"), requestBytes);
+		var reply = await new QueueClient(_projectRoot).CallAsync(new QueueMessage { Op = "submit", TaskId = request.Id,
+			RequestJson = JsonSerializer.Serialize(request, JsonSupport.Task) });
+		if (!reply.Ok) return WriteError(reply.Code, reply.Message);
+		Console.Error.WriteLine("[agentbridge] accepted " + request.Id);
 
 		_telemetry.Write("cli_submit", _session, request.Id, new Dictionary<string, object?>
 		{
@@ -532,68 +381,6 @@ internal sealed class BridgeClient
 		});
 
 		return await WaitForTaskAsync(request.Id, waitSeconds, request.Kind);
-	}
-
-	private bool TryResolveExisting(string taskId, string kind, string expectedHash, out int? result)
-	{
-		var journalFile = Path.Combine(_paths.Journal, taskId + ".json");
-		if (!TryReadFile(journalFile, out var json))
-		{
-			result = null;
-			return false;
-		}
-
-		try
-		{
-			using var document = JsonDocument.Parse(json);
-			var root = document.RootElement;
-			var existingHash = root.TryGetProperty("Hash", out var hashElement)
-				? hashElement.GetString()
-				: null;
-			var status = root.TryGetProperty("Status", out var statusElement)
-				? statusElement.GetString()
-				: null;
-
-			if (string.IsNullOrEmpty(existingHash) || string.IsNullOrEmpty(status))
-			{
-				result = WriteError("journal_invalid", "Existing journal record is missing Hash or Status.");
-				return true;
-			}
-
-			if (!string.Equals(existingHash, expectedHash, StringComparison.Ordinal))
-			{
-				var conflict = new Dictionary<string, object?>
-				{
-					["Id"] = taskId,
-					["Kind"] = kind,
-					["Status"] = "rejected",
-					["Hash"] = expectedHash,
-					["ReturnValue"] = "",
-					["Logs"] = new[] { "id_conflict" },
-					["Diagnostics"] = Array.Empty<object>(),
-					["ForeignErrors"] = false,
-					["Artifacts"] = Array.Empty<string>()
-				};
-				WriteResult(JsonSerializer.Serialize(conflict, JsonSupport.Task));
-				result = 1;
-				return true;
-			}
-
-			if (TerminalStatuses.Contains(status))
-			{
-				WriteResult(json);
-				result = ClassifyResult(json);
-				return true;
-			}
-
-			result = null;
-			return true;
-		}
-		catch
-		{
-			result = WriteError("journal_invalid", "Existing journal record is not valid JSON.");
-			return true;
-		}
 	}
 
 	private static string GetPayloadTaskId(string kind, string sourcePath)
@@ -625,23 +412,6 @@ internal sealed class BridgeClient
 		hash.AppendData(requestBytes);
 		hash.AppendData(payloadBytes);
 		return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
-	}
-
-	private static void AtomicWrite(string destination, byte[] bytes)
-	{
-		var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
-		try
-		{
-			File.WriteAllBytes(temporary, bytes);
-			File.Move(temporary, destination, true);
-		}
-		finally
-		{
-			if (File.Exists(temporary))
-			{
-				File.Delete(temporary);
-			}
-		}
 	}
 
 	private static bool TryReadFile(string path, out string json)

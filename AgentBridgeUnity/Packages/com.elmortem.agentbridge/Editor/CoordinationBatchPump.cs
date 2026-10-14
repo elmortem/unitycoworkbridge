@@ -37,7 +37,7 @@ namespace AgentBridge
 				string journal = Path.Combine(BridgePaths.Journal, id + ".json");
 				if (File.Exists(journal))
 				{
-					TaskRecord record = JsonUtility.FromJson<TaskRecord>(File.ReadAllText(journal));
+					TaskRecord record = JsonUtility.FromJson<TaskRecord>(global::AgentBridge.Coordination.SharedFile.ReadAllText(journal));
 					if (record == null || string.IsNullOrEmpty(record.FinishedAtUtc)) return;
 					// Reconcile a terminal journal if the completion transaction lost a lock race.
 					if (use == null) { Finish(grant, "failed:" + step.Id + ":" + record.Status); return; }
@@ -83,7 +83,7 @@ namespace AgentBridge
 		{
 			if (File.Exists(path))
 			{
-				if (File.ReadAllText(path) != content) throw new IOException("batch publication conflict: " + Path.GetFileName(path));
+				if (global::AgentBridge.Coordination.SharedFile.ReadAllText(path) != content) throw new IOException("batch publication conflict: " + Path.GetFileName(path));
 				return;
 			}
 			string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";

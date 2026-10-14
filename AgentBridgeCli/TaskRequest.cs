@@ -6,6 +6,7 @@ internal sealed class TaskRequest
 	public string Kind { get; set; } = "";
 	public string TargetTaskId { get; set; } = "";
 	public string PayloadFile { get; set; } = "";
+	public string EntryPointName { get; set; } = "";
 	public string TestMode { get; set; } = "";
 	public string[] AssemblyNames { get; set; } = Array.Empty<string>();
 	public string[] TestNames { get; set; } = Array.Empty<string>();

@@ -1,18 +1,20 @@
 using System;
 using System.Collections.Generic;
-using UnityEditor;
+using System.IO;
+using AgentBridge.Coordination;
+using AgentBridge.Queueing;
 
 namespace AgentBridge
 {
-    // SessionState survives assembly reload without modifying submitted requests or their hashes.
+    // Durable override is owned by the independent dispatcher.
     public static class TaskQueueOrder
     {
-        private const string Key = "AgentBridge.ManualQueueOrder";
-        public static void Set(List<string> ids) => SessionState.SetString(Key, string.Join("\n", ids));
-        public static void Clear() => SessionState.EraseString(Key);
+        private static string OrderPath => Path.Combine(QueueFiles.Root(BridgePaths.ProjectRoot), "order.txt");
+        private static string Read() { string text; return SharedFile.TryReadAllText(OrderPath, out text) ? text : ""; }
+        public static void Clear() { QueueEditorAdapter.Post(new QueueMessage { Op = "clear-order" }); }
         public static int Compare(PendingTaskInfo left, PendingTaskInfo right)
         {
-            var ids = new List<string>(SessionState.GetString(Key, "").Split('\n'));
+            var ids = new List<string>(Read().Split('\n'));
             int a = ids.IndexOf(left.Id), b = ids.IndexOf(right.Id);
             if (a >= 0 || b >= 0)
             {
@@ -25,7 +27,7 @@ namespace AgentBridge
         }
         public static PendingTaskInfo First(List<PendingTaskInfo> pending)
         {
-            foreach (string id in SessionState.GetString(Key, "").Split('\n'))
+            foreach (string id in Read().Split('\n'))
                 foreach (var task in pending)
                     if (task.Id == id) return task;
             return null;
@@ -33,7 +35,7 @@ namespace AgentBridge
         public static void Apply(List<PendingTaskInfo> tasks)
         {
             var ordered = new List<PendingTaskInfo>();
-            foreach (string id in SessionState.GetString(Key, "").Split('\n'))
+            foreach (string id in Read().Split('\n'))
             {
                 var task = tasks.Find(t => t.Id == id);
                 if (task == null) continue;

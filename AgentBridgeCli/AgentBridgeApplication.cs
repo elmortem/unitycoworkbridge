@@ -7,10 +7,15 @@ internal static class AgentBridgeApplication
 	public static async Task<int> RunAsync(string[] args)
 	{
 		var options = CliOptions.Parse(args);
+		string? logProject = ProjectLocator.Resolve(options.ProjectPath, Environment.CurrentDirectory);
+		var log = logProject == null || options.Arguments.FirstOrDefault() == "queue-server" ? null : new TelemetryLog(logProject, true);
+		log?.Write("cli_command", options.Session, "", new Dictionary<string, object?> { ["Cmd"] = options.Arguments.FirstOrDefault() ?? "", ["Error"] = options.Error ?? "" });
+		int exit = 3;
 		try
 		{
 			Console.OutputEncoding = System.Text.Encoding.UTF8;
-			return await RunCommandAsync(options);
+			exit = await RunCommandAsync(options);
+			return exit;
 		}
 		catch (UnauthorizedAccessException error)
 		{
@@ -20,6 +25,11 @@ internal static class AgentBridgeApplication
 		{
 			return WriteIoError("io_error", error, options);
 		}
+		catch (Exception error) when (error is ArgumentException or System.Text.Json.JsonException or System.ComponentModel.Win32Exception)
+		{
+			return WriteError("client_error", error.Message, options.Format);
+		}
+		finally { log?.Write("cli_command_exit", options.Session, "", new Dictionary<string, object?> { ["Cmd"] = options.Arguments.FirstOrDefault() ?? "", ["Code"] = exit }); }
 	}
 
 	private static int WriteIoError(string code, Exception error, CliOptions options)
@@ -85,6 +95,9 @@ internal static class AgentBridgeApplication
 			}
 		}
 
+		if (command == "queue-server") return await QueueServer.RunAsync(projectRoot);
+		if (command == "queue") return await QueueCommands.RunAsync(projectRoot, commandArguments, options);
+
 		// Coordination answers before the editor is asked for anything. Registering, waiting and
 		// reading the queue must work while Unity is busy, reloading, or not even running.
 		if (command == "coord")
@@ -98,8 +111,11 @@ internal static class AgentBridgeApplication
 
 		if (command == "status")
 		{
+			var queue = await new QueueClient(projectRoot).CallAsync(new Queueing.QueueMessage { Op = "list" });
+			health.QueueReady = queue.Ok;
+			health.Queue = queue.Tasks;
 			WriteHealth(health, options.Format);
-			return health.BridgeReady ? 0 : 3;
+			return queue.Ok ? 0 : 3;
 		}
 
 		if (command == "doctor")
@@ -110,11 +126,8 @@ internal static class AgentBridgeApplication
 
 		// status/doctor remain read-only and report stale honestly. Work commands may
 		// enter the bounded watchdog even if the editor fell asleep before submission.
-		if (!health.BridgeReady && !WakePolicy.CanRecover(health))
-		{
-			WriteHealth(health, options.Format);
-			return 3;
-		}
+		// Admission and result retrieval belong to the independent queue. Editor health is
+		// observation, never a prerequisite for accepting a task or reading its result.
 
 		// Whether the bridge keeps telemetry is the editor's setting, and the status file is the
 		// only place the client can read it from.
@@ -130,11 +143,6 @@ internal static class AgentBridgeApplication
 				if (commandArguments.Length != 1)
 				{
 					return WriteError("bad_usage", "usage: agentbridge csharp <file> [--project <path>] [--wait <seconds>] [--format json|human]", options.Format);
-				}
-
-				if (health.Bridge?.RoslynReady != true)
-				{
-					return WriteError("roslyn_not_ready", "Roslyn is not ready. Run agentbridge doctor.", options.Format);
 				}
 
 				WarnIfPayloadInsideAssets(paths, commandArguments[0]);
@@ -179,7 +187,6 @@ internal static class AgentBridgeApplication
 				if (command == "cancel")
 				{
 					if (commandArguments.Length != 1) return WriteError("bad_usage", "usage: agentbridge cancel <TaskId> [--session S] [--wait seconds]", options.Format);
-					if (health.Bridge?.Capabilities.Contains("cancel-v1") != true) return WriteError("cancel_not_supported", "Update the Unity bridge package to use cancel.", options.Format);
 					return await client.SubmitCancelAsync(commandArguments[0], options.WaitSeconds);
 				}
 				if (commandArguments.Length != 0 || options.Session == null)
@@ -316,6 +323,7 @@ internal static class AgentBridgeApplication
 	{
 		if (format == "human")
 		{
+			Console.Out.WriteLine("Queue: " + (health.QueueReady ? "available" : "not checked") + "; editor: " + health.Code);
 			Console.Out.WriteLine(health.BridgeReady ? "Agent Bridge is ready." : "Agent Bridge is unavailable: " + health.Code);
 			Console.Out.WriteLine("Project: " + health.ProjectPath);
 			Console.Out.WriteLine("Task files: " + health.ScratchDir);
@@ -397,7 +405,7 @@ internal static class AgentBridgeApplication
 		return Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
 	}
 
-	private static int WriteError(string code, string message, string format)
+	internal static int WriteError(string code, string message, string format)
 	{
 		if (format == "human")
 		{
@@ -441,7 +449,8 @@ internal static class AgentBridgeApplication
 			global options:
 			  --project <path>   Unity project root; otherwise discovered from cwd
 			  cancel <TaskId>    cancel a queued task or request a running test/script to stop
-			  --wait <seconds>   total client wait budget including queue, default 110
+			  queue list|status <id>|cancel <id>|move <id> [before-id]|shutdown
+			  --wait <seconds>   total client wait budget, default 110; 0 returns acceptance immediately
 			  --seconds <n>      play session length, or a coordination grant budget
 			  --format <value>   json (default, machine-readable) or human for every command
 			  --session <id>     agent session for fair scheduling

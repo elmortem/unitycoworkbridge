@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentBridge.Cli;
+using AgentBridge.Queueing;
 
 var root = Path.Combine(Path.GetTempPath(), "AgentBridgeCliTests_" + Guid.NewGuid().ToString("N"));
 
@@ -28,16 +29,23 @@ try
 	RunBackgroundTickTimerTests();
 	await RunStaleSubmissionTests(root);
 	await RunQueueBudgetTests(root);
+	await IndependentQueueTests.RunAsync(root);
 	RunManualPlayPolicyTests();
 	RunTelemetryTests(root);
 	Console.WriteLine("AgentBridgeCli.Tests: PASS");
 	return 0;
 }
+catch (Exception error)
+{
+	Console.Error.WriteLine("AgentBridgeCli.Tests: FAIL\n" + error);
+	return 1;
+}
 finally
 {
 	if (Directory.Exists(root))
 	{
-		Directory.Delete(root, true);
+		try { await IndependentQueueTests.StopServers(root); Directory.Delete(root, true); }
+		catch (Exception error) { Console.Error.WriteLine("Fixture cleanup: " + error.Message); }
 	}
 }
 
@@ -136,7 +144,7 @@ static void RunHealthTests(string temporaryRoot)
 		Enabled = true,
 		RoslynSource = "Local",
 		RoslynReady = true,
-		Capabilities = new[] { "csharp", "ui", "compile", "tests" }
+		Capabilities = new[] { "csharp", "ui", "compile", "tests", QueueFiles.Capability }
 	};
 	File.WriteAllText(Path.Combine(bridgeRoot, "status.json"), JsonSerializer.Serialize(status));
 	File.WriteAllText(
@@ -255,7 +263,7 @@ static void WriteStatus(string bridgeRoot, string projectId, string hostOs, stri
 		Enabled = true,
 		RoslynSource = "Vendored",
 		RoslynReady = true,
-		Capabilities = new[] { "csharp", "ui", "compile", "tests" }
+		Capabilities = new[] { "csharp", "ui", "compile", "tests", QueueFiles.Capability }
 	};
 	File.WriteAllText(Path.Combine(bridgeRoot, "status.json"), JsonSerializer.Serialize(status));
 }
@@ -324,9 +332,9 @@ static async Task RunAllTestsConfirmationTests(string root)
 	Expect(refused.Output.Contains(AllTestsConfirmation.Code), "an unconfirmed full run must report " + AllTestsConfirmation.Code);
 	Expect(!Directory.Exists(new BridgePaths(project).Scratch), "the refusal must come before the editor is inspected");
 
-	var filtered = await RunCliCaptured("tests", "--test", "MyTests", "--project", project);
+	var filtered = await RunCliCaptured("tests", "--test", "MyTests", "--project", project, "--wait", "0");
 	Expect(!filtered.Output.Contains(AllTestsConfirmation.Code), "a filtered run must not ask for confirmation");
-	var all = await RunCliCaptured("tests", "--confirm-all", "--project", project);
+	var all = await RunCliCaptured("tests", "--confirm-all", "--project", project, "--wait", "0");
 	Expect(!all.Output.Contains(AllTestsConfirmation.Code), "a confirmed full run must not ask again");
 }
 
@@ -517,7 +525,7 @@ static async Task RunStaleSubmissionTests(string temporaryRoot)
 	File.WriteAllText(paths.StatusFile, JsonSerializer.Serialize(new BridgeStatus
 	{
 		ProtocolVersion = 1, ProjectPath = project, EditorPid = Environment.ProcessId,
-		Enabled = true, RoslynReady = true, HostOs = HostPlatform.Current
+		Enabled = true, RoslynReady = true, HostOs = HostPlatform.Current, Capabilities = new[] { QueueFiles.Capability }
 	}));
 	WriteHeartbeat(paths.WorkingRoot, 90000);
 	var originalOutput = Console.Out;
@@ -528,12 +536,13 @@ static async Task RunStaleSubmissionTests(string temporaryRoot)
 	Console.SetError(errors);
 	try
 	{
-		Expect(await AgentBridgeApplication.RunAsync(new[] { "status", "--project", project }) == 3,
-			"read-only status must continue to report stale heartbeat");
-		Expect(!Directory.Exists(paths.Inbox), "status must not enqueue a recovery task");
+		Expect(await AgentBridgeApplication.RunAsync(new[] { "status", "--project", project }) == 0,
+			"queue status remains available with a stale editor");
+		Expect(Directory.GetFiles(paths.Inbox, "*.task.json").Length == 0, "status must not enqueue a recovery task");
 		output.GetStringBuilder().Clear();
 		var command = AgentBridgeApplication.RunAsync(new[] { "compile", "--project", project, "--wait", "5" });
 		Expect(!command.IsCompleted, "stale heartbeat before submission must enter the watchdog instead of failing preflight");
+		await IndependentQueueTests.Until(() => Directory.GetFiles(paths.Inbox, "*.task.json").Length == 1);
 		var requests = Directory.GetFiles(paths.Inbox, "*.task.json");
 		Expect(requests.Length == 1, "stale submission must enqueue exactly one task");
 		var id = Path.GetFileName(requests[0]).Replace(".task.json", "");
@@ -560,8 +569,8 @@ static async Task RunQueueBudgetTests(string temporaryRoot)
 	File.WriteAllText(paths.StatusFile, JsonSerializer.Serialize(new BridgeStatus
 	{
 		ProtocolVersion = 1, ProjectPath = project, EditorPid = Environment.ProcessId,
-		Enabled = true, RoslynReady = true, HostOs = HostPlatform.Current,
-		QueueBlockReason = "scene_recovery", Capabilities = new[] { "cancel-v1" }
+		Enabled = true, RoslynReady = true, HostOs = HostPlatform.Current, Capabilities = new[] { QueueFiles.Capability },
+		QueueBlockReason = "scene_recovery"
 	}));
 	WriteHeartbeat(paths.WorkingRoot, 0);
 	var stdout = Console.Out;
@@ -577,18 +586,15 @@ static async Task RunQueueBudgetTests(string temporaryRoot)
 		using var result = JsonDocument.Parse(output.ToString());
 		string id = result.RootElement.GetProperty("Id").GetString()!;
 		Expect(result.RootElement.GetProperty("Status").GetString() == "queued", "queue expiry is not terminal task timeout");
-		Expect(result.RootElement.GetProperty("Reason").GetString() == "scene_recovery", "queue expiry must expose its blocker");
+		Expect(result.RootElement.GetProperty("Reason").GetString() == "awaiting_executor", "queue expiry must expose its blocker");
 		Expect(File.Exists(Path.Combine(paths.Inbox, id + ".task.json")), "client timeout preserves the exact queued task");
 		output.GetStringBuilder().Clear();
 		WriteHeartbeat(paths.WorkingRoot, 0);
-		var cancel = AgentBridgeApplication.RunAsync(new[] { "cancel", id, "--project", project, "--session", "observer", "--wait", "1" });
-		var requests = Directory.GetFiles(paths.Inbox, "*.task.json");
-		Expect(requests.Length == 2, "cancel submits one control request and does not duplicate the target");
-		using var control = JsonDocument.Parse(File.ReadAllText(requests.Single(path => !path.EndsWith(id + ".task.json"))));
-		Expect(control.RootElement.GetProperty("TargetTaskId").GetString() == id, "cancel must address the exact task");
-		Expect(control.RootElement.GetProperty("Kind").GetString() == "cancel", "control request uses cancel kind");
-		Expect(control.RootElement.GetProperty("AgentSessionId").GetString() == "observer", "cancel must preserve requester identity for protection and notification");
-		Expect(await cancel.WaitAsync(TimeSpan.FromSeconds(5)) == 2, "an unconsumed cancellation obeys the client budget too");
+		int canceled = await AgentBridgeApplication.RunAsync(new[] { "cancel", id, "--project", project, "--session", "observer", "--wait", "1" });
+		Expect(canceled == 0, "pending cancellation is acknowledged without an editor tick");
+		Expect(Directory.GetFiles(paths.Inbox, "*.task.json").Length == 1, "pending cancellation does not create a Unity control task");
+		using var cancellation = JsonDocument.Parse(output.ToString());
+		Expect(cancellation.RootElement.GetProperty("Status").GetString() == "canceled", "pending task is canceled immediately");
 	}
 	finally { Console.SetOut(stdout); Console.SetError(stderr); }
 }

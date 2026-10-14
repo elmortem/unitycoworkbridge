@@ -36,7 +36,7 @@ namespace AgentBridge
             var command = CoordinationEditorAdapter.NewCommand(Coordination.CoordinationEngine.OpCancel);
             command.Session = request.Session;
             command.Uuid = request.Uuid;
-            if (!CoordinationEditorAdapter.TryApply(command, out var reply)) return "Coordination store is busy; try again.";
+            if (!CoordinationEditorAdapter.TryApply(command, out var reply)) return null; // The durable command will be applied by the dispatcher.
             return reply.Ok ? null : reply.Code + ": " + reply.Message;
         }
 
@@ -55,36 +55,14 @@ namespace AgentBridge
             queue.Remove(task);
             int index = beforeId == null ? queue.Count : queue.FindIndex(t => t.Id == beforeId);
             queue.Insert(index, task);
-            TaskQueueOrder.Set(queue.ConvertAll(t => t.Id));
-            UpdateQueueStatus(BuildPendingList(_activeTaskId ?? TestRunLifecycle.TaskId));
-            return true;
+            return QueueEditorAdapter.Move(id, beforeId);
         }
 
         // Human editor actions are authoritative, as is the existing Cancel Running Task menu.
         public static bool CancelFromQueueWindow(string id)
         {
-            if (string.IsNullOrEmpty(id)) return false;
-            if (TestRunLifecycle.RequestStop(id, "canceled", "Canceled by user in Task Queue")) return true;
-            if (_activeTaskId == id) { CancelActive(); return true; }
-            var pending = GetQueueSnapshot().Find(t => t.Id == id);
-            if (pending != null)
-            {
-                WriteTerminal(id, pending.Kind, "canceled", "Canceled before execution by user",
-                    TaskFileHash.HashOf(pending.TaskFilePath, PayloadPathOf(pending.TaskFilePath)));
-                UpdateQueueStatus(BuildPendingList(_activeTaskId ?? TestRunLifecycle.TaskId));
-                return true;
-            }
-            if (TaskJournal.TryRead(id, out var record) && record.Status == "attached")
-            {
-                record.Status = "canceled";
-                record.FinishedAtUtc = DateTime.UtcNow.ToString("o");
-                record.Logs.Add("Canceled by user in Task Queue");
-                TaskJournal.Write(record);
-                TelemetryLog.TaskFinished(record);
-                CoordinationGate.ReleaseByRecord(record, false, "canceled");
-                return true;
-            }
-            return false;
+            if (string.IsNullOrEmpty(id) || QueueEditorAdapter.IsCanceled(id)) return false;
+            return QueueEditorAdapter.Cancel(id);
         }
     }
 }

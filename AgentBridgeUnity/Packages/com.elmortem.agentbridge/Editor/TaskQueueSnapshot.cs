@@ -30,7 +30,7 @@ namespace AgentBridge
             {
                 try
                 {
-                    var record = JsonUtility.FromJson<TaskRecord>(File.ReadAllText(path));
+                    var record = JsonUtility.FromJson<TaskRecord>(global::AgentBridge.Coordination.SharedFile.ReadAllText(path));
                     if (record == null || string.IsNullOrEmpty(record.Id)) throw new FormatException("Missing task ID");
                     records[record.Id] = record;
                 }
@@ -54,11 +54,11 @@ namespace AgentBridge
                     }
                     if (record != null && TaskCoordinator.IsTerminal(record.Status))
                     {
-                        var submitted = JsonUtility.FromJson<TaskRequest>(File.ReadAllText(path));
+                        var submitted = JsonUtility.FromJson<TaskRequest>(global::AgentBridge.Coordination.SharedFile.ReadAllText(path));
                         string payload = string.IsNullOrEmpty(submitted?.PayloadFile) ? null : Path.Combine(inbox, submitted.PayloadFile);
                         if (record.Hash == TaskFileHash.HashOf(path, payload)) continue;
                     }
-                    var request = JsonUtility.FromJson<TaskRequest>(File.ReadAllText(path));
+                    var request = JsonUtility.FromJson<TaskRequest>(global::AgentBridge.Coordination.SharedFile.ReadAllText(path));
                     if (request == null) throw new FormatException("Unreadable request");
                     snapshot.Pending.Add(new PendingTaskInfo
                     {

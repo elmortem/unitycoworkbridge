@@ -93,6 +93,7 @@ internal static class TaskResultFormatter
 		}
 
 		AppendEvidence(output, root);
+		AppendLabeledValue(output, "Editor", GetString(root, "EditorState"));
 		AppendLabeledValue(output, "Reason", GetString(root, "Reason"));
 		AppendLabeledValue(output, "Resume", GetString(root, "Resume"));
 		AppendLabeledValue(output, "Result", GetString(root, "ReturnValue"));

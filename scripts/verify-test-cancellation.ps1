@@ -1,6 +1,7 @@
 param(
 	[string]$Project = (Join-Path $PSScriptRoot '../AgentBridgeUnity'),
-	[string]$Cli = (Join-Path $PSScriptRoot '../AgentBridgeCli/bin/Release/net8.0/agentbridge.exe')
+	[string]$Cli = (Join-Path $PSScriptRoot '../AgentBridgeCli/bin/Release/net8.0/agentbridge.exe'),
+	[switch]$ScriptsOnly
 )
 $ErrorActionPreference = 'Stop'
 $Project = [IO.Path]::GetFullPath($Project)
@@ -45,6 +46,7 @@ public static class $id
 try {
 	$health = Invoke-Bridge @('status')
 	if ($health.bridge.activeTaskId -or $health.bridge.isPlaying -or $health.bridge.queuedTasks.Count -gt 0) { throw 'Run only in an idle test editor.' }
+	if (-not $ScriptsOnly) {
 	$cases = @(
 		@('plain', 'EditMode', 'QueueTimeoutReproTests.ResponsiveTestOutlivesTimeout', 'canceled'),
 		@('recovery', 'EditMode', 'QueueTimeoutReproTests.PendingRecoveryOutlivesTimeout', 'canceled'),
@@ -59,7 +61,7 @@ try {
 		if ($case[0] -ne 'orphan' -and $case[0] -ne 'lost') {
 			Start-Sleep -Seconds 4
 			$stop = Invoke-Bridge @('cancel', $submitted.Id, '--session', 'cancellation-verifier', '--wait', '5')
-			if ($stop.Status -ne 'success') { throw 'Owner cancellation failed' }
+			if ($stop.Status -notin @('cancel_requested','canceled','already_finished')) { throw 'Owner cancellation failed' }
 		}
 		$markerWait = if ($case[0] -eq 'lost') { '60' } else { '30' }
 		$marker = Invoke-Bridge @('csharp', (New-Marker $case[0]), '--session', 'cancellation-verifier', '--wait', $markerWait)
@@ -79,16 +81,17 @@ try {
 	if ($queued.Status -ne 'queued') { throw 'Expected queued follower' }
 	$cancelQueued = Invoke-Bridge @('cancel', $queued.Id, '--session', 'cancellation-verifier', '--wait', '3')
 	$queuedFinal = Invoke-Bridge @('wait', $queued.Id, '--wait', '1')
-	if ($cancelQueued.Status -ne 'success' -or $queuedFinal.Status -ne 'canceled') { throw 'Queued cancellation failed' }
+	if ($cancelQueued.Status -ne 'canceled' -or $queuedFinal.Status -ne 'canceled') { throw 'Queued cancellation failed' }
 	$cancelActive = Invoke-Bridge @('cancel', $active.Id, '--session', 'cancellation-verifier', '--wait', '3')
 	$activeFinal = Invoke-Bridge @('wait', $active.Id, '--wait', '10')
 	Save-Result 'explicit-cancel' $activeFinal
-	if ($cancelActive.Status -ne 'success' -or $activeFinal.Status -ne 'canceled') { throw 'Active cancellation failed' }
+	if ($cancelActive.Status -notin @('cancel_requested','canceled') -or $activeFinal.Status -ne 'canceled') { throw 'Active cancellation failed' }
 	$after = Invoke-Bridge @('csharp', (New-Marker 'after_cancel'), '--session', 'cancellation-verifier', '--wait', '10')
 	if ($after.Status -ne 'success') { throw 'Queue did not recover after cancellation' }
 	$again = Invoke-Bridge @('cancel', $active.Id, '--session', 'cancellation-verifier', '--wait', '3')
-	if ($again.Status -ne 'success') { throw 'Repeated cancel must be harmless' }
+	if ($again.Status -ne 'already_finished') { throw 'Repeated cancel must be harmless' }
 	Write-Output 'PASS explicit cancellation: queued target, active owned test, repeated cancel, follower'
+	}
 	$cooperativeId = "Task_${runId}_cooperative"
 	$cooperativePath = Join-Path $Project "Temp/AgentBridge/$cooperativeId.cs"
 	[IO.File]::WriteAllText($cooperativePath, @"
@@ -107,7 +110,7 @@ public static class $cooperativeId
 	$stopScript = Invoke-Bridge @('cancel', $cooperative.Id, '--session', 'cancellation-verifier', '--wait', '3')
 	$scriptFinal = Invoke-Bridge @('wait', $cooperative.Id, '--wait', '10')
 	Save-Result 'cooperative-cancel' $scriptFinal
-	if ($stopScript.Status -ne 'success' -or $scriptFinal.Status -ne 'canceled') { throw 'Cooperative script cancellation failed' }
+	if ($stopScript.Status -notin @('cancel_requested','canceled') -or $scriptFinal.Status -ne 'canceled') { throw 'Cooperative script cancellation failed' }
 	Write-Output 'PASS cooperative C# cancellation'
 	$slowId = "Task_${runId}_slow_stop"
 	$slowPath = Join-Path $Project "Temp/AgentBridge/$slowId.cs"
@@ -126,7 +129,7 @@ public static class $slowId
 	Start-Sleep -Seconds 3
 	$null = Invoke-Bridge @('cancel', $slow.Id, '--session', 'cancellation-verifier', '--wait', '3')
 	$stopping = Invoke-Bridge @('wait', $slow.Id, '--wait', '1')
-	if ($stopping.Status -ne 'canceling') { throw 'Uncooperative C# lost its canceling status' }
+	if ($stopping.Status -notin @('cancel_requested','canceling')) { throw 'Uncooperative C# lost its canceling status' }
 	$blocked = Invoke-Bridge @('csharp', (New-Marker 'slow_follower'), '--session', 'cancellation-verifier', '--wait', '1')
 	if ($blocked.Status -ne 'queued') { throw 'Queue released before C# executor stopped' }
 	$slowFinal = Invoke-Bridge @('wait', $slow.Id, '--wait', '40')

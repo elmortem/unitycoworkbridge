@@ -270,8 +270,7 @@ namespace AgentBridge
 			reason = "";
 			// Uncoordinated readers do not acquire editor ownership. Explicit coordinated
 			// steps still need validation and accounting, including cache hits.
-			return string.IsNullOrEmpty(request.CoordinationWindowToken)
-				|| CoordinationGate.TryReserve(request, taskId, out reason);
+			return CoordinationGate.TryReserve(request, taskId, out reason);
 		}
 
 		public static string CurrentInputDigest(TaskRequest request)

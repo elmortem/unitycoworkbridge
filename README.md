@@ -8,9 +8,9 @@ A system for executing AI-generated C# scripts in an open Unity Editor. An agent
 
 The system consists of three parts:
 
-**Agent Bridge** — a C# package inside Unity Editor. A background coordinator picks up tasks dropped into `Library/AgentBridge/Inbox/`, one at a time. C# tasks are compiled in memory with Roslyn (no domain reload, no files written under `Assets`); `compile` and `tests` tasks use Unity's own compiler/test runner. Every task gets a single result record in `Library/AgentBridge/Journal/<TaskId>.json`.
+**Agent Bridge** — a C# package inside Unity Editor. Its main-thread coordinator takes accepted tasks from `Library/AgentBridge/Inbox/` and obtains a durable execution claim from the external dispatcher before running them. C# tasks are compiled in memory with Roslyn (no domain reload, no files written under `Assets`); `compile` and `tests` tasks use Unity's own compiler/test runner. Every task gets a result record in `Library/AgentBridge/Journal/<TaskId>.json`.
 
-**AgentBridge CLI** — a self-contained executable for Windows, macOS, and Linux. The stable command name is `agentbridge`. It discovers a Unity project from the current directory, writes protocol tasks atomically, waits for results, validates bridge health and protocol compatibility, and exposes `status` / `doctor` diagnostics. Use `--project <path>` when the current directory is outside the Unity project.
+**AgentBridge CLI** — a self-contained executable for Windows, macOS, and Linux. The stable command name is `agentbridge`. It discovers a Unity project, automatically starts a hidden `queue-server` process for that project, and accepts and manages durable tasks even while Unity is busy, unresponsive or closed. The server owns queue and coordination mutations under `Library/AgentBridge/Queue/`; the CLI also waits for results and exposes `status` / `doctor` diagnostics. Use `--project <path>` when the current directory is outside the Unity project.
 
 **Unity Bridge Plugin** — a plugin for Claude Agent. It ships two skills:
 
@@ -137,11 +137,32 @@ unity-bridge-plugin/
 
 After installation, just ask Claude to do something inside the Unity Editor (e.g. "list all prefabs using shader X" or "add a Rigidbody to all enemies") — the `unity-bridge` skill auto-triggers on such requests. You can also invoke it explicitly via `/unity-bridge`. If the plugin is installed correctly, Claude will start generating a script.
 
+## Independent queue
+
+Submission, task inspection, ordering, cancellation and `coord` commands do not require a readable Unity status or heartbeat. A successful admission freezes the request and payload in `Library/AgentBridge/Queue/` before acknowledging it. The dispatcher restarts automatically after an idle shutdown or process exit; accepted tasks retain their IDs. Execution claims check the same durable request/payload hash. An unresolved execution is never replayed merely because a heartbeat became stale.
+
+The dispatcher runs from a content-hashed copy of the CLI under the system temporary directory `AgentBridgeQueueRuntime`, so it does not lock the installed CLI during an update or rebuild on Windows. A newer client updates `launch.json`; the server hands over ownership between transactions when the runtime changes.
+
+```bash
+agentbridge compile --wait 0
+agentbridge queue list --format human
+agentbridge queue status <TaskId>
+agentbridge queue cancel <TaskId> --session S
+agentbridge queue move <TaskId> [before-id]
+agentbridge queue shutdown
+```
+
+Omit `before-id` to move a waiting task to the end. `queue shutdown` stops the dispatcher without deleting accepted work; the next client or editor request starts it again. `cancel <TaskId>` remains an alias for task cancellation. These commands accept `--project <path>`.
+
+`--wait 0` returns immediately after admission with exit code `0` and `Accepted: true`; this is not an execution result. A positive `--wait` covers queueing and execution together. If it expires, exit code `2` carries the same task ID, `Accepted: true`, a resume command and `EditorState`; use `wait <TaskId>` rather than submitting a duplicate. Editor availability is reported separately from admission. Every TaskId returned by `coord submit` can be inspected immediately, including future steps. Steps skipped after a batch closes receive terminal outcomes.
+
+Update the CLI, Unity package and agent plugin together: CLI 1.24.0, package 0.36.0 and plugin 1.33.0 introduce this contract. The executor advertises `independent-queue-v1`. An older executor cannot start newly accepted work; it stays queued until a compatible package is available. Package capabilities govern dispatch, not offline admission. Cache selection, evidence checks and scene recovery retain their existing requirements.
+
 ## Cancellation and long-running tasks
 
 `agentbridge cancel <TaskId> [--session S]` addresses one task. Running tasks are protected against foreign cancellation for their first 300 seconds of actual execution, including tasks without a coordination window. After that, any agent may cancel a blocking test or cooperative C# task without asking its owner, even inside an unexpired window. The bridge checks the age; elapsed queue time does not count. The owner can cancel earlier using the same nonempty session, and human editor controls remain authoritative. An omitted session never proves ownership. Waiting tasks retain their existing window protection. Canceling one attached follower does not stop the shared test run. Repeated cancellation of a completed task is harmless.
 
-Cancellation is serviced outside the execution queue. `cancel_requested` acknowledges the request; use `wait <TaskId>` for the actual outcome. While stopping, the target remains `canceling` and retains the editor until its executor stops and test scene recovery completes. After 30 seconds without completion, status reports `cancel_blocked:<TaskId>`; inspect Unity rather than deleting queue files or restarting the process. Other running task kinds currently return `cancel_not_supported_for_running_task`.
+Cancellation is serviced outside the execution queue. Before an execution claim, cancellation is immediately terminal and prevents execution, even with Unity closed. After a claim, `cancel_requested` acknowledges only a durable intent; use `wait <TaskId>` for the actual outcome. The Unity executor may report `canceling` while it stops and retains the editor until execution and test scene recovery complete. A blocked main thread cannot confirm a stop, but the dispatcher remains available for queue operations. After 30 seconds without completion, editor status can report `cancel_blocked:<TaskId>`; inspect Unity rather than deleting queue files or restarting the process. Unsupported running phases cannot be declared stopped by the dispatcher.
 
 A test run whose Unity job ends without delivering results — a Test Framework failure, not a failing test — finishes as `runtime_error` no later than 25 seconds after the job stops, and the queue moves on by itself. No cancellation is needed, and an orphan `EditModeRunner` object left behind by such a job does not hold the queue.
 
@@ -198,7 +219,7 @@ agentbridge coord status --session AB_20260813_1500_a1f --format human
 
 Every command also accepts `--session <id>` and `--note <text>`, which identify the agent session behind the task; see [Multi-Agent Sessions](#multi-agent-sessions). The `coord` group is described in [Coordinating Several Agents](#coordinating-several-agents).
 
-Exit codes: `0` success, `1` a terminal task failure including `test_failure`, `no_tests_matched`, `ambiguous_test_filter`, `stale_input` and `evidence_unavailable`, `2` client wait exhausted (the task is still running — retry with `agentbridge wait <TaskId>`), `3` project/bridge unavailable, protocol mismatch, bad usage, or an unconfirmed run of all tests (`all_tests_confirmation_required`).
+Exit codes: `0` successful execution, a successful control/read operation, or admission with `--wait 0`; `1` refusal or a terminal task failure including `test_failure`, `no_tests_matched`, `ambiguous_test_filter`, `stale_input` and `evidence_unavailable`; `2` client wait exhausted while the accepted task remains queued/running — resume with `agentbridge wait <TaskId>`; `3` project/dispatcher unavailable, file access failure, bad usage, or an unconfirmed run of all tests (`all_tests_confirmation_required`). Health commands retain their editor diagnostics; an unavailable editor does not reject admission.
 
 Filesystem failures return exit `3` with `access_denied` or `io_error` in the selected JSON/human format instead of crashing the CLI. Check the reported filesystem error, project permissions, sandbox access and file locks. Do not delete coordination state to recover access. An I/O failure is not proof that an already submitted task stopped; inspect its status before resubmitting.
 
@@ -245,17 +266,17 @@ Beyond the fatal `Problems` that make the bridge unavailable, health also carrie
 
 ### Running While the Editor Is in the Background
 
-Everything in the bridge rides on `EditorApplication.update`: the inbox scan, compile polling, task timeouts, awaited continuations and the heartbeat. Unity throttles that loop when its window loses focus and can stop calling it altogether when the window is minimized, so an unattended agent would otherwise watch its task sit in the queue until a human clicks into the Editor. Two layers keep the loop alive.
+Unity execution depends on `EditorApplication.update`: executor scanning, compile polling, awaited continuations and the editor heartbeat. Unity can throttle or stop that loop when minimized or blocked. The external queue dispatcher continues accepting and managing tasks independently; actual Unity work waits for the editor to resume.
 
 On the Editor side, `Wake timer: background_signal` means a timer independently calls Unity's internal, thread-safe `EditorApplication.SignalTick`. It is armed during initialization, before the first `update`, and uses `ActiveTickIntervalMs` while work is pending or running and `IdleTickIntervalMs` otherwise. The callback only signals Unity: queue processing, heartbeat writes and all other Editor APIs stay on the main thread. There is no persistent worker loop. Before domain reload or quit, shutdown drains any in-flight signal and prevents queued callbacks from signalling again. Turning the bridge off also stops the timer; Start arms it immediately.
 
-On the client side, work commands enter recovery even if the heartbeat is already stale at submission. This only applies to a live, enabled, compatible editor on the same host whose project identity matches; other operational failures still prevent submission. Read-only `status` and `doctor` continue to report stale health without creating tasks. During queueing and execution, the CLI checks health every three seconds and starts wake attempts at a heartbeat age of five seconds. On Windows it posts `WM_NULL` up to five times, then tries focus once if the Editor is not already foreground. It restores the previous foreground window only if Unity still holds focus. Telemetry records whether the native call succeeded; only heartbeat progress proves recovery.
+On the client side, submission and waiting use the dispatcher without requiring editor health. `status` and `doctor` report stale or unavailable editor state honestly; those diagnostics do not remove or duplicate accepted work. `EditorState` accompanies nonterminal wait responses, so agents can distinguish an accepted task from an editor that cannot currently execute it.
 
-Exhausting wake attempts does not prove that Unity is asleep: import, compilation or domain reload can temporarily block heartbeat writes. Recovery waits up to 120 seconds without heartbeat progress, including when Unity is foreground, then returns `bridge_asleep` (exit code `3`) with the task ID to resume through `agentbridge wait`. The task remains queued/running. A wake signal cannot dismiss a modal dialog or unblock deadlocked user code.
+Missing heartbeat progress does not prove that a task ended: import, compilation, a long test or domain reload can block updates. A positive client wait expires with exit code `2`, the same accepted task ID and a resume command; it does not turn into `bridge_asleep` or `bridge_unavailable` merely because Unity stopped responding. A wake signal cannot dismiss a modal dialog or unblock deadlocked user code.
 
 The independent signal timer has no Windows dependency; its background/reload behavior has been tested on Windows with Unity 2022.3 and 6.4. If the private API is missing or fails, Windows falls back to a native message timer (`Wake timer: thread`); other platforms report `unsupported`. That fallback can wake the OS message queue but does not guarantee an Editor update. `agentbridge doctor` warns with `! interaction_throttled` when the Editor reports a throttling mode. Unity versions without an `EditorApplication.interactionMode` property report `Interaction mode: unknown`.
 
-Only the interactive editor owns the queue. Batch mode and Asset Import Workers do not start the coordinator, test callbacks, scene recovery or wake timer. Workers share the project's Library but not the editor's SessionState; letting them recover records could otherwise mark a live task `interrupted_by_domain_reload`.
+The external dispatcher owns the durable queue. Only the interactive editor executes Unity tasks. Batch mode and Asset Import Workers do not start the editor coordinator, test callbacks, scene recovery or wake timer. Workers share the project's Library but not the editor's SessionState; letting them recover records could otherwise mark a live task `interrupted_by_domain_reload`.
 
 ### C# Task Script
 
@@ -343,7 +364,7 @@ Pass `--session <id>` (1–64 characters of `A-Za-z0-9_-`) with every command to
 - Every result carries a `Contention` block — how many foreign sessions are waiting, for how long, and their `--note` texts. `--format human` prints it as `Contention: 2 waiting, oldest 47s`.
 - `tests` and `compile` on an unchanged project skip the queue entirely: they are answered from the result cache or attach to a compatible run already in flight, without taking the lease or switching scene contexts. Only a run after real changes costs editor time; `--fresh` opts out of the cache.
 - `agentbridge release --session <id>` hands the editor back early instead of waiting for the idle timeout. It answers `released` when the session held the lease, `not_holder` otherwise, and never interrupts another session's slice.
-- `--wait` limits the entire client wait, including queueing. Exit 2 preserves the same task; resume with `agentbridge wait <TaskId>`. Status exposes `QueueBlockReason` and `QueueBlockedSinceUtc`; a live heartbeat does not imply that the queue is advancing. If the bridge dies while queued, the client exits 3 with `bridge_unavailable`.
+- `--wait` limits the entire client wait, including queueing. `--wait 0` confirms admission immediately with exit 0; a positive budget expires with exit 2 and preserves the same task. Resume with `agentbridge wait <TaskId>`. `EditorState`, `QueueBlockReason` and `QueueBlockedSinceUtc` distinguish editor availability from progress; a live heartbeat does not imply that the queue is advancing.
 
 Two settings in `ProjectSettings/AgentBridge.json`, both exposed in **Tools → Agent Bridge → Setup...**:
 
@@ -368,7 +389,7 @@ agentbridge coord capabilities --format human
 
 ### Ready packages and input edits
 
-Check for `coordination-batch-v1` and `coordination-edit-leases-v1` on both CLI and package. Register a scope containing only Unity input paths. Registration declares intent and does not reserve files: overlapping registrations, including idle sessions waiting for tests, are allowed. Use `edit-begin` / `edit-end` around bounded writes to those inputs; independent work needs no Bridge permission.
+Use the matching CLI/package versions supporting `independent-queue-v1`, `coordination-batch-v1` and `coordination-edit-leases-v1`. The dispatcher accepts coordination operations while Unity is closed; execution waits for a compatible editor. Register a scope containing only Unity input paths. Registration declares intent and does not reserve files: overlapping registrations, including idle sessions waiting for tests, are allowed. Use `edit-begin` / `edit-end` around bounded writes to those inputs; independent work needs no Bridge permission.
 
 Submit all executable work together:
 ```bash
@@ -396,9 +417,9 @@ Scope paths are repo-relative, with forward slashes, a trailing slash for direct
 
 At the deadline the edit grant closes automatically and the queue advances. A late `renew` returns `stale_token`; a late `edit-end` reports `already_closed`. Do not leave background writers beyond the deadline. After a pause or expiry, request a new edit grant with a new UUID, reread the current files, and adapt changes before writing: another agent may have edited the same files. Close registration with `coord leave` when its Unity work is done; forgetting to leave no longer reserves files.
 
-Upgrade the Unity package and all CLI clients together. The package advertises `coordination-edit-leases-v1`; the new CLI refuses mutations until it sees that capability. The first mutation migrates state schema 1 to 2 atomically, preserving registrations and running windows and releasing old orphaned edits. Old CLI builds refuse schema 2 instead of scheduling overlapping writers under the former assumptions. No manual deletion or abandonment of idle registrations is needed.
+Upgrade the Unity package and all CLI clients together. Coordination mutations go through the external dispatcher and do not require a current package status file. Dispatch requires the executor's `independent-queue-v1` capability. The first coordination mutation migrates state schema 1 to 2 atomically, preserving registrations and running windows and releasing old orphaned edits. Old CLI builds refuse schema 2 instead of scheduling overlapping writers under the former assumptions. No manual deletion or abandonment of idle registrations is needed.
 
-Upgrading rejects old waiting permission-only requests with batch_required. Already running old windows drain safely; their tasks are not interrupted merely to migrate. Ordinary task commands without tokens remain supported and wait while a window is occupied. Older packages without the batch capability require the old manual request/wait/dispatch/finish workflow.
+Upgrading rejects old waiting permission-only requests with batch_required. Already running old windows drain safely; their tasks are not interrupted merely to migrate. Ordinary task commands without tokens remain supported and wait while a window is occupied. Update older executors instead of falling back to the previous manual request/wait/dispatch/finish workflow for newly accepted work.
 
 Exit codes for coord: 0 operation accepted/read succeeded, 1 refusal or conflict, 2 observation wait expired, 3 bad usage or unsupported package/store. Read the package outcome and task results; a successful submission is not successful execution.
 
@@ -558,6 +579,15 @@ Library/AgentBridge/
 ├── status.json                 ← protocol/package/project/Editor status and capabilities
 ├── heartbeat                   ← liveness marker, updated every ~2s
 ├── project-id                  ← host-independent project identity, mirrored in status.json
+├── Queue/                      ← durable dispatcher state, available without Unity
+│   ├── Tasks/                  ← frozen requests, claims, cancellation intent and results
+│   ├── Requests/               ← atomic client/editor messages
+│   ├── Replies/                ← operation acknowledgments
+│   ├── server.lock             ← single dispatcher ownership
+│   ├── server.json             ← dispatcher process identity
+│   ├── heartbeat               ← dispatcher liveness, separate from the editor heartbeat
+│   ├── launch.json             ← restart command for the same CLI
+│   └── order.txt               ← durable manual queue order
 ├── cli/
 │   └── agentbridge             ← Linux build for agents running in a sandbox
 ├── Inbox/

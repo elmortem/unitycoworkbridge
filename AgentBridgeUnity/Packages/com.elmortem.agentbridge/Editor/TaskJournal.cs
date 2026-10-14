@@ -8,6 +8,9 @@ namespace AgentBridge
 	{
 		public static void Write(TaskRecord record)
 		{
+			// A queued cancellation won the external start/cancel race. Late cache or scheduler
+			// callbacks must not replace it with a new outcome.
+			if (QueueEditorAdapter.IsCanceled(record.Id) && record.Status != "canceled") return;
 			string path = Path.Combine(BridgePaths.Journal, record.Id + ".json");
 			string json = JsonUtility.ToJson(record, true);
 			// Every waiting CLI polls this file; SharedFile survives a reader caught mid-replace.
@@ -23,18 +26,20 @@ namespace AgentBridge
 				return false;
 			}
 
-			string json = File.ReadAllText(path);
+			string json = Coordination.SharedFile.ReadAllText(path);
 			record = JsonUtility.FromJson<TaskRecord>(json);
 			return record != null;
 		}
 
 		public static void Delete(string id)
 		{
+			if (QueueEditorAdapter.IsCanceled(id)) return;
 			string path = Path.Combine(BridgePaths.Journal, id + ".json");
 			if (File.Exists(path))
 			{
 				File.Delete(path);
 			}
+			QueueEditorAdapter.Requeue(id);
 		}
 
 		public static void Trim(int keep)
@@ -51,7 +56,7 @@ namespace AgentBridge
 			{
 				try
 				{
-					string json = File.ReadAllText(file);
+					string json = global::AgentBridge.Coordination.SharedFile.ReadAllText(file);
 					TaskRecord record = JsonUtility.FromJson<TaskRecord>(json);
 					if (record != null && record.Status != "attached")
 					{

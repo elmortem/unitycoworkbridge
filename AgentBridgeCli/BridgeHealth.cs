@@ -20,6 +20,8 @@ internal sealed class BridgeHealth
 	public bool ProjectMatches { get; set; }
 	public string ProjectMatchedBy { get; set; } = "";
 	public bool BridgeReady { get; set; }
+	public bool QueueReady { get; set; }
+	public Queueing.QueueTaskInfo[] Queue { get; set; } = Array.Empty<Queueing.QueueTaskInfo>();
 	public bool CSharpReady { get; set; }
 	public List<string> Problems { get; set; } = new();
 	public List<string> Warnings { get; set; } = new();

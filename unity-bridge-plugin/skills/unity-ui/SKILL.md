@@ -7,13 +7,19 @@ description: "Use this skill for any uGUI layout work in a Unity project via Age
 
 Вёрстка через декларативные задачи Agent Bridge: пишешь `<TaskName>.ui.json` в рабочую папку `<ProjectRoot>/Temp/AgentBridge/`, выполняешь `agentbridge ui <файл>`, мост применяет его к префабу без компиляции и без domain reload, возвращает результат в stdout. CLI находит Unity-проект от текущей директории вверх; вне проекта используй `--project <path>`.
 
+CLI автоматически запускает скрытый внешний `queue-server`. Приём, просмотр, перестановка, отмена ожидающих задач и `coord` работают при занятой, зависшей и закрытой Unity; принятый JSON сохраняется в `Library/AgentBridge/Queue/`. Используй CLI 1.24.0+, пакет 0.36.0+ с `independent-queue-v1` и плагин 1.33.0+ вместе. Старый исполнитель не запускает новые принятые задачи; отсутствие свежего status не препятствует приёму. Редактор подтверждает запуск сохранённого запроса с тем же хешем.
+
+`--wait 0` возвращает код 0 и `Accepted: true` только за приём; это ещё не применённая вёрстка. Положительный `--wait` при истечении возвращает код 2, тот же TaskId, `Accepted: true`, команду продолжения и `EditorState`. Продолжай через `agentbridge wait <TaskId>`, не подавай дубликат. Для изменённого JSON используй новый TaskId.
+
+Управляй очередью через `agentbridge queue list`, `queue status <TaskId>`, `queue cancel <TaskId> --session S`, `queue move <TaskId> [before-id]` и `queue shutdown`. Без `before-id` задача перемещается в конец. Отмена до резервирования завершается внешним диспетчером; после него сохраняет намерение и ждёт подтверждения редактора. Первые 300 секунд исполнения защищены от чужой отмены. `shutdown` сохраняет задачи, следующая команда снова запускает диспетчер.
+
 Где искать CLI, по порядку: `agentbridge` в `PATH`; затем стабильный путь установщика — `%LOCALAPPDATA%\AgentBridge\bin\agentbridge.exe` в Windows, `$HOME/.local/bin/agentbridge` в macOS/Linux; затем `<ProjectRoot>/Library/AgentBridge/cli/agentbridge` — сборка под Linux для агентов с шеллом в отдельной песочнице (Cowork, devcontainer, WSL). Не ищи CLI внутри UPM-пакета. Если не нашёл нигде — остановись и попроси пользователя поставить CLI через **Tools → Agent Bridge → Update CLI**; писать задачи в `Library/AgentBridge/Inbox` руками нельзя.
 
 ## Quick reference
 
 | Шаг | Действие |
 |-----|----------|
-| 1 | Выполнить `agentbridge status`; если cwd вне проекта — повторить с `--project <path>` |
+| 1 | При необходимости проверить редактор через `agentbridge status`; если cwd вне проекта — использовать `--project <path>`. Это диагностика, а не условие приёма задачи |
 | 2 | Найти `UNITYAGENT-UI.md` в проекте (или устаревшее `UNITYCOWORK-UI.md`) — соглашения вёрстки |
 | 3 | Незнакомый префаб — сначала задача с `dump`, изучить `Library/AgentBridge/Artifacts/<TaskId>/uidump.json` |
 | 4 | Итерация: задача `[apply..., uishot]` в `Temp/AgentBridge/<TaskName>.ui.json`, затем `agentbridge ui <файл>` |
@@ -83,7 +89,7 @@ description: "Use this skill for any uGUI layout work in a Unity project via Age
 - Поле `Contention` в результате задачи показывает, сколько чужих сессий ждёт редактор. Закончил серию правок — вызови `agentbridge release --session <id>`, не жди таймаута.
 - Пока чужая сессия держит редактор, команда честно ждёт в очереди и печатает в stderr позицию (`queued <n>s, position <p>/<total>, holder <id>`). Это не зависание — не отменяй команду и не пересоздавай задачу.
 - Открытый Prefab Stage и сцены запоминаются на сессию: когда редактор возвращается к тебе, мост восстанавливает то, в чём ты работал.
-- При `coordination-batch-v1` подай готовый пакет через `agentbridge coord submit --session S --request <uuid> --kind editor --plan plan.json`. Шаг: `{ "Id": "Layout", "Kind": "ui", "PayloadFile": "screen.ui.json" }`. Путь считается от plan.json; CLI сохраняет содержимое при подаче. Редактор сам запускает шаги и закрывает окно: ждать токен, подавать ui повторно и вызывать finish не нужно. Результат смотри через coord status по uuid и wait по TaskId. Только для старого coordination-v1 без batch-capability остаётся ручной порядок request/wait/ui с токеном/finish; подробности в unity-bridge. Обычная команда ui без токена поддерживается и ждёт занятого окна. Писать в служебные файлы моста нельзя.
+- Подай готовый пакет через `agentbridge coord submit --session S --request <uuid> --kind editor --plan plan.json`. Шаг: `{ "Id": "Layout", "Kind": "ui", "PayloadFile": "screen.ui.json" }`. Путь считается от plan.json; CLI сохраняет содержимое при подаче даже без живой Unity и сразу регистрирует TaskIds всех будущих шагов. Совместимый редактор сам запускает шаги и закрывает окно: ждать токен, подавать ui повторно и вызывать finish не нужно. Результат смотри через coord status по uuid и wait по TaskId. Старый пакет нужно обновить; ручной порядок с токенами не заменяет совместимый исполнитель. Обычная команда ui без токена поддерживается и ждёт занятого окна. Писать в служебные файлы моста нельзя.
 
 ## Открытый Prefab Stage и dirty-сцены
 

@@ -5,8 +5,8 @@ using AgentBridge.Coordination;
 
 namespace AgentBridge
 {
-	// Every route that can run, serve or join a Unity task goes through here. Without active
-	// registrations it answers "allow" for everything and the bridge behaves exactly as before.
+	// Every route that can run, serve or join a Unity task claims it through the dispatcher.
+	// Active registrations additionally require the coordination window and planned step.
 	public static class CoordinationGate
 	{
 		private static readonly string[] StepKinds = { "csharp", "ui", "sceneshot", "compile", "tests" };
@@ -126,13 +126,13 @@ namespace AgentBridge
 			reason = "";
 			if (!Coordinated || request == null)
 			{
-				return true;
+				return request != null && QueueEditorAdapter.TryClaim(request, null, out reason);
 			}
 
 			string kind = request.Kind ?? "";
 			if (!CoordinationText.Contains(StepKinds, kind))
 			{
-				return true;
+				return QueueEditorAdapter.TryClaim(request, null, out reason);
 			}
 
 			if (string.IsNullOrEmpty(request.CoordinationWindowToken))
@@ -143,7 +143,7 @@ namespace AgentBridge
 					reason = CoordinationCodes.Busy;
 					return false;
 				}
-				return true;
+				return QueueEditorAdapter.TryClaim(request, null, out reason);
 			}
 
 			CoordinationCommand command = CoordinationEditorAdapter.NewCommand(CoordinationEngine.OpStepBegin);
@@ -153,21 +153,7 @@ namespace AgentBridge
 			command.TaskId = taskId;
 			command.Actual = DescribeActual(request);
 
-			CoordinationReply reply;
-			if (!CoordinationEditorAdapter.TryApply(command, out reply))
-			{
-				// The store is busy this tick. Deferring is correct: nothing was consumed.
-				reason = CoordinationCodes.Busy;
-				return false;
-			}
-
-			if (!reply.Ok)
-			{
-				reason = reply.Code + ": " + reply.Message;
-				return false;
-			}
-
-			return true;
+			return QueueEditorAdapter.TryClaim(request, command, out reason);
 		}
 
 		public static void Release(TaskRequest request, string taskId, bool success, string reason)

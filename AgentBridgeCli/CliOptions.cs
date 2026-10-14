@@ -75,7 +75,7 @@ internal sealed class CliOptions
 			{
 				if (!TryTakeValue(args, ref index, out var value) || !TrySetWait(options, value))
 				{
-					options.Error = "--wait requires an integer from 1 to 86400";
+					options.Error = "--wait requires an integer from 0 to 86400";
 					return options;
 				}
 
@@ -86,7 +86,7 @@ internal sealed class CliOptions
 			{
 				if (!TrySetWait(options, argument[7..]))
 				{
-					options.Error = "--wait requires an integer from 1 to 86400";
+					options.Error = "--wait requires an integer from 0 to 86400";
 					return options;
 				}
 
@@ -427,7 +427,7 @@ internal sealed class CliOptions
 
 	private static bool TrySetWait(CliOptions options, string value)
 	{
-		if (!int.TryParse(value, out var seconds) || seconds < 1 || seconds > 86400)
+		if (!int.TryParse(value, out var seconds) || seconds < 0 || seconds > 86400)
 		{
 			return false;
 		}

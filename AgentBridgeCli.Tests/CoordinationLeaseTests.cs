@@ -16,6 +16,10 @@ internal static class CoordinationLeaseTests
 		string bridge = Path.Combine(project, "Library", "AgentBridge");
 		Directory.CreateDirectory(bridge);
 		Directory.CreateDirectory(Path.Combine(project, "ProjectSettings"));
+		Directory.CreateDirectory(Path.Combine(project, "Packages"));
+		File.WriteAllText(Path.Combine(project, "Packages", "manifest.json"), "{}");
+		Directory.CreateDirectory(Path.Combine(project, "Assets"));
+		File.WriteAllText(Path.Combine(project, "ProjectSettings", "ProjectVersion.txt"), "m_EditorVersion: 2022.3.62f2");
 		string scope = Path.Combine(project, "scope.json");
 		File.WriteAllText(scope, """{"Paths":["Assets/Shared/"]}""");
 		File.WriteAllText(Path.Combine(bridge, "status.json"), """{"Capabilities":["coordination-v1","coordination-batch-v1"]}""");
@@ -35,14 +39,9 @@ internal static class CoordinationLeaseTests
 			finally { Console.SetOut(previous); }
 		}
 
-		var legacy = Invoke("register", "--session", "a", "--spec", "night", "--scope", scope);
-		Check(legacy.Exit == 3 && legacy.Reply.GetProperty("Code").GetString() == CoordinationCodes.SchemaUnsupported,
-			$"new CLI must reject mutation against the old package; exit={legacy.Exit}, reply={legacy.Reply}");
-		Check(!Directory.Exists(CoordinationPathPolicy.CoordinationRoot(project)), "capability refusal must not create state");
-		File.WriteAllText(Path.Combine(bridge, "status.json"), JsonSerializer.Serialize(new
-		{
-			Capabilities = new[] { "coordination-v1", "coordination-batch-v1", CoordinationLimits.EditLeasesCapability }
-		}));
+		var offline = Invoke("register", "--session", "a", "--spec", "night", "--scope", scope);
+		Check(offline.Exit == 0, "coordination admission is independent of executor capabilities: " + offline.Reply);
+
 		foreach (string session in new[] { "a", "b" })
 			Check(Invoke("register", "--session", session, "--spec", "night", "--scope", scope).Exit == 0,
 				"CLI accepts overlapping declarations");
@@ -55,7 +54,7 @@ internal static class CoordinationLeaseTests
 		var status = Invoke("status", "--session", "b", "--request", "b");
 		Check(status.Reply.GetProperty("State").GetString() == CoordinationLimits.StateGranted
 			&& !string.IsNullOrEmpty(status.Reply.GetProperty("Token").GetString()), "status returns next writer's usable token");
-		Console.WriteLine("CLI edit leases: PASS (package gate, overlap registration, queued handoff)");
+		Console.WriteLine("CLI edit leases: PASS (offline admission, overlap registration, queued handoff)");
 	}
 
 	private static void Check(bool condition, string message)

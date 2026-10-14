@@ -5,8 +5,8 @@ using UnityEngine;
 
 namespace AgentBridge
 {
-	// The editor half of coordination-v1. It owns the one store instance in this process, takes at
-	// most one non-blocking lock attempt per tick, and never waits for anything on the main thread.
+	// The editor reads coordination snapshots and sends mutations to the independent dispatcher.
+	// A tick polls replies without taking the writer lock or waiting for another process.
 	public static class CoordinationEditorAdapter
 	{
 		public const string IncarnationKey = "AgentBridge_CoordinationIncarnation";
@@ -15,7 +15,6 @@ namespace AgentBridge
 		private const double TickIntervalSeconds = 0.5;
 
 		private static CoordinationFileStore _store;
-		private static CoordinationEngine _engine;
 		private static bool _resolved;
 		private static string _unavailableReason = "";
 		private static CoordinationState _snapshot;
@@ -202,54 +201,13 @@ namespace AgentBridge
 			}
 		}
 
-		// One non-blocking attempt. A busy lock is not a failure: the editor returns to its update
-		// and tries again on the next tick.
+		// The independent server owns coordination writes; the editor only polls a reply.
 		public static bool TryApply(CoordinationCommand command, out CoordinationReply reply)
 		{
-			reply = null;
-			Resolve();
-			if (_store == null)
-			{
-				return false;
-			}
-
-			ICoordinationTransaction transaction;
-			try
-			{
-				if (!_store.TryBegin(out transaction))
-				{
-					return false;
-				}
-			}
-			catch (CoordinationStoreException exception)
-			{
-				reply = CoordinationReply.Fail(exception.Code, exception.Message);
-				return true;
-			}
-
-			using (transaction)
-			{
-				try
-				{
-					reply = _engine.Apply(transaction.State, command, CoordinationSystemClock.Instance.UtcNowMs);
-				}
-				catch (Exception exception)
-				{
-					reply = CoordinationReply.Fail(CoordinationCodes.Corrupt, exception.Message);
-					return true;
-				}
-
-				if (reply.Changed)
-				{
-					transaction.Commit();
-					_snapshot = transaction.State;
-					_lastSnapshotTime = EditorApplication.timeSinceStartup;
-				}
-			}
-
-			return true;
+			bool complete = QueueEditorAdapter.TryCoordinate(command, out reply);
+			if (complete) Invalidate();
+			return complete;
 		}
-
 		public static CoordinationCommand NewCommand(string op)
 		{
 			return new CoordinationCommand
@@ -367,7 +325,6 @@ namespace AgentBridge
 			}
 
 			_resolved = true;
-			_engine = new CoordinationEngine();
 
 			// SessionState survives a domain reload and dies with the editor process, which is
 			// exactly the line coordination-v1 draws between a reload and a restart.
