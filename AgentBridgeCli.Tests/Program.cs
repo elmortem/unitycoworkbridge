@@ -1,12 +1,22 @@
 using System.Text.Json;
 using AgentBridge.Cli;
+using AgentBridge.Coordination;
 using AgentBridge.Queueing;
 
-var root = Path.Combine(Path.GetTempPath(), "AgentBridgeCliTests_" + Guid.NewGuid().ToString("N"));
+var fixture = Path.Combine(Path.GetTempPath(), "AgentBridgeCliTests_" + Guid.NewGuid().ToString("N"));
+var root = Path.Combine(fixture, "p");
+var rootAlias = Path.Combine(fixture, "a");
 
 try
 {
 	Directory.CreateDirectory(root);
+	// Exercise macOS-style temporary-directory aliases on every platform. Resolve the
+	// shared root once so every scenario, including status and wait budgets, uses it.
+	await TestPaths.CreateDirectoryAlias(rootAlias, TestPaths.PhysicalDirectory(root));
+	Expect(!CoordinationPathPolicy.TryResolveProjectRoot(rootAlias, out _, out _), "production must still reject project paths through links");
+	root = TestPaths.PhysicalDirectory(rootAlias);
+	Expect(CoordinationPathPolicy.TryResolveProjectRoot(root, out _, out var pathError), "physical fixture root must support coordination: " + pathError);
+	Console.WriteLine("CLI fixture paths: PASS (aliased temp resolved for the entire suite)");
 	await QueueRuntimeTests.RunAsync(root);
 	RunProjectDiscoveryTests(root);
 	RunTaskIdTests();
@@ -43,9 +53,14 @@ catch (Exception error)
 }
 finally
 {
-	if (Directory.Exists(root))
+	if (Directory.Exists(fixture))
 	{
-		try { await IndependentQueueTests.StopServers(root); Directory.Delete(root, true); }
+		try
+		{
+			if (Directory.Exists(root)) await IndependentQueueTests.StopServers(root);
+			if (Directory.Exists(rootAlias)) Directory.Delete(rootAlias);
+			Directory.Delete(fixture, true);
+		}
 		catch (Exception error) { Console.Error.WriteLine("Fixture cleanup: " + error.Message); }
 	}
 }
@@ -334,8 +349,10 @@ static async Task RunAllTestsConfirmationTests(string root)
 	Expect(!Directory.Exists(new BridgePaths(project).Scratch), "the refusal must come before the editor is inspected");
 
 	var filtered = await RunCliCaptured("tests", "--test", "MyTests", "--project", project, "--wait", "0");
+	Expect(filtered.Code == 0, $"a filtered run must be accepted offline: exit={filtered.Code}, stdout={filtered.Output}");
 	Expect(!filtered.Output.Contains(AllTestsConfirmation.Code), "a filtered run must not ask for confirmation");
 	var all = await RunCliCaptured("tests", "--confirm-all", "--project", project, "--wait", "0");
+	Expect(all.Code == 0, $"a confirmed full run must be accepted offline: exit={all.Code}, stdout={all.Output}");
 	Expect(!all.Output.Contains(AllTestsConfirmation.Code), "a confirmed full run must not ask again");
 }
 
@@ -537,8 +554,15 @@ static async Task RunStaleSubmissionTests(string temporaryRoot)
 	Console.SetError(errors);
 	try
 	{
-		Expect(await AgentBridgeApplication.RunAsync(new[] { "status", "--project", project }) == 0,
-			"queue status remains available with a stale editor");
+		int statusCode = await AgentBridgeApplication.RunAsync(new[] { "status", "--project", project });
+		Expect(statusCode == 0,
+			$"queue status remains available with a stale editor: exit={statusCode}, stdout={output}, stderr={errors}");
+		using (var status = JsonDocument.Parse(output.ToString()))
+		{
+			Expect(status.RootElement.GetProperty("queueReady").GetBoolean(), "stale editor status must report a live queue: " + output);
+			Expect(!status.RootElement.GetProperty("bridgeReady").GetBoolean()
+				&& status.RootElement.GetProperty("code").GetString() == "heartbeat_stale", "queue availability must not hide the stale editor: " + output);
+		}
 		Expect(Directory.GetFiles(paths.Inbox, "*.task.json").Length == 0, "status must not enqueue a recovery task");
 		output.GetStringBuilder().Clear();
 		var command = AgentBridgeApplication.RunAsync(new[] { "compile", "--project", project, "--wait", "5" });
@@ -583,7 +607,7 @@ static async Task RunQueueBudgetTests(string temporaryRoot)
 	{
 		var elapsed = System.Diagnostics.Stopwatch.StartNew();
 		int code = await AgentBridgeApplication.RunAsync(new[] { "compile", "--project", project, "--wait", "1" }).WaitAsync(TimeSpan.FromSeconds(5));
-		Expect(code == 2 && elapsed.Elapsed.TotalSeconds < 4, "--wait must bound queue waiting, not wait an hour");
+		Expect(code == 2 && elapsed.Elapsed.TotalSeconds < 4, $"--wait must bound queue waiting, not wait an hour: exit={code}, elapsed={elapsed.Elapsed}, stdout={output}, stderr={errors}");
 		using var result = JsonDocument.Parse(output.ToString());
 		string id = result.RootElement.GetProperty("Id").GetString()!;
 		Expect(result.RootElement.GetProperty("Status").GetString() == "queued", "queue expiry is not terminal task timeout");

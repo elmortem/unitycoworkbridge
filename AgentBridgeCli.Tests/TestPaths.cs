@@ -1,5 +1,19 @@
+using System.Diagnostics;
+
 internal static class TestPaths
 {
+	public static async Task CreateDirectoryAlias(string alias, string target)
+	{
+		if (!OperatingSystem.IsWindows()) { Directory.CreateSymbolicLink(alias, target); return; }
+		// Junctions work without the Windows symlink privilege or Developer Mode.
+		static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
+		using var process = Process.Start(new ProcessStartInfo("powershell.exe") { UseShellExecute = false, CreateNoWindow = true,
+			RedirectStandardOutput = true, RedirectStandardError = true, ArgumentList = { "-NoProfile", "-NonInteractive", "-Command",
+				"$ErrorActionPreference = 'Stop'; New-Item -ItemType Junction -Path " + Quote(alias) + " -Target " + Quote(target) + " | Out-Null" } })!;
+		await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+		if (process.ExitCode != 0) throw new InvalidOperationException("cannot create fixture junction: " + await process.StandardError.ReadToEndAsync());
+	}
+
 	// macOS temp roots can contain /var -> /private/var. Resolve every ancestor, not just
 	// the final fixture directory, before testing commands that require physical project paths.
 	public static string PhysicalDirectory(string path)

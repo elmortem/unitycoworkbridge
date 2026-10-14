@@ -24,7 +24,7 @@ internal static class QueueRuntimeTests
 		foreach (string name in new[] { executableName, "agentbridge.dll", "agentbridge.deps.json", "agentbridge.runtimeconfig.json" })
 			File.Copy(Path.Combine(AppContext.BaseDirectory, name), Path.Combine(runtime, name));
 		string alias = Path.Combine(fixture, "alias");
-		await CreateDirectoryAlias(alias, physical);
+		await TestPaths.CreateDirectoryAlias(alias, physical);
 		try
 		{
 			string aliasExecutable = Path.Combine(alias, "nested", "runtime", executableName);
@@ -139,18 +139,6 @@ internal static class QueueRuntimeTests
 		}
 		var reply = JsonSerializer.Deserialize<QueueReply>(SharedFile.ReadAllText(QueueFiles.Reply(project, id)), QueueClient.Json)!;
 		Check(reply.Ok, "queue request failed: " + reply.Code);
-	}
-
-	private static async Task CreateDirectoryAlias(string alias, string target)
-	{
-		if (!OperatingSystem.IsWindows()) { Directory.CreateSymbolicLink(alias, target); return; }
-		// Junctions work without the Windows symlink privilege or Developer Mode.
-		static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
-		using var process = Process.Start(new ProcessStartInfo("powershell.exe") { UseShellExecute = false, CreateNoWindow = true,
-			RedirectStandardOutput = true, RedirectStandardError = true, ArgumentList = { "-NoProfile", "-NonInteractive", "-Command",
-				"$ErrorActionPreference = 'Stop'; New-Item -ItemType Junction -Path " + Quote(alias) + " -Target " + Quote(target) + " | Out-Null" } })!;
-		await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
-		Check(process.ExitCode == 0, "cannot create runtime junction: " + await process.StandardError.ReadToEndAsync());
 	}
 
 	private static void Check(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); }
