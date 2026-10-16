@@ -18,5 +18,12 @@ namespace AgentBridge.Queueing
 		public string CoordinationJson = "";
 		public string BeforeId = "";
 		public bool Human;
+		public string DiscussionId = "";
+		public string Reason = "";
+		public string Decision = "";
+		public int Seconds;
+		public long AfterRevision;
+		public string ReservationId = "";
+		public int ExpectedSeconds;
 	}
 }

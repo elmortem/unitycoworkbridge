@@ -87,13 +87,8 @@ namespace AgentBridge
 			if (Application.platform == RuntimePlatform.WindowsEditor)
 			{
 				startInfo.FileName = ResolveWindowsShell();
-				startInfo.Arguments = "-NoProfile -ExecutionPolicy Bypass -Command \""
-					+ "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; "
-					+ "$installer = Join-Path $env:TEMP 'install-agentbridge.ps1'; "
-					+ "Invoke-WebRequest " + ScriptsBase + "/install-agentbridge.ps1 -OutFile $installer; "
-					+ "& $installer; "
-					+ "& $installer -Rid " + sandboxRid
-					+ " -InstallDirectory '" + sandboxDirectory + "' -NoPathUpdate\"";
+				startInfo.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand "
+					+ Convert.ToBase64String(Encoding.Unicode.GetBytes(WindowsUpdateScript(BridgePaths.ProjectRoot)));
 			}
 			else
 			{
@@ -108,6 +103,20 @@ namespace AgentBridge
 			}
 
 			return startInfo;
+		}
+
+		private static string WindowsUpdateScript(string project)
+		{
+			// One installer owns both builds and rolls back a partial replacement. EncodedCommand
+			// avoids cmdline expansion of project names containing quotes, $, spaces or Unicode.
+			string literal = "'" + project.Replace("'", "''") + "'";
+			return "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; "
+				+ "$installer = Join-Path $env:TEMP ('install-agentbridge-' + [Guid]::NewGuid().ToString('N') + '.ps1'); "
+				+ "try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; "
+				+ "Invoke-WebRequest '" + ScriptsBase + "/install-agentbridge.ps1' -UseBasicParsing -OutFile $installer; "
+				+ "& $installer -Project " + literal + "; if (-not $?) { throw 'AgentBridge installation failed' }; exit 0 "
+				+ "} catch { [Console]::Error.WriteLine($_); exit 1 } "
+				+ "finally { if (Test-Path -LiteralPath $installer) { Remove-Item -LiteralPath $installer -Force } }";
 		}
 
 		private static string ResolveWindowsShell()
@@ -151,6 +160,8 @@ namespace AgentBridge
 			EditorApplication.update -= Poll;
 
 			int exitCode = _process.ExitCode;
+			// Drain asynchronous output handlers before disposing the process or showing the result.
+			_process.WaitForExit();
 			string log;
 			lock (_output)
 			{
@@ -166,7 +177,8 @@ namespace AgentBridge
 				EditorUtility.DisplayDialog(
 					"Agent Bridge",
 					"AgentBridge CLI updated.\n\nSandbox build: " + BridgePaths.CliRoot
-					+ "\n\nRestart the agent application so it picks up the new binary.",
+					+ "\n\nNew commands use the updated CLI. Running commands can finish normally."
+					+ "\nRestart the agent application only if its PATH needs refreshing.",
 					"OK");
 				return;
 			}

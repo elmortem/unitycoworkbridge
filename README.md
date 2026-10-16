@@ -54,13 +54,19 @@ agentbridge --version
 
 ### Updating
 
-Once Unity Bridge is installed, the CLI can be updated from the Editor: **Tools → Agent Bridge → Update CLI**. It runs the same installer, pulls the latest release, and reports the result in the Console. Restart the agent application afterwards so it picks up the new binary.
+Once Unity Bridge is installed, the CLI can be updated from the Editor: **Tools → Agent Bridge → Update CLI**. It runs the installer and reports the result in the Console. On Windows, the update installs both the Windows CLI and the current project's Linux sandbox CLI from the same release. Both downloads and checksums are verified before replacement; if either replacement fails, the installer restores the previous files and reports failure.
+
+Running Windows CLI commands do not need to be stopped. The installer stages new files and renames the previous executables instead of overwriting their bytes. Existing processes finish with their loaded version; new commands use the replacement. A previous executable still in use is retained under an `agentbridge.exe.previous-<id>` name. Reopening the agent application is only needed if it has not inherited a newly added `PATH` entry.
+
+When calling `scripts/install-agentbridge.ps1` directly, pass `-Project <Unity-project-root>` to update both copies. A Windows install launched at or below a Unity project root discovers that project automatically. With no project context, installation targets only the requested per-user CLI; an explicit foreign `-Rid` still installs only that build.
 
 If a GUI agent has not inherited the updated `PATH`, use the stable per-user install path directly: `%LOCALAPPDATA%\AgentBridge\bin\agentbridge.exe` on Windows or `$HOME/.local/bin/agentbridge` on macOS/Linux. The CLI is never discovered inside Unity's hashed `Library/PackageCache` path.
 
 ### Agents whose shell runs in a Linux sandbox
 
 Some agents (Claude Cowork, dev containers, WSL) run the Editor on the host machine but give the agent a shell in a separate Linux environment where only the project folder is mounted. A host-native CLI is unreachable from there.
+
+Check `agentbridge --version` in the agent's own shell as well as on the Editor host. Manually copying only the Windows executable does not update an existing project-local Linux client; use **Update CLI** or the Windows installer with `-Project` to update both. Clients older than 1.24.0 still wait on the Editor journal: after journal retention they can report `task_not_found`, or report `bridge_unavailable` during an Editor reload, even though the independent queue retains the task and its result. Update both clients and resume the original TaskId with `wait`.
 
 **Tools → Agent Bridge → Update CLI** therefore installs two builds: the native one for the current machine, and a `linux-x64`/`linux-arm64` build inside `<project>/Library/AgentBridge/cli/agentbridge`. That folder is inside the project, so the sandbox sees it through the same mount it already has, and the skills look for it as the last step of CLI discovery. `Library/` is not committed, so the extra binary never reaches the repository.
 
@@ -162,15 +168,41 @@ Update the CLI, Unity package and agent plugin together: CLI 1.24.0, package 0.3
 
 ## Cancellation and long-running tasks
 
-`agentbridge cancel <TaskId> [--session S]` addresses one task. Running tasks are protected against foreign cancellation for their first 300 seconds of actual execution, including tasks without a coordination window. After that, any agent may cancel a blocking test or cooperative C# task without asking its owner, even inside an unexpired window. The bridge checks the age; elapsed queue time does not count. The owner can cancel earlier using the same nonempty session, and human editor controls remain authoritative. An omitted session never proves ownership. Waiting tasks retain their existing window protection. Canceling one attached follower does not stop the shared test run. Repeated cancellation of a completed task is harmless.
+`agentbridge cancel <TaskId> [--session S]` addresses one task. Running tasks are protected against foreign cancellation for their first 300 seconds of actual execution, including tasks without a coordination window. After that, first request agreement with the owner using `queue request-stop <TaskId> --session S --reason TEXT`. Age alone never justifies cancellation. Allow 15 seconds for a reply, consider remaining time and restart cost, and cancel only when there is no reply or agreement could not be reached. The bridge checks the age; elapsed queue time does not count. The owner can cancel earlier using the same nonempty session, and human editor controls remain authoritative. An omitted session never proves ownership. Waiting tasks retain their existing window protection. Canceling one attached follower does not stop the shared test run. Repeated cancellation of a completed task is harmless.
 
 Cancellation is serviced outside the execution queue. Before an execution claim, cancellation is immediately terminal and prevents execution, even with Unity closed. After a claim, `cancel_requested` acknowledges only a durable intent; use `wait <TaskId>` for the actual outcome. The Unity executor may report `canceling` while it stops and retains the editor until execution and test scene recovery complete. A blocked main thread cannot confirm a stop, but the dispatcher remains available for queue operations. After 30 seconds without completion, editor status can report `cancel_blocked:<TaskId>`; inspect Unity rather than deleting queue files or restarting the process. Unsupported running phases cannot be declared stopped by the dispatcher.
 
 A test run whose Unity job ends without delivering results — a Test Framework failure, not a failing test — finishes as `runtime_error` no later than 25 seconds after the job stops, and the queue moves on by itself. No cancellation is needed, and an orphan `EditModeRunner` object left behind by such a job does not hold the queue.
 
+With CLI 1.27.0 / package 0.38.0 / plugin 1.34.0, `long-run-negotiation-v1` adds durable discussions. Runs expected to fit within 300 seconds need no reservation. For longer work:
+
+```bash
+agentbridge queue reserve --session A --request recording-1 --seconds 1200 --reason "Record the film; interruption loses the recording"
+# Only after granted, use the returned Discussion.Id:
+agentbridge tests --test Film.Record --session A --expected-seconds 1200 --reservation <Discussion.Id>
+agentbridge queue inbox --session A --after <DiscussionRevision>
+agentbridge queue respond <Discussion.Id> --session B --kind allow --reason "My checks can wait"
+```
+
+Reservations consider unfinished work, active coordination grants and other unsubmitted reservations. Idle registrations do not block. An unsubmitted reservation is considered for 60 seconds; submission rechecks current competitors. A competitor may `allow` or `deny`; repeat the same reserve request to reevaluate after their reply or completion. Silence is not permission to start a contested long run. A reservation binds to one task or batch; `coord submit` accepts the same `--expected-seconds` and `--reservation` options. Estimates do not replace coordination window or NUnit time limits.
+
+To request the editor from an executing task older than 300 seconds:
+
+```bash
+agentbridge queue request-stop <TaskId> --session B --reason "Need a one-minute validation; how much remains?"
+agentbridge queue respond <Discussion.Id> --session A --kind continue --seconds 5 --reason "Five seconds left; restart loses all output"
+agentbridge queue respond <Discussion.Id> --session B --kind wait --seconds 10 --reason "Finish the recording"
+# Only after no reply for 15 seconds, or after reviewing an answer and failing to agree:
+agentbridge cancel <TaskId> --session B --request <Discussion.Id> --after <reviewed Revision> --reason "The proposed delay cannot fit the urgent validation"
+```
+
+The owner may answer `yield` or `continue`; the requester may `wait` or `withdraw`. Cancellation is an explicit decision, never an automatic timer. Retries and dispatcher restarts preserve the original reply deadline. An unread answer returns `response_unread`. An agreed wait must be honored; after its deadline, start a new discussion if needed.
+
+Named `wait` calls return early with exit 2 and `coordination_attention` on incoming discussions, retaining the original task. Respond before resuming with the returned discussion cursor (`wait --after REV`; `coord wait --discussion-after REV`, separate from its coordination `--after`). While doing independent work, long-run owners poll their inbox at least every five seconds. `queue reserve` pending also returns 2; it is not a grant. A canceled owner receives `yield_pending` on new submissions until the requester's first queued task/batch finishes, or a 60-second opportunity to submit expires. Then obtain a new reservation for a new long attempt. Discussions are stored in `Library/AgentBridge/Queue/discussions.json` and need no live editor.
+
 Execution has no global time limit. The old `TaskTimeoutSeconds` setting is ignored, including values already saved in projects. Crossing 300 seconds or gaining a waiting neighbor never automatically stops a task. A coordinated window's deadline prevents new steps after expiry but does not stop its running task. Specialized operation safeguards (such as compilation startup and Play Mode transitions) remain in place. Client `--wait` only limits how long that client waits. Individual tests still obey NUnit/Test Framework timeouts. Unity Test Framework 1.1.33 defaults to 180 seconds per test; a deliberately long test must declare a suitable NUnit `[Timeout(...)]` in milliseconds (for example `[Timeout(1200000)]`). The bridge does not override an authored test timeout. In that framework version, timeout cleanup can synchronously drain the remaining test enumerator, blocking the editor until it returns.
 
-With capability `long-running-tasks-v1`, `status` exposes `ActiveTaskElapsedSeconds` and `ActiveTaskCancelableByOtherAgents`. A foreign stop after the protected period ends with `canceled` and a `preempted_after_300s` message naming the initiator and elapsed seconds in the target's logs/result. `wait` delivers it to the owner and attached test followers; it is not a test failure or a success. A canceled batch does not dispatch its remaining steps. Agents may act on this status without additional approval and must not immediately resubmit a preempted package.
+With capability `long-running-tasks-v1`, `status` exposes `ActiveTaskElapsedSeconds` and `ActiveTaskCancelableByOtherAgents`. A negotiated foreign stop ends with `canceled`; the logs name the initiator and reason. `queue status` also exposes `CanceledBy`, `CancellationReason`, `YieldToSession` and `YieldUntilTaskId`. `wait` delivers it to the owner and attached test followers; it is not a test failure or a success. A canceled batch does not dispatch its remaining steps. The legacy `ActiveTaskCancelableByOtherAgents` field reports age eligibility only: negotiation is still required. Agents must not immediately resubmit a preempted package.
 
 `ready` describes bridge availability. `QueueBlockReason` and `QueueBlockedSinceUtc` describe execution blockers, including test execution, cancellation, scene recovery and coordinated windows. Client `--wait` covers both queueing and execution, including automatic stopplay waiting, and leaves the original task intact on exit 2.
 
@@ -338,10 +370,10 @@ agentbridge stopplay [--session <id>]
 - `play` requires `--session`; that session owns the play mode. The result is `success` with `ReturnValue: "playing_until:<UTC>"`.
 - `play` also requires `--note` — a short statement of what the session is for. A play session locks the Editor away from every other agent, so the neighbours get to see why it is busy, and an agent with nothing to write there has no reason to be in play mode. Both the CLI and the bridge reject a `play` without it. `--seconds` defaults to the editor setting, which is deliberately short (15 s); `compile`, `tests`, `sceneshot` with `"view": "scene"` and `uishot` answer most questions without play mode at all.
 - Inside its own play session an agent may run only `csharp` and `sceneshot` — including `"view": "game"`, which captures the real Game View with its overlay UI. Every other kind is rejected with `kind not allowed during play session`.
-- `stopplay` is an immediate control command: it bypasses the work queue and ownership, including an active PlayMode test. Success confirms exit from Play Mode; test cancellation and scene cleanup may still block subsequent work.
+- `stopplay` is an immediate control command outside the work queue. It cannot interrupt another agent's running test or C# task; use negotiated, targeted cancellation. Success confirms exit from Play Mode; test cancellation and scene cleanup may still block subsequent work.
 - The session ends on its own at the deadline, and a human pressing Stop ends it too (`stopped:external`). The Editor itself never exits a play mode a human started; play mode an agent slipped into without a session it does exit, and the culprit's journal record says so.
-- Play mode that belongs to nobody is taken over by the client instead. The client submits an immediate `stopplay`, waits for it, and continues waiting for the original task — up to three takeovers per wait, after which it just waits. The takeover is announced on stderr (`editor is in play mode without an agent session; stopping it (stopplay #1)`); stdout still carries exactly one result, the task's own. Play mode owned by an agent session is never taken over this way — it keeps the `stopplay` rules above.
-- During tests, `play` still waits for the editor; `stopplay` cancels the PlayMode test and requests exit immediately.
+- Play mode that belongs to nobody is taken over by the client instead. The client submits an immediate `stopplay`, waits for it, and continues waiting for the original task — up to three takeovers per wait, after which it just waits. The takeover is announced on stderr (`editor is in play mode without an agent session; stopping it (stopplay #1)`); stdout still carries exactly one result, the task's own. A queued task that has since started, or any active test/script, suppresses this automatic stop even during a domain transition. Play mode owned by an agent session is never taken over this way — it keeps the `stopplay` rules above.
+- During tests, `play` waits for the editor; an owner can use `stopplay` to stop its own PlayMode test.
 - Entering play mode does not steal your focus. Both bridge entries — `play` and `tests --mode PlayMode` — suppress the Editor's habit of activating the Game View, and the session runs with `Application.runInBackground`, so the game keeps ticking while Unity sits in the background. If the Editor still jumps to the front, the bridge hands focus back to the window that had it, at most twice per entry — click into Unity yourself and it stays yours. Windows only; elsewhere the suppression applies and the hand-back is a no-op.
 - `agentbridge status` reports `IsPlaying`, `PlaySessionAgentId` and `PlaySessionDeadlineUtc`; in `--format human` an unowned play mode reads `Playing: yes (manual)`. `doctor` warns with `! editor_playing_manual`. If a wait does run out of its queue budget while the Editor plays manually, the `Status: queued` result carries `Reason: editor_playing_manual`.
 
@@ -679,7 +711,7 @@ Telemetry never fails a task: a write that cannot happen is dropped silently.
 
 - Works in Unity Editor. Play Mode is reachable only through an owned play session (`agentbridge play`), and only `csharp` and `sceneshot` run inside one; `tests --mode PlayMode` enters Play Mode on its own and is unaffected. See [Play Mode](#play-mode).
 - Tasks are processed strictly one at a time — Bridge does not start a new task while one is in flight. Order is oldest first within an agent session; between sessions the scheduler rotates the editor on task boundaries (see [Multi-Agent Sessions](#multi-agent-sessions))
-- `Run()` is invoked on Unity's main thread; awaited continuations resume there too. Use cancellation-aware asynchronous code. C# tasks and test runs have no global timeout. After 300 seconds another agent may request cancellation; the queue remains held until the executor stops and test scenes are restored. A blocked main thread or uncooperative script can prevent cancellation; `cancel_blocked` never means the editor is free.
+- `Run()` is invoked on Unity's main thread; awaited continuations resume there too. Use cancellation-aware asynchronous code. C# tasks and test runs have no global timeout. After 300 seconds another agent may negotiate cancellation (15 seconds to answer); the queue remains held until the executor stops and test scenes are restored. A blocked main thread or uncooperative script can prevent cancellation; `cancel_blocked` never means the editor is free.
 - A running task can be aborted via **Tools → Agent Bridge → Cancel Running Task**
 - `csharp` tasks compile against whatever assemblies are already loaded in the domain — they cannot reference project code that has compilation errors, since the broken assembly itself would never have loaded. Use a `compile` task first to confirm the project builds.
 - Background execution uses a private Unity API with a native Windows fallback. macOS/Linux behavior has not been runtime-validated, and a blocked main thread still requires intervention. See [Running While the Editor Is in the Background](#running-while-the-editor-is-in-the-background).
@@ -710,6 +742,8 @@ Do not use `Compress-Archive` for this artifact. On Windows it can store backsla
 Before packaging, the script normalizes CRLF to LF in the plugin's UTF-8 Markdown and JSON sources, matching `.gitattributes` and fresh Git checkouts. `-ValidateOnly` never rewrites files: it rejects CRLF sources with an instruction to rebuild. Archive validation remains a strict byte comparison, including actual text changes.
 
 Only the CLI has a publishing pipeline. Bumping `<Version>` in the csproj and pushing is the entire release procedure: the workflow runs the tests, sees that no `agentbridge-v<version>` release exists yet, creates the tag and release at that commit, then builds and attaches the six self-contained binaries with checksums. Pushing without a version bump only runs the tests — the release step is skipped because the tag already exists, so no tags are created by hand.
+
+The Windows CI job also runs `scripts/verify-installer.ps1` after building the CLI. It checks native and sandbox installation, failure rollback, and replacement while a real CLI process remains running. Run the same script in Windows PowerShell when changing the installer; validate the Editor launcher with the `CliUpdaterTests` EditMode tests through AgentBridge.
 
 `workflow_dispatch` re-packages an existing tag; use it to repair a release whose assets failed to upload.
 

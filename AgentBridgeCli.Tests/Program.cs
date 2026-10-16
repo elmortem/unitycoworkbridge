@@ -41,6 +41,7 @@ try
 	await RunStaleSubmissionTests(root);
 	await RunQueueBudgetTests(root);
 	await IndependentQueueTests.RunAsync(root);
+	await QueueDiscussionTests.RunAsync(root);
 	await QueueReplyLifetimeTests.RunAsync(root);
 	await DispatcherHostTests.RunAsync(root);
 	RunManualPlayPolicyTests();
@@ -641,6 +642,11 @@ static void RunManualPlayPolicyTests()
 	var testing = Health(true, true, null);
 	testing.Bridge!.QueueBlockReason = "test_run:Task_test";
 	Expect(!ManualPlayPolicy.ShouldStop(testing, "csharp", 0), "a PlayMode test is not manual play");
+	var starting = Health(true, true, null);
+	starting.Bridge!.ActiveTaskId = "starting-test";
+	Expect(!ManualPlayPolicy.ShouldStop(starting, "tests", 0), "test startup without a test_run reason is still owned");
+	Expect(!ManualPlayPolicy.ShouldStop(Health(true, true, null), "tests", 0, "running"), "stale ownerless health cannot stop a claimed test");
+	Expect(!ManualPlayPolicy.ShouldStop(Health(true, true, null), "tests", 0, "attached"), "a follower cannot stop the run it joined");
 	Expect(!ManualPlayPolicy.ShouldStop(Health(true, true, null), "cancel", 0), "cancel must not submit an unrelated stopplay");
 	Expect(!ManualPlayPolicy.ShouldStop(Health(true, true, "agent-a"), "csharp", 0), "an owned play session must not be touched");
 	Expect(!ManualPlayPolicy.ShouldStop(Health(true, true, null), "stopplay", 0), "stopplay must not stop play for itself");

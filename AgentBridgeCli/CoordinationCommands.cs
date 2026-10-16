@@ -8,7 +8,7 @@ namespace AgentBridge.Cli;
 // cross-process transaction.
 internal static class CoordinationCommands
 {
-	public const string CliContracts = "independent-queue-v1,coordination-v1,coordination-batch-v1,coordination-edit-leases-v1,evidence-v1,test-cache-v2";
+	public const string CliContracts = "long-run-negotiation-v1,independent-queue-v1,coordination-v1,coordination-batch-v1,coordination-edit-leases-v1,evidence-v1,test-cache-v2";
 
 	public static int Run(string projectRoot, string[] arguments, CliOptions options)
 	{
@@ -53,7 +53,7 @@ internal static class CoordinationCommands
 			return command switch
 			{
 				"status" => Status(store, options),
-				"wait" => Wait(store, options),
+				"wait" => Wait(canonical, store, options),
 				"register" => Mutate(canonical, options, BuildRegister),
 				"scope" => Mutate(canonical, options, BuildScope),
 				"edit-begin" => Mutate(canonical, options, BuildEditBegin),
@@ -129,11 +129,23 @@ internal static class CoordinationCommands
 		return 0;
 	}
 
-	private static int Wait(CoordinationFileStore store, CliOptions options)
+	private static int Wait(string project, CoordinationFileStore store, CliOptions options)
 	{
 		var after = options.AfterRevision;
 		using var waiter = new CoordinationWaiter(store);
-		var state = waiter.Wait(after, TimeSpan.FromSeconds(options.WaitSeconds), CancellationToken.None);
+		var watch = System.Diagnostics.Stopwatch.StartNew();
+		CoordinationState? state;
+		do
+		{
+			if (!string.IsNullOrEmpty(options.Session))
+			{
+				var inbox = new QueueClient(project).Call(new AgentBridge.Queueing.QueueMessage { Op = "inbox", Session = options.Session, AfterRevision = options.DiscussionAfterRevision });
+				if (!inbox.Ok) { QueueCommands.Write(inbox, options.Format); return 3; }
+				inbox.Discussions = inbox.Discussions.Where(d => d.Session != options.Session || d.Answers.Any(a => a.Session != options.Session)).ToArray();
+				if (inbox.Discussions.Length > 0) { inbox.Code = "coordination_attention"; QueueCommands.Write(inbox, options.Format); return 2; }
+			}
+			state = waiter.Wait(after, TimeSpan.FromSeconds(Math.Max(0, Math.Min(1, options.WaitSeconds - watch.Elapsed.TotalSeconds))), CancellationToken.None);
+		} while (state == null && watch.Elapsed.TotalSeconds < options.WaitSeconds);
 
 		if (state == null)
 		{
@@ -174,7 +186,7 @@ internal static class CoordinationCommands
 		command.Nonce = Guid.NewGuid().ToString("N");
 
 		var answer = new QueueClient(project).Call(new AgentBridge.Queueing.QueueMessage
-		{ Op = "coord", CoordinationJson = JsonSerializer.Serialize(command, QueueClient.Json) });
+		{ Op = "coord", CoordinationJson = JsonSerializer.Serialize(command, QueueClient.Json), ReservationId = options.ReservationId ?? "", ExpectedSeconds = options.ExpectedSeconds });
 		if (string.IsNullOrEmpty(answer.CoordinationJson)) return Fail(options, answer.Code, answer.Message);
 		var reply = JsonSerializer.Deserialize<CoordinationReply>(answer.CoordinationJson, QueueClient.Json)!;
 

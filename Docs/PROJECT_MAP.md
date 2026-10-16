@@ -128,7 +128,7 @@ scripts/                           Сборка плагина, вендорин
 ```
 <project>/Library/AgentBridge/          рабочий корень (переживает всё, кроме чистки Library)
 	Queue/                              внешний диспетчер: Tasks/, Requests/, Replies/, server.lock,
-	                                    server.json, heartbeat, launch.json, order.txt
+	                                    server.json, heartbeat, launch.json, order.txt, discussions.json
 	Inbox/                              <id>.task.json + payload (.cs / .ui.json / .sceneshot.json)
 	Journal/                            <id>.json — записи результатов задач
 	Artifacts/<id>/                     скриншоты, дампы тестов, прочие файлы задачи
@@ -180,7 +180,8 @@ Namespace `AgentBridge.Cli`, file-scoped. Собирается в исполня
 | `QueueRuntime.cs` | исполняемый снимок CLI по хешу содержимого в системном временном каталоге `AgentBridgeQueueRuntime`; сервер не блокирует обновление/пересборку CLI на Windows. Сравнение runtime разрешает ссылки во всех предках пути (включая `/var` → `/private/var` на macOS); при запуске через `dotnet` сравнивает путь CLI-сборки. Новый клиент обновляет `launch.json`, а сервер уступает владение между транзакциями при смене runtime |
 | `QueueServer.cs` | один процесс на физический проект, владение очередью и мутациями координации, фоновая очистка `Replies/` старше суток, телеметрия медленных фаз цикла. Ежесекундно проверяет редактор: на чужой ОС передаёт владение живому редактору (`queue_handover`), на машине редактора не уступает невыполнимому `launch.json` и не выходит по простою |
 | `QueueTaskStore.cs`, `QueueTask.cs` | устойчивые запросы/payload, claims, отмена, порядок, учёт результатов и будущих batch-шагов |
-| `QueueCommands.cs` | `queue list`, `status <id>`, `cancel <id>`, `move <id> [before-id]`, `shutdown` |
+| `QueueDiscussionStore.cs` | устойчивые переговоры и бронь прогонов дольше 300 с: 15 с на ответ, повторная проверка конкурентов, одна бронь на задачу/пакет, сохранённые договорённости |
+| `QueueCommands.cs` | `queue list`, `status <id>`, `cancel <id>`, `move <id> [before-id]`, `shutdown`, `reserve`, `request-stop`, `respond`, `inbox` |
 | `TaskRequest.cs` | DTO запроса задачи (то, что попадает в `<id>.task.json`) |
 | `TaskIdGenerator.cs` | генерация стабильных id задач |
 | `QueuedTaskStatus.cs` | клиентское представление задачи в очереди |
@@ -206,7 +207,7 @@ Namespace `AgentBridge.Cli`, file-scoped. Собирается в исполня
 | `WakeAction.cs` | перечисление возможных действий пробуждения |
 | `EditorWakeAttempts.cs` | учёт уже сделанных попыток, чтобы не долбить редактор |
 | `EditorWaker.cs` | реализация: `WM_NULL`, фокус-тычок как крайняя мера |
-| `ManualPlayPolicy.cs` | решение о захвате «ничейного» плеймода: CLI сам гасит его перед задачей агента |
+| `ManualPlayPolicy.cs` | решение о захвате «ничейного» плеймода: CLI гасит его только пока задача ожидает: активный TaskId или уже начатый/присоединённый прогон запрещает автоматический stopplay; диспетчер и редактор перепроверяют гонку со стартом |
 | `AllTestsConfirmation.cs` | гейт полного прогона: `tests` без `--test`/`--category`/`--assembly` отклоняется до обращения к редактору (`all_tests_confirmation_required`), пока не передан `--confirm-all` |
 
 ### Координация (клиентская часть)
@@ -266,7 +267,7 @@ package.json       версия и зависимости пакета
 | `TaskLogScope.cs` | перехват логов Unity на время задачи |
 | `TaskFileHash.cs` / `CachedHash.cs` | хэш пары «task.json + payload» с кэшем по длине и времени записи |
 | `PendingTaskInfo.cs` / `QueuedTaskStatus.cs` | представление задачи в очереди |
-| `TaskCancellationPolicy.cs` | политика отмены: чужую задачу можно снять только после 300 с (`long-running-tasks-v1`); человек в редакторе политику обходит |
+| `TaskCancellationPolicy.cs` | политика отмены: первые 300 с чужая задача защищена; затем необходимы переговоры через `QueueDiscussionStore` (`long-run-negotiation-v1`), 15 с на ответ; человек в редакторе политику обходит |
 | `BridgeStatus.cs` / `BridgeStatusWriter.cs` | модель и запись `status.json` и `heartbeat`; запись best-effort: сбой не выходит в жизненный цикл задачи, снимок дописывается на следующем тике |
 | `ProjectIdentity.cs` | создание и чтение стабильного `project-id` |
 | `HostPlatform.cs` | платформа хоста для `status.json` |
@@ -393,7 +394,7 @@ package.json       версия и зависимости пакета
 | `AgentBridgeSetupWindow.cs` | мастер первичной настройки моста |
 | `AgentBridgeSetupBootstrap.cs` | `[InitializeOnLoad]`: показывает мастер один раз, молчит в batch-режиме и после явного отказа |
 | `AgentBridgeQueueWindow.cs` | окно очереди задач: наблюдение и ручной порядок |
-| `CliUpdater.cs` | пункт меню `Tools/Agent Bridge/Update CLI`, тянет установочный скрипт из репозитория |
+| `CliUpdater.cs` | пункт меню `Tools/Agent Bridge/Update CLI`; Windows передаёт проект одному установщику для Windows+Linux, сохраняет код ошибки; `CliUpdaterTests` проверяет настоящий дочерний PowerShell |
 
 ### 6.11 Телеметрия
 
@@ -539,8 +540,8 @@ unity-bridge-plugin.zip        собранный артефакт: закомм
 |---|---|
 | `build-plugin.ps1` | канонический сборщик ZIP плагина: валидация frontmatter, сверка версий компонентов, нормализация CRLF→LF, прямые слэши в именах, сверка хэшей. `-ValidateOnly` ничего не пишет, `-BaseRef` задаёт базу сравнения версий |
 | `fetch-roslyn.ps1` | обновление вендоренного Roslyn в `Roslyn~/` |
-| `install-agentbridge.ps1` / `install-agentbridge.sh` | установка CLI на Windows и на *nix (включая Linux-песочницу агента) |
-| `verify-installer.ps1` | проверка установщика |
+| `install-agentbridge.ps1` / `install-agentbridge.sh` | установка CLI; Windows `-Project` обновляет Windows+Linux из одного релиза, проверяет обе сборки до замены, переименовывает занятый exe, откатывает частичную замену |
+| `verify-installer.ps1` | Windows PowerShell: ZIP+tar.gz, выбор архитектуры, единый релиз, ошибки скачивания/распаковки/хэша, откат; реальный процесс CLI продолжает отвечать после замены exe, новый запускается. Запускается и в Windows CI |
 | `verify-plugin-line-endings.ps1` | проверка окончаний строк в исходниках плагина; воспроизводит редактор, изменивший часть LF-файла |
 
 ### Живые приёмочные проверки (требуют открытого Unity)
@@ -622,3 +623,5 @@ notes/                         заметки расследований и пр
 описанной подсистемы, достаточно убедиться, что описание этой подсистемы всё ещё верно.
 
 Автоматической проверки у карты нет. Единственная защита здесь — суждение того, кто вносит правку.
+
+Протокол долгих прогонов: `QueueDiscussion.cs` — сообщения и ответы; `QueueDiscussionTests.cs` проверяет срок ответа, гонку с отменой, сохранённое ожидание, бронь и пробуждение CLI. `BridgeClient` и `CoordinationCommands` возвращают управление при `coordination_attention`, не отменяя задачу. `QueueTaskStore` сохраняет инициатора/причину отмены и передачу следующему участнику; новый TaskId не обходит `yield_pending`. `stopplay` не обходит согласование чужого выполняющегося теста/скрипта.

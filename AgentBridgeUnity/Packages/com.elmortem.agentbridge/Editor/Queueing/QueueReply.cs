@@ -13,5 +13,8 @@ namespace AgentBridge.Queueing
 		public string CoordinationJson = "";
 		public QueueTaskInfo Task;
 		public QueueTaskInfo[] Tasks = new QueueTaskInfo[0];
+		public long DiscussionRevision;
+		public QueueDiscussion Discussion;
+		public QueueDiscussion[] Discussions = new QueueDiscussion[0];
 	}
 }

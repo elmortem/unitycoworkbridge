@@ -10,12 +10,14 @@ internal static class ManualPlayPolicy
 	public static bool IsManualPlaying(BridgeStatus? bridge)
 	{
 		return bridge != null && bridge.IsPlaying && string.IsNullOrEmpty(bridge.PlaySessionAgentId)
+			&& string.IsNullOrEmpty(bridge.ActiveTaskId)
 			&& !(bridge.QueueBlockReason?.StartsWith("test_run:", StringComparison.Ordinal) ?? false)
 			&& !(bridge.QueueBlockReason?.StartsWith("cancel", StringComparison.Ordinal) ?? false);
 	}
 
-	public static bool ShouldStop(BridgeHealth? health, string kind, int stopsSoFar)
+	public static bool ShouldStop(BridgeHealth? health, string kind, int stopsSoFar, string taskStatus = "queued")
 	{
+		if (taskStatus != "queued") return false;
 		if (stopsSoFar >= MaxStops)
 		{
 			return false;

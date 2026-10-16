@@ -95,6 +95,8 @@ internal static class TaskResultFormatter
 		AppendEvidence(output, root);
 		AppendLabeledValue(output, "Editor", GetString(root, "EditorState"));
 		AppendLabeledValue(output, "Reason", GetString(root, "Reason"));
+		if (root.TryGetProperty("Discussions", out var discussions))
+			output.AppendLine().Append("Discussions: ").Append(discussions.GetRawText());
 		AppendLabeledValue(output, "Resume", GetString(root, "Resume"));
 		AppendLabeledValue(output, "Result", GetString(root, "ReturnValue"));
 		AppendStringArray(output, root, "Logs", "Logs");

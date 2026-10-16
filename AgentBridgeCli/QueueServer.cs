@@ -15,23 +15,29 @@ internal sealed class QueueServer
 	private readonly string _root;
 	private Task? _sweep;
 	private readonly QueueTaskStore _tasks;
+	private readonly QueueDiscussionStore _discussions;
 	private readonly CoordinationFileStore _coordination;
 	private readonly TelemetryLog _log;
 	private long _lastUse;
 	private long _lastSweep;
 	private bool _stop;
 
-	internal QueueServer(string project)
+	internal QueueServer(string project, Func<long>? now = null)
 	{
 		_project = project;
 		_root = QueueFiles.Root(project);
 		_tasks = new QueueTaskStore(project);
+		_discussions = new QueueDiscussionStore(project, now);
 		var paths = new BridgePaths(project);
 		string projectId = SharedFile.TryReadAllText(paths.ProjectIdFile, out var id) ? id.Trim() : Guid.NewGuid().ToString("N");
 		if (!File.Exists(paths.ProjectIdFile)) QueueFiles.Write(paths.ProjectIdFile, projectId);
 		_coordination = new CoordinationFileStore(CoordinationPathPolicy.CoordinationRoot(project), CoordinationJsonCodec.Instance,
 			CoordinationSystemClock.Instance, projectId, () => Guid.NewGuid().ToString("N"));
 		_log = new TelemetryLog(project, true);
+		_tasks.Cancellation = _discussions.AuthorizeCancel;
+		_tasks.Admission = request => request.Kind is "release" or "stopplay" ? null
+			: _tasks.CheckYield(request.AgentSessionId) ?? _discussions.Admit(request.AgentSessionId, request.ReservationId,
+				Math.Max(request.ExpectedSeconds, request.PlaySeconds), "task:" + request.Id, _tasks.List(), _coordination.Exists ? _coordination.Read() : null);
 	}
 
 	public static async Task<int> RunAsync(string project)
@@ -174,6 +180,17 @@ internal sealed class QueueServer
 		if (message.Op == "coord")
 		{
 			var command = JsonSerializer.Deserialize<CoordinationCommand>(message.CoordinationJson, QueueClient.Json) ?? throw new ArgumentException("missing coordination command");
+			if (command.Op == CoordinationEngine.OpRequest)
+			{
+				_tasks.Synchronize();
+				var existing = _coordination.Exists ? _coordination.Read() : null;
+				if (existing?.Requests.Any(r => r.Session == command.Session && r.Uuid == command.Uuid) != true)
+				{
+					var refusal = _tasks.CheckYield(command.Session) ?? _discussions.Admit(command.Session, message.ReservationId,
+						message.ExpectedSeconds, "batch:" + command.Session + ":" + command.Uuid, _tasks.List(), existing);
+					if (refusal != null) return refusal;
+				}
+			}
 			var result = ApplyCoordination(command);
 			if (_coordination.Exists) _tasks.Catalog(_coordination.Read());
 			Log("queue_coord", command.Session, command.RequestId, result.Code);
@@ -186,12 +203,28 @@ internal sealed class QueueServer
 		switch (message.Op)
 		{
 			case "submit": return _tasks.Submit(message.RequestJson, message.Payload);
-			case "get": return _tasks.Get(message.TaskId);
+			case "get":
+				var read = _tasks.Get(message.TaskId);
+				if (!read.Ok || string.IsNullOrEmpty(message.Session) || QueueFiles.Terminal(read.Task!.Status)) return read;
+				var inbox = _discussions.Inbox(message.Session, message.AfterRevision);
+				read.DiscussionRevision = inbox.DiscussionRevision;
+				read.Discussions = inbox.Discussions.Where(d => d.Session != message.Session || d.Answers.Any(a => a.Session != message.Session)).ToArray();
+				return read;
+			case "inbox": return _discussions.Inbox(message.Session, message.AfterRevision);
+			case "reserve":
+				return _tasks.CheckYield(message.Session) ?? _discussions.Reserve(message, _tasks.List(), _coordination.Exists ? _coordination.Read() : null);
+			case "request-stop":
+				var target = _tasks.Get(message.TaskId);
+				return target.Ok ? _discussions.RequestStop(message, target.Task!) : target;
+			case "respond": return _discussions.Respond(message);
 			case "list": return new QueueReply { Ok = true, Code = "ok", Tasks = _tasks.List() };
 			case "clear-order": return _tasks.ClearOrder();
 			case "move": return _tasks.Move(message.TaskId, message.BeforeId);
 			case "requeue": return _tasks.Requeue(message.TaskId, message.Incarnation);
-			case "cancel": return _tasks.Cancel(message, _coordination.Exists ? _coordination.Read() : null);
+			case "cancel":
+				var canceled = _tasks.Cancel(message, _coordination.Exists ? _coordination.Read() : null);
+				if (canceled.Ok && canceled.Code == "cancel_requested") _discussions.Canceled(message);
+				return canceled;
 			case "claim":
 				var claimed = _tasks.Claim(message);
 				if (!claimed.Ok) return claimed;

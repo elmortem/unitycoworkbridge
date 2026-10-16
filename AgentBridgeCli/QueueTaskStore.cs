@@ -17,6 +17,8 @@ internal sealed class QueueTaskStore
 	private long _catalogRevision = -1;
 	private string _catalogEpoch = "";
 	private string OrderPath => Path.Combine(QueueFiles.Root(_project), "order.txt");
+	internal Func<TaskRequest, QueueReply?>? Admission;
+	internal Func<QueueMessage, QueueTaskInfo, QueueReply?>? Cancellation;
 	internal QueueTaskStore(string project)
 	{
 		_project = project;
@@ -59,6 +61,18 @@ internal sealed class QueueTaskStore
 		var old = Adopt(request.Id);
 		if (old != null)
 			return old.Hash == hash ? Reply(old, "accepted") : QueueServer.Failure("id_conflict", "Task id already identifies different content.");
+		if (authorizedCancelTarget.Length == 0)
+		{
+			if (request.Kind == "cancel") return QueueServer.Failure("negotiation_required", "Use cancel <TaskId> through the queue; raw cancellation tasks are not admitted.");
+			if (request.Kind == "stopplay" && request.TargetTaskId.Length > 0
+				&& (!_tasks.TryGetValue(request.TargetTaskId, out var waiting) || waiting.Info.Status != "queued"))
+				return QueueServer.Failure("automatic_stop_obsolete", "The task already started or finished; do not stop its Play Mode.");
+			if (request.Kind == "stopplay" && _tasks.Values.Any(t => !QueueFiles.Terminal(t.Info.Status) && t.Info.Status is not ("queued" or "attached")
+				&& t.Info.Kind is "tests" or "csharp" && !TaskCancellationPolicy.IsOwner(t.Info.AgentSessionId, request.AgentSessionId)))
+				return QueueServer.Failure("negotiation_required", "stopplay cannot interrupt another agent's running task; use queue request-stop followed by cancel.");
+			var refusal = Admission?.Invoke(request);
+			if (refusal != null) return refusal;
+		}
 		if (SharedFile.TryReadAllText(Path.Combine(_paths.Journal, request.Id + ".json"), out var previousResult))
 		{
 			using var prior = JsonDocument.Parse(previousResult);
@@ -223,12 +237,18 @@ internal sealed class QueueTaskStore
 		if (task == null) return QueueServer.Failure("task_not_found", message.TaskId);
 		ReadResult(task);
 		if (QueueFiles.Terminal(task.Info.Status)) return Reply(task, "already_finished");
+		if (task.Info.CancelRequested) return Reply(task, "cancel_requested");
 		var request = Request(task);
 		bool running = task.Info.Status != "attached" && (task.ClaimOwner.Length > 0 || task.Info.Status != "queued");
 		if (!message.Human)
 		{
 			if (running && TaskCancellationPolicy.IsProtected(task.Info.AgentSessionId, message.Session, task.Info.StartedAtUtc, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()))
 				return QueueServer.Failure("task_protected", "Foreign running tasks are protected for 300 seconds.");
+			if (running && !TaskCancellationPolicy.IsOwner(task.Info.AgentSessionId, message.Session))
+			{
+				var refusal = Cancellation?.Invoke(message, task.Info) ?? (Cancellation == null ? QueueServer.Failure("negotiation_required", "Request agreement through queue-server before foreign cancellation.") : null);
+				if (refusal != null) return refusal;
+			}
 			var grant = coordination?.FindGrantByToken(request.CoordinationWindowToken);
 			if (!running && grant != null && grant.State == CoordinationLimits.GrantActive && grant.DeadlineMs > DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() && grant.Session != message.Session)
 				return QueueServer.Failure("coordinated_window_held", grant.Session);
@@ -239,6 +259,14 @@ internal sealed class QueueTaskStore
 			return Reply(task, "canceled");
 		}
 		task.Info.CancelRequested = true;
+		task.Info.CanceledBy = message.Human ? "human" : message.Session;
+		task.Info.CancellationReason = message.Reason;
+		if (!message.Human && !TaskCancellationPolicy.IsOwner(task.Info.AgentSessionId, message.Session))
+		{
+			task.Info.YieldToSession = message.Session;
+			task.Info.YieldUntilMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 60000;
+			task.Info.YieldUntilTaskId = Ordered().FirstOrDefault(t => t.Info.AgentSessionId == message.Session && !QueueFiles.Terminal(t.Info.Status) && t.Info.Kind is not ("cancel" or "release" or "stopplay"))?.Info.Id ?? "";
+		}
 		task.Info.Status = "cancel_requested";
 		Save(task);
 		EnsureCancellation(task);
@@ -250,7 +278,7 @@ internal sealed class QueueTaskStore
 		// between these writes is repaired by Synchronize without weakening the policy.
 		string controlId = "Cancel_" + CoordinationDigest.Sha256(task.Info.Id).Substring(0, 24);
 		var control = new TaskRequest { Id = controlId, Kind = "cancel", TargetTaskId = task.Info.Id,
-			AgentSessionId = task.Info.AgentSessionId, Note = "durable cancellation request" };
+			AgentSessionId = task.Info.CanceledBy, Note = "Canceled by " + task.Info.CanceledBy + ": " + task.Info.CancellationReason };
 		Submit(JsonSerializer.Serialize(control, JsonSupport.Task), "", task.Info.Id);
 	}
 	private void FinishCanceled(QueueTask task, string reason)
@@ -265,6 +293,31 @@ internal sealed class QueueTaskStore
 	{
 		var ids = SharedFile.TryReadAllText(OrderPath, out var text) ? text.Split('\n') : Array.Empty<string>();
 		return _tasks.Values.OrderBy(t => { int i = Array.IndexOf(ids, t.Info.Id); return i < 0 ? int.MaxValue : i; }).ThenBy(t => t.Order);
+	}
+	internal QueueReply? CheckYield(string session)
+	{
+		foreach (var task in _tasks.Values.Where(t => t.Info.AgentSessionId == session && t.Info.YieldToSession.Length > 0).ToArray())
+		{
+			var info = task.Info;
+			if (info.YieldUntilTaskId.Length == 0)
+			{
+				var next = Ordered().FirstOrDefault(t => t.Info.AgentSessionId == info.YieldToSession && t.Info.Kind is not ("cancel" or "release" or "stopplay")
+					&& DateTimeOffset.TryParse(t.Info.AcceptedAtUtc, out var accepted) && accepted.ToUnixTimeMilliseconds() >= info.YieldUntilMs - 60000
+					&& accepted.ToUnixTimeMilliseconds() <= info.YieldUntilMs);
+				if (next != null) { info.YieldUntilTaskId = next.Info.Id; Save(task); }
+				else if (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() >= info.YieldUntilMs) continue;
+			}
+			if (info.YieldUntilTaskId.Length > 0 && _tasks.TryGetValue(info.YieldUntilTaskId, out var peer))
+			{
+				bool done = peer.Info.BatchRequestId.Length > 0
+					? _tasks.Values.Where(t => t.Info.BatchRequestId == peer.Info.BatchRequestId).All(t => QueueFiles.Terminal(t.Info.Status))
+					: QueueFiles.Terminal(peer.Info.Status);
+				if (done) continue;
+			}
+			return QueueServer.Failure("yield_pending", "Task " + info.Id + " yielded to " + info.YieldToSession + ". Wait for "
+				+ (info.YieldUntilTaskId.Length > 0 ? info.YieldUntilTaskId : "their submission (up to 60 seconds)") + "; do not recreate the canceled run. Reason: " + info.CancellationReason);
+		}
+		return null;
 	}
 	internal QueueReply ClearOrder()
 	{

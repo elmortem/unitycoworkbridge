@@ -14,5 +14,10 @@ namespace AgentBridge.Queueing
 		public string StartedAtUtc = "";
 		public bool CancelRequested;
 		public int Position;
+		public string CanceledBy = "";
+		public string CancellationReason = "";
+		public string YieldToSession = "";
+		public string YieldUntilTaskId = "";
+		public long YieldUntilMs;
 	}
 }

@@ -64,6 +64,7 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
 - `QueueRuntime.cs` — снимок исполняемых файлов CLI по хешу содержимого в системном временном каталоге `AgentBridgeQueueRuntime`, чтобы долгоживущий сервер не блокировал обновление/пересборку CLI на Windows. Новый клиент обновляет `launch.json`; при смене runtime сервер уступает владение между транзакциями.
 - `DispatcherHostPolicy.cs` — чистые решения о владельце диспетчера: при живом редакторе с `dispatcher-host-v1` диспетчер держит редактор на своей машине, клиент/сервер на другой ОС его не запускает и уступает
 - `QueueTaskStore.cs`, `QueueTask.cs` — устойчивые запросы/payload, claims, намерения отмены, порядок и результаты в `Library/AgentBridge/Queue/`
+- `QueueDiscussionStore.cs` — переговоры о прогонах дольше 300 с, 15 с на ответ, бронь и уведомления; `QueueDiscussionTests.cs` проверяет гонки, повторную подачу и возврат из ожидания. `queue reserve/request-stop/respond/inbox`, `--expected-seconds`, `--reservation` и курсоры обсуждений обслуживает внешний диспетчер. Отмена по возрасту без переговоров запрещена.
 - `QueueCommands.cs` — `queue list`, `status <id>`, `cancel <id>`, `move <id> [before-id]`, `shutdown`; работают без Unity
 - `BridgeInspector.cs` — `status` / `doctor`, фатальные `Problems` и нефатальные `Warnings`
 - `TaskResultFormatter.cs` — вывод `json` (стабильный контракт) и `human`
@@ -181,6 +182,11 @@ unity-bridge-plugin.zip             собранный артефакт, зак�
    dotnet build AgentBridgeCli/AgentBridgeCli.csproj -c Release
    dotnet run --project AgentBridgeCli.Tests/AgentBridgeCli.Tests.csproj -c Release
    ```
+
+   При правке Windows-установщика после сборки CLI запускай
+   `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-installer.ps1`.
+   Он проверяет обе сборки, откат и замену exe при работающем клиенте; входит в Windows CI.
+   Запуск установщика из редактора проверяет EditMode-класс `CliUpdaterTests` через мост.
 
 5. Прогони тесты координации, если трогал `Editor/Coordination/`, evidence или кэш тестов.
    Папка `Coordination/` компилируется и Unity, и CLI — правка в ней задевает оба компонента:

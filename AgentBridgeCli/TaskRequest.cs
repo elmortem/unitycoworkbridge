@@ -15,6 +15,8 @@ internal sealed class TaskRequest
 	public string Note { get; set; } = "";
 	public int PlaySeconds { get; set; }
 	public bool Fresh { get; set; }
+	public string ReservationId { get; set; } = "";
+	public int ExpectedSeconds { get; set; }
 
 	// coordination-v1. Empty unless the caller passed --coord-window/--coord-step, so a legacy
 	// submission to an uncoordinated project keeps its old shape.

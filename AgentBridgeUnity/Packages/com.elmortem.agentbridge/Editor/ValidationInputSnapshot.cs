@@ -191,7 +191,7 @@ namespace AgentBridge
 				return false;
 			}
 
-			string normalized = Normalize(path);
+			string normalized = Normalize(path).TrimEnd('/');
 			foreach (string root in excludedRoots)
 			{
 				if (string.IsNullOrEmpty(root))
@@ -199,13 +199,11 @@ namespace AgentBridge
 					continue;
 				}
 
-				string prefix = Normalize(root);
-				if (!prefix.EndsWith("/", StringComparison.Ordinal))
-				{
-					prefix += "/";
-				}
-
-				if (normalized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+				// Watchers also report the directory itself on create/delete/rename. Excluding
+				// only descendants lets those events invalidate an otherwise unchanged snapshot.
+				string prefix = Normalize(root).TrimEnd('/');
+				if (string.Equals(normalized, prefix, StringComparison.OrdinalIgnoreCase)
+					|| normalized.StartsWith(prefix + "/", StringComparison.OrdinalIgnoreCase))
 				{
 					return true;
 				}

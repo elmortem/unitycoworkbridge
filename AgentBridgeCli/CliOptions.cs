@@ -10,6 +10,9 @@ internal sealed class CliOptions
 	public string? Note { get; private set; }
 	public bool Fresh { get; private set; }
 	public bool ConfirmAllTests { get; private set; }
+	public string? ReservationId { get; private set; }
+	public int ExpectedSeconds { get; private set; }
+	public long DiscussionAfterRevision { get; private set; }
 
 	// coordination-v1
 	public string? SpecId { get; private set; }
@@ -300,6 +303,30 @@ internal sealed class CliOptions
 					return options;
 				}
 
+				continue;
+			}
+
+			if (TryTakeText(options, args, ref index, argument, "--reservation", value => options.ReservationId = value, out handled))
+			{
+				if (!handled) return options;
+				continue;
+			}
+			if (TryTakeText(options, args, ref index, argument, "--expected-seconds", value =>
+			{
+				if (int.TryParse(value, out int seconds) && seconds is >= 0 and <= 86400) options.ExpectedSeconds = seconds;
+				else options.Error = "--expected-seconds requires 0..86400";
+			}, out handled))
+			{
+				if (!handled || options.Error != null) return options;
+				continue;
+			}
+			if (TryTakeText(options, args, ref index, argument, "--discussion-after", value =>
+			{
+				if (long.TryParse(value, out long revision) && revision >= 0) options.DiscussionAfterRevision = revision;
+				else options.Error = "--discussion-after requires a non-negative revision";
+			}, out handled))
+			{
+				if (!handled || options.Error != null) return options;
 				continue;
 			}
 

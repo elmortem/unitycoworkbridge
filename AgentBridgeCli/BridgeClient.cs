@@ -49,6 +49,11 @@ internal sealed class BridgeClient
 	// coordination-v1. Empty for a legacy submission, which an uncoordinated project still accepts.
 	public string? CoordinationWindowToken { get; init; }
 	public string? CoordinationStepId { get; init; }
+	public string? ReservationId { get; init; }
+	public int ExpectedSeconds { get; init; }
+	public string? DiscussionId { get; init; }
+	public string? Reason { get; init; }
+	public long AfterRevision { get; init; }
 
 	public async Task<int> SubmitPayloadAsync(string kind, string sourcePath, int waitSeconds)
 	{
@@ -123,8 +128,9 @@ internal sealed class BridgeClient
 	public async Task<int> SubmitCancelAsync(string taskId, int waitSeconds)
 	{
 		if (!IsSafeTaskId(taskId)) return WriteError("invalid_task_id", "Invalid target task id.");
-		var reply = await new QueueClient(_projectRoot).CallAsync(new QueueMessage { Op = "cancel", TaskId = taskId, Session = _session ?? "" });
-		if (!reply.Ok) return WriteError(reply.Code, reply.Message);
+		var reply = await new QueueClient(_projectRoot).CallAsync(new QueueMessage { Op = "cancel", TaskId = taskId, Session = _session ?? "",
+			DiscussionId = DiscussionId ?? "", Reason = Reason ?? "", AfterRevision = AfterRevision });
+		if (!reply.Ok) { QueueCommands.Write(reply, _format); return 3; }
 		WriteResult(JsonSerializer.Serialize(new { Id = taskId, Kind = "cancel", Status = reply.Code, Accepted = true,
 			TargetStatus = reply.Task?.Status, Resume = "agentbridge wait " + taskId }, JsonSupport.Task));
 		return 0;
@@ -188,15 +194,23 @@ internal sealed class BridgeClient
 		int posts = 0, manualStops = 0;
 		while (true)
 		{
-			var reply = await client.CallAsync(new QueueMessage { Op = "get", TaskId = taskId });
+			var reply = await client.CallAsync(new QueueMessage { Op = "get", TaskId = taskId, Session = _session ?? "", AfterRevision = AfterRevision });
 			if (!reply.Ok) return WriteError(reply.Code, reply.Message);
 			var task = reply.Task!;
 			if (QueueFiles.Terminal(task.Status))
 			{
+				if (task.Status == "canceled" && task.CanceledBy.Length > 0) Console.Error.WriteLine("[agentbridge] canceled by " + task.CanceledBy + ": " + task.CancellationReason + ". Do not immediately recreate this run; inspect queue status.");
 				WriteResult(reply.ResultJson);
 				int code = ClassifyResult(reply.ResultJson);
 				_telemetry.Write("cli_exit", _session, taskId, new Dictionary<string, object?> { ["Cmd"] = kind, ["Code"] = code, ["Status"] = task.Status });
 				return code;
+			}
+			if (reply.Discussions.Length > 0)
+			{
+				WriteResult(JsonSerializer.Serialize(new { Id = taskId, Kind = task.Kind, Status = task.Status, Accepted = true,
+					Reason = "coordination_attention", reply.DiscussionRevision, reply.Discussions,
+					Resume = "agentbridge wait " + taskId + " --session " + _session + " --after " + reply.DiscussionRevision }, QueueClient.Json));
+				return 2;
 			}
 			if (watch.Elapsed >= nextHealth)
 			{
@@ -218,7 +232,7 @@ internal sealed class BridgeClient
 				_telemetry.Write("cli_exit", _session, taskId, new Dictionary<string, object?> { ["Cmd"] = kind, ["Code"] = code, ["Status"] = task.Status, ["EditorState"] = health.Code });
 				return code;
 			}
-			if (ManualPlayPolicy.ShouldStop(health, kind, manualStops))
+			if (ManualPlayPolicy.ShouldStop(health, kind, manualStops, task.Status))
 			{
 				manualStops++;
 				await StopManualPlayAsync(taskId, DateTime.UtcNow.AddSeconds(Math.Max(0, waitSeconds - watch.Elapsed.TotalSeconds)));
@@ -235,11 +249,13 @@ internal sealed class BridgeClient
 		{
 			Id = stopId,
 			Kind = "stopplay",
+			TargetTaskId = forTaskId,
 			AgentSessionId = _session ?? "",
 			Note = "auto-stop manual play for " + forTaskId
 		};
-		await new QueueClient(_projectRoot).CallAsync(new QueueMessage { Op = "submit", TaskId = stopId,
+		var admitted = await new QueueClient(_projectRoot).CallAsync(new QueueMessage { Op = "submit", TaskId = stopId,
 			RequestJson = JsonSerializer.Serialize(request, JsonSupport.Task) });
+		if (!admitted.Ok) return; // executor ownership may have changed since the health snapshot
 
 		var journalFile = Path.Combine(_paths.Journal, stopId + ".json");
 		var deadline = DateTime.UtcNow.AddSeconds(StopManualPlaySeconds);
@@ -367,6 +383,8 @@ internal sealed class BridgeClient
 	{
 		request.CoordinationWindowToken = CoordinationWindowToken ?? "";
 		request.CoordinationStepId = CoordinationStepId ?? "";
+		request.ReservationId = ReservationId ?? "";
+		request.ExpectedSeconds = ExpectedSeconds;
 	}
 
 	private async Task<int> SubmitRequestAsync(TaskRequest request, int waitSeconds)

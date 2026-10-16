@@ -135,7 +135,12 @@ internal static class AgentBridgeApplication
 		var client = new BridgeClient(projectRoot, options.Format, options.Session, options.Note, telemetry)
 		{
 			CoordinationWindowToken = options.CoordinationWindowToken,
-			CoordinationStepId = options.CoordinationStepId
+			CoordinationStepId = options.CoordinationStepId,
+			ReservationId = options.ReservationId,
+			ExpectedSeconds = options.ExpectedSeconds,
+			DiscussionId = options.RequestUuid,
+			Reason = options.Reason,
+			AfterRevision = options.AfterRevision
 		};
 		switch (command)
 		{
@@ -347,7 +352,7 @@ internal static class AgentBridgeApplication
 				Console.Out.WriteLine("Active task: " + (health.Bridge.ActiveTaskId ?? "none"));
 				if (!string.IsNullOrEmpty(health.Bridge.ActiveTaskId) && health.Bridge.Capabilities.Contains("long-running-tasks-v1"))
 					Console.Out.WriteLine("Execution: " + health.Bridge.ActiveTaskElapsedSeconds + " seconds; cancellation by another agent: "
-						+ (health.Bridge.ActiveTaskCancelableByOtherAgents ? "allowed" : "protected or stopping/unsupported"));
+						+ (health.Bridge.ActiveTaskCancelableByOtherAgents ? "negotiation required (15s reply window)" : "protected or stopping/unsupported"));
 				Console.Out.WriteLine("Compilation (last observed cycle): " + (health.Bridge.CompilationState ?? "unknown")
 					+ " " + (health.Bridge.LastCompileId ?? "") + " " + (health.Bridge.LastCompileFinishedUtc ?? ""));
 				if (!string.IsNullOrEmpty(health.Bridge.QueueBlockReason))
@@ -453,6 +458,12 @@ internal static class AgentBridgeApplication
 			  --project <path>   Unity project root; otherwise discovered from cwd
 			  cancel <TaskId>    cancel a queued task or request a running test/script to stop
 			  queue list|status <id>|cancel <id>|move <id> [before-id]|shutdown
+			  queue reserve --session S --request KEY --seconds N --reason TEXT
+			  queue request-stop <TaskId> --session S --reason TEXT
+			  queue respond <DiscussionId> --session S --kind allow|deny|yield|continue|wait|withdraw --reason TEXT [--seconds N]
+			  queue inbox --session S [--after REV]
+			  Long submissions: --expected-seconds N --reservation ID (N > 300)
+			  Foreign cancel: --request DiscussionId --reason TEXT [--after reviewed-revision]
 			  --wait <seconds>   total client wait budget, default 110; 0 returns acceptance immediately
 			  --seconds <n>      play session length, or a coordination grant budget
 			  --format <value>   json (default, machine-readable) or human for every command

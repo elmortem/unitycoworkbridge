@@ -1564,9 +1564,10 @@ namespace AgentBridge
 						bool running = exists && (_activeTaskId == target || TestRunLifecycle.TaskId == target
 							|| record.Status == "running" || record.Status == "compiling" || record.Status == "canceling");
 						bool authorized = QueueEditorAdapter.IsAuthorizedCancellation(request.Id, target);
-						string reason = TaskCancellationPolicy.Reason(owner, request.AgentSessionId, exists ? record.StartedAtUtc : null, nowMs);
+						string reason = authorized ? request.Note : TaskCancellationPolicy.Reason(owner, request.AgentSessionId, exists ? record.StartedAtUtc : null, nowMs);
 						if (!authorized && running && TaskCancellationPolicy.IsProtected(owner, request.AgentSessionId, record.StartedAtUtc, nowMs))
-							result = "task_protected: " + target + "; foreign cancellation is allowed after 300 seconds of execution";
+							result = "task_protected: " + target + "; after 300 seconds request agreement through queue request-stop";
+						else if (!authorized && running && !TaskCancellationPolicy.IsOwner(owner, request.AgentSessionId)) result = "negotiation_required: use queue request-stop and cancel through the dispatcher";
 						else if (!authorized && !running && IsCancellationProtected(grant, owner, request.AgentSessionId, nowMs)) result = "coordinated_window_held:" + owner;
 						else if (TestRunLifecycle.RequestStop(target, "canceled", reason)) { ok = true; result = "cancel_requested"; }
 						else if (_activeTaskId == target && _activeRecord.Kind == "csharp") { RequestCSharpStop("canceled", reason); ok = true; result = "cancel_requested"; }
@@ -1605,6 +1606,21 @@ namespace AgentBridge
 				TaskJournal.Write(record);
 			}
 			string testId = TestRunLifecycle.TaskId;
+			TaskRecord executing;
+			string executingId = !string.IsNullOrEmpty(testId) ? testId : _activeTaskId;
+			bool automatic = !string.IsNullOrEmpty(request.TargetTaskId)
+				|| (request.Note ?? "").StartsWith("auto-stop manual play for ", StringComparison.Ordinal);
+			if (automatic && (!string.IsNullOrEmpty(executingId) || PlaySessionStore.Read() != null))
+			{
+				WriteTerminal(request.Id, "stopplay", "success", "Automatic stop skipped: an agent operation owns Play Mode", record.Hash);
+				return;
+			}
+			if (!string.IsNullOrEmpty(executingId) && TaskJournal.TryRead(executingId, out executing)
+				&& !TaskCancellationPolicy.IsOwner(executing.AgentSessionId, request.AgentSessionId))
+			{
+				WriteTerminal(request.Id, "stopplay", "rejected", "negotiation_required: use queue request-stop and cancel for the foreign task", record.Hash);
+				return;
+			}
 			if (!string.IsNullOrEmpty(testId) && (EditorApplication.isPlayingOrWillChangePlaymode || PlayModeSceneRecovery.IsPending))
 			{
 				TestRunLifecycle.RequestStop(testId, "canceled", "Stopped through stopplay by " + (request.AgentSessionId ?? "manual"));
