@@ -22,6 +22,7 @@ internal static class CacheLookupScenarios
 		{
 			AQuietLookupHasBothWitnesses(root);
 			AnEditThatWasRevertedIsCaught(root);
+			ExcludedRootEventsAreNotInputs(root);
 			ExcludedAndIgnoredAreNotInputs(root);
 			AnUnreachableRootIsUnknown(root);
 			AClosedWitnessCountsNothing(root);
@@ -70,6 +71,31 @@ internal static class CacheLookupScenarios
 			"and it is named by path");
 	}
 
+	// Directory create/delete/rename notifications name the excluded root itself, not a child.
+	// Drive delivery directly so this boundary is exercised on every OS, without watcher timing.
+	private static void ExcludedRootEventsAreNotInputs(string project)
+	{
+		var output = Path.Combine(project, "lookup", "root-events", "Assets", "Temp");
+		foreach (var excluded in new[] { output, output + "/", output + "\\" })
+		{
+			using var narrow = new ValidationInputMonitor(Array.Empty<string>(), new[] { excluded });
+			using var wide = new ValidationInputMonitor(Array.Empty<string>(), Array.Empty<string>());
+			foreach (var path in new[] { output, output + "/", output + "\\", Path.Combine(output, "artifact.bin") })
+			{
+				narrow.Record(path);
+				wide.Record(path);
+			}
+
+			Expect(narrow.EventCount == 0,
+				"an excluded root and its descendants are not inputs: " + string.Join(", ", narrow.Paths));
+			Expect(wide.EventCount == 4, "root exclusions belong only to the window declaring them");
+
+			var adjacent = new[] { output + ".meta", Path.Combine(output + "Extra", "Player.cs"), Path.GetDirectoryName(output) };
+			foreach (var path in adjacent) narrow.Record(path);
+			Expect(narrow.Paths.SequenceEqual(adjacent), "excluding a root preserves its metadata, prefix siblings and parent");
+		}
+	}
+
 	// The witness has to describe exactly the inputs the digest describes, or the two would disagree
 	// about what a change even is.
 	private static void ExcludedAndIgnoredAreNotInputs(string project)
@@ -84,18 +110,26 @@ internal static class CacheLookupScenarios
 
 		Func<string, bool> ignore = path =>
 			ValidationInputSnapshot.Normalize(path).EndsWith("/InitTestScene.unity", StringComparison.OrdinalIgnoreCase);
+		using var holder = new ValidationInputMonitor(new[] { assets }, Array.Empty<string>());
 		using var witness = Open(assets, new[] { output }, ignore);
 		Expect(witness.Start.Entries.Count == 3, "neither editor output nor declared scratch is an input");
 
 		Thread.Sleep(50);
 		File.WriteAllText(artifact, "editor output again");
 		File.Delete(scratch);
+		File.Delete(artifact);
+		Directory.Delete(output);
+		Directory.CreateDirectory(output);
+		File.WriteAllText(artifact, "recreated editor output");
+		Expect(WaitUntil(() => holder.Paths.Contains(output) && holder.Paths.Contains(scratch), 5000),
+			"the unfiltered window sees excluded-root and ignored-file events: " + string.Join(", ", holder.Paths));
 
 		var verdict = witness.VerifyAsync().GetAwaiter().GetResult();
 		Expect(verdict.Complete, "verifying a readable tree concludes");
 		Expect(verdict.Changed == 0, "and touching what is not an input changes nothing");
-		Thread.Sleep(200);
-		Expect(witness.Monitor.EventCount == 0, "the observer window applies the same rules");
+		WaitForQuiet(() => holder.EventCount + witness.Monitor.EventCount, 500, 5000);
+		Expect(witness.Monitor.EventCount == 0,
+			"the observer window applies the same rules: " + string.Join(", ", witness.Monitor.Paths));
 	}
 
 	// An input root nobody can walk makes the witness missing, not silent.

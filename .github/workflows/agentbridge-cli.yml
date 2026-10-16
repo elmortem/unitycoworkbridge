@@ -15,12 +15,14 @@ on:
       - AgentBridgeCli/**
       - AgentBridgeCli.Tests/**
       - scripts/install-agentbridge.*
+      - scripts/verify-installer.ps1
       - .github/workflows/agentbridge-cli.yml
   pull_request:
     paths:
       - AgentBridgeCli/**
       - AgentBridgeCli.Tests/**
       - scripts/install-agentbridge.*
+      - scripts/verify-installer.ps1
       - .github/workflows/agentbridge-cli.yml
 
 env:
@@ -44,6 +46,10 @@ jobs:
           git fetch --depth 1 origin "$env:SOURCE_REF"
           git checkout --detach FETCH_HEAD
       - run: dotnet build AgentBridgeCli/AgentBridgeCli.csproj -c Release
+      - name: Verify Windows and sandbox installation while the CLI is running
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./scripts/verify-installer.ps1
       - run: dotnet run --project AgentBridgeCli.Tests/AgentBridgeCli.Tests.csproj -c Release
 
   version:
