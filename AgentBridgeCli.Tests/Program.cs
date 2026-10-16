@@ -42,6 +42,7 @@ try
 	await RunQueueBudgetTests(root);
 	await IndependentQueueTests.RunAsync(root);
 	await QueueReplyLifetimeTests.RunAsync(root);
+	await DispatcherHostTests.RunAsync(root);
 	RunManualPlayPolicyTests();
 	RunTelemetryTests(root);
 	Console.WriteLine("AgentBridgeCli.Tests: PASS");

@@ -10,6 +10,7 @@ internal sealed class BridgeHealth
 	public string ClientOs { get; set; } = "";
 	public string HostOs { get; set; } = "";
 	public bool ForeignHost { get; set; }
+	public string DispatcherOwner { get; set; } = "";
 	public bool PackageDeclared { get; set; }
 	public bool StatusFileExists { get; set; }
 	public bool HeartbeatExists { get; set; }

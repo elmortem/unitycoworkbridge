@@ -15,8 +15,14 @@ namespace AgentBridge
 		private static readonly Dictionary<string, string> Pending = new Dictionary<string, string>();
 		private static DateTime _lastLaunch;
 		private static bool _introduced;
+		private static DateTime _lastAliveCheck;
+		private static bool _launchWarned;
 		public static void Tick()
 		{
+			// The editor owns the dispatcher on its machine: keep it running even without clients.
+			try { EnsureServer(); }
+			catch (Exception error) when (!_launchWarned) { _launchWarned = true; UnityEngine.Debug.LogWarning("[AgentBridge] Queue dispatcher start deferred: " + error.Message); }
+			catch (Exception) { }
 			if (_introduced) return;
 			QueueReply reply;
 			if (TryCall("hello", new QueueMessage { Op = "hello", Incarnation = CoordinationEditorAdapter.Incarnation, EditorPid = Process.GetCurrentProcess().Id, EditorStartedTicks = Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks }, out reply) && reply.Ok) _introduced = true;
@@ -103,6 +109,9 @@ namespace AgentBridge
 		[Serializable] private sealed class TaskEnvelope { public QueueTaskInfo Info; public string AuthorizedCancelTarget; }
 		private static void EnsureServer()
 		{
+			DateTime now = DateTime.UtcNow;
+			if (now - _lastAliveCheck < TimeSpan.FromSeconds(1)) return;
+			_lastAliveCheck = now;
 			string project = BridgePaths.ProjectRoot;
 			if (QueueFiles.Alive(project) || DateTime.UtcNow - _lastLaunch < TimeSpan.FromSeconds(3)) return;
 			_lastLaunch = DateTime.UtcNow;
@@ -114,11 +123,18 @@ namespace AgentBridge
 				string native = Environment.OSVersion.Platform == PlatformID.Win32NT
 					? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AgentBridge", "bin", "agentbridge.exe")
 					: Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin", "agentbridge");
-				if (!File.Exists(native)) return;
+				if (!File.Exists(native)) { WarnLaunchFailed(native); return; }
 				launch = new QueueLaunch { Executable = native, Arguments = new[] { "queue-server", "--project", project } };
 			}
 			using (var process = Process.Start(new ProcessStartInfo(launch.Executable, string.Join(" ", launch.Arguments.Select(Quote)))
 			{ UseShellExecute = Environment.OSVersion.Platform == PlatformID.Win32NT, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden, WorkingDirectory = project })) { }
+		}
+		private static void WarnLaunchFailed(string path)
+		{
+			if (_launchWarned) return;
+			_launchWarned = true;
+			UnityEngine.Debug.LogWarning("[AgentBridge] Queue dispatcher cannot start: no CLI at " + path + ". Install it via Tools → Agent Bridge → Update CLI.");
+			TelemetryLog.Write("dispatcher_launch_failed", "", "", new[] { TelemetryField.Text("Path", path) });
 		}
 		private static string Quote(string argument)
 		{

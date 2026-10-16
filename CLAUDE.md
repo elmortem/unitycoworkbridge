@@ -62,6 +62,7 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
 - `BridgeClient.cs` — постановка через диспетчер и ожидание результата с отдельным EditorState
 - `QueueClient.cs`, `QueueServer.cs` — скрытый автозапуск отдельного CLI-процесса на проект и файловые сообщения; сервер единолично меняет очередь и координацию
 - `QueueRuntime.cs` — снимок исполняемых файлов CLI по хешу содержимого в системном временном каталоге `AgentBridgeQueueRuntime`, чтобы долгоживущий сервер не блокировал обновление/пересборку CLI на Windows. Новый клиент обновляет `launch.json`; при смене runtime сервер уступает владение между транзакциями.
+- `DispatcherHostPolicy.cs` — чистые решения о владельце диспетчера: при живом редакторе с `dispatcher-host-v1` диспетчер держит редактор на своей машине, клиент/сервер на другой ОС его не запускает и уступает
 - `QueueTaskStore.cs`, `QueueTask.cs` — устойчивые запросы/payload, claims, намерения отмены, порядок и результаты в `Library/AgentBridge/Queue/`
 - `QueueCommands.cs` — `queue list`, `status <id>`, `cancel <id>`, `move <id> [before-id]`, `shutdown`; работают без Unity
 - `BridgeInspector.cs` — `status` / `doctor`, фатальные `Problems` и нефатальные `Warnings`

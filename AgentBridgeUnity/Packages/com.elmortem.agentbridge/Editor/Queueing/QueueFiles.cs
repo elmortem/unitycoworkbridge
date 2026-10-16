@@ -10,6 +10,8 @@ namespace AgentBridge.Queueing
 	public static class QueueFiles
 	{
 		public const string Capability = "independent-queue-v1";
+		// The live editor keeps the dispatcher running on its own machine; foreign clients never start one.
+		public const string HostCapability = "dispatcher-host-v1";
 		public static string Root(string project) { return Path.Combine(project, "Library", "AgentBridge", "Queue"); }
 		public static string Request(string project, string id) { return Path.Combine(Root(project), "Requests", Safe(id) + ".json"); }
 		public static string Reply(string project, string id) { return Path.Combine(Root(project), "Replies", Safe(id) + ".json"); }

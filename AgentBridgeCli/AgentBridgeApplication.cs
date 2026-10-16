@@ -332,6 +332,9 @@ internal static class AgentBridgeApplication
 				Console.Out.WriteLine(
 					"Host: editor on " + health.HostOs + ", client on " + health.ClientOs
 					+ " (process check skipped, liveness from heartbeat)");
+				Console.Out.WriteLine("Dispatcher: " + (health.DispatcherOwner == "editor_host"
+					? "editor host keeps it running; this client never starts one"
+					: "started by any client"));
 			}
 			if (health.Bridge != null)
 			{

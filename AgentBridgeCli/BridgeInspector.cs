@@ -142,6 +142,7 @@ internal static class BridgeInspector
 			&& health.HeartbeatAgeMs <= health.HeartbeatToleranceMs;
 		health.CSharpReady = health.BridgeReady && health.Bridge!.RoslynReady;
 		health.Ok = health.BridgeReady;
+		health.DispatcherOwner = DispatcherHostPolicy.HostOwnsDispatcher(health) ? "editor_host" : "any_client";
 		health.Code = health.BridgeReady ? "ready" : FirstOperationalProblem(health.Problems);
 		return health;
 	}

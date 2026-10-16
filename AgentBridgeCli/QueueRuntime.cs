@@ -37,15 +37,22 @@ internal static class QueueRuntime
 		return PhysicalPath(Path.Combine(root, Path.GetFileName(executable)));
 	}
 
+	// Without an apphost the executable is just the shared dotnet host. In that case
+	// the assembly argument identifies the runtime, even if the host is a PATH name.
+	private static bool IsManaged(QueueLaunch launch) =>
+		launch.Arguments.Length > 0 && string.Equals(Path.GetExtension(launch.Arguments[0]), ".dll", StringComparison.OrdinalIgnoreCase);
+
+	internal static string Artifact(QueueLaunch launch) => IsManaged(launch) ? launch.Arguments[0] : launch.Executable;
+
 	internal static bool IsCurrent(QueueLaunch launch)
 	{
-		// Without an apphost the executable is just the shared dotnet host. In that case
-		// the assembly argument identifies our runtime, even if the host is a PATH name.
-		bool managed = launch.Arguments.Length > 0 && string.Equals(Path.GetExtension(launch.Arguments[0]), ".dll", StringComparison.OrdinalIgnoreCase);
+		bool managed = IsManaged(launch);
 #pragma warning disable IL3000
 		string current = managed ? typeof(QueueRuntime).Assembly.Location : Environment.ProcessPath ?? "";
 #pragma warning restore IL3000
-		string requested = managed ? launch.Arguments[0] : launch.Executable;
+		string requested = Artifact(launch);
+		// A launcher from another OS names a path that does not exist here; resolving it would throw.
+		if (!File.Exists(requested)) return false;
 		return current.Length > 0 && string.Equals(PhysicalPath(requested), PhysicalPath(current),
 			OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 	}

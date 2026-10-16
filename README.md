@@ -66,6 +66,8 @@ Some agents (Claude Cowork, dev containers, WSL) run the Editor on the host mach
 
 The bridge protocol is host-agnostic: `status.json` carries `ProjectId` (mirrored in `Library/AgentBridge/project-id`) and `HostOs`. When the CLI detects that the Editor reports a different operating system than its own, it identifies the project by `ProjectId` instead of comparing absolute paths, skips the Editor PID check — a host PID means nothing inside a container — and relies on the heartbeat for liveness with a wider tolerance. `agentbridge status` reports this as `Host: editor on windows, client on linux`. Both fields are optional: against an older package the CLI falls back to path comparison, and an older CLI ignores them.
 
+The queue dispatcher has one owner. While the Editor is alive and its package declares `dispatcher-host-v1`, the dispatcher runs on the Editor's machine: the Editor itself keeps it running, and a client from the sandbox waits for it and never starts its own or rewrites `launch.json`. A sandbox server that sees such a live Editor hands the queue over and exits. With the Editor closed, or with an older package, the first client starts the dispatcher as before. `agentbridge status` shows the owner in a `Dispatcher:` line under `Host:` (`editor host keeps it running; this client never starts one` or `started by any client`); `--format json` carries it as `DispatcherOwner` (`editor_host` / `any_client`). If the host has no native CLI, the sandbox client fails with `dispatcher_unavailable` explaining that the Editor host owns the dispatcher — run **Update CLI** on the host machine.
+
 For development directly from this checkout:
 
 ```bash
@@ -141,7 +143,7 @@ After installation, just ask Claude to do something inside the Unity Editor (e.g
 
 Submission, task inspection, ordering, cancellation and `coord` commands do not require a readable Unity status or heartbeat. A successful admission freezes the request and payload in `Library/AgentBridge/Queue/` before acknowledging it. The dispatcher restarts automatically after an idle shutdown or process exit; accepted tasks retain their IDs. Execution claims check the same durable request/payload hash. An unresolved execution is never replayed merely because a heartbeat became stale.
 
-The dispatcher runs from a content-hashed copy of the CLI under the system temporary directory `AgentBridgeQueueRuntime`, so it does not lock the installed CLI during an update or rebuild on Windows. Runtime paths resolve directory and file links, including macOS temporary-directory aliases such as `/var` and `/private/var`. A newer client updates `launch.json`; the server hands over ownership between transactions when the runtime changes. With a `dotnet` launcher, the CLI assembly identifies the runtime.
+The dispatcher runs from a content-hashed copy of the CLI under the system temporary directory `AgentBridgeQueueRuntime`, so it does not lock the installed CLI during an update or rebuild on Windows. Runtime paths resolve directory and file links, including macOS temporary-directory aliases such as `/var` and `/private/var`. A newer client updates `launch.json`; the server hands over ownership between transactions when the runtime changes. With a `dotnet` launcher, the CLI assembly identifies the runtime. A server never yields to a launcher it cannot run itself (a path from a client on another OS), and the server on the machine of a live Editor does not exit on idle: the Editor checks every second and restarts a missing dispatcher.
 
 ```bash
 agentbridge compile --wait 0
@@ -638,7 +640,10 @@ task) — followed by the fields of that event.
 | client | `cli_submit` | `Cmd`, `Note` |
 | client | `cli_wake` | `Action` (`post`/`focus`), `AgeMs`, `Sent` (native call succeeded; not proof of an Editor tick) |
 | client | `cli_exit` | `Cmd`, `Code`, `Status`, `QueuedMs`, `RunningMs`, `Posts`, `Focuses` |
-| client | `queue_unacknowledged` | `Op`, `WaitedMs`, `ServerAlive`, `Starts`, `Host` — the dispatcher did not answer a request in time |
+| editor | `dispatcher_launch_failed` | `Path` — the Editor cannot start the dispatcher: no native CLI at that path (once per domain) |
+| client | `queue_unacknowledged` | `Op`, `WaitedMs`, `ServerAlive`, `Starts`, `Reason` (`server_silent`/`host_dispatcher_missing`/`launch_failed`), `Foreign`, `Host` — the dispatcher did not answer a request in time |
+| client | `queue_handover` | `Result` (Editor OS) — a dispatcher on another OS than the live Editor handed the queue over and exited |
+| client | `queue_launch_ignored` | `Result` (executable) — the dispatcher ignored a `launch.json` it cannot run |
 | client | `queue_cleanup` | `Deleted`, `Failed`, `Kept`, `ElapsedMs`, `Host` — written by the dispatcher's background reply sweep |
 | client | `queue_slow` | `Phase` (`heartbeat`/`request`/`sync`), `Op`, `ElapsedMs`, `Host` — a dispatcher loop phase took ≥ 1 s |
 

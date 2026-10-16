@@ -22,6 +22,8 @@ internal sealed class QueueClient
 		var deadline = Stopwatch.StartNew();
 		long nextStart = 0;
 		int starts = 0;
+		BridgeHealth? health = null;
+		bool deferred = false;
 		while (deadline.ElapsedMilliseconds < AcknowledgeTimeoutMs)
 		{
 			if (SharedFile.TryReadAllText(QueueFiles.Reply(_project, message.Id), out var json))
@@ -31,21 +33,35 @@ internal sealed class QueueClient
 			}
 			if (deadline.ElapsedMilliseconds >= nextStart && !QueueFiles.Alive(_project))
 			{
-				Start();
-				starts++;
+				// The live editor host starts its own dispatcher; a client on another OS only waits.
+				health = BridgeInspector.Inspect(_project);
+				if (DispatcherHostPolicy.HostOwnsDispatcher(health)) deferred = true;
+				else { Start(); starts++; }
 				nextStart = deadline.ElapsedMilliseconds + 3000;
 			}
 			await Task.Delay(20);
 		}
+		bool alive = QueueFiles.Alive(_project);
+		health ??= BridgeInspector.Inspect(_project);
+		string reason = alive ? "server_silent" : deferred && starts == 0 ? "host_dispatcher_missing" : "launch_failed";
 		new TelemetryLog(_project, true).Write("queue_unacknowledged", message.Session, message.TaskId, new Dictionary<string, object?>
 		{
 			["Op"] = message.Op,
 			["WaitedMs"] = deadline.ElapsedMilliseconds,
-			["ServerAlive"] = QueueFiles.Alive(_project),
+			["ServerAlive"] = alive,
 			["Starts"] = starts,
+			["Reason"] = reason,
+			["Foreign"] = health.ForeignHost,
 			["Host"] = HostPlatform.Current
 		});
-		return new QueueReply { Code = "dispatcher_unavailable", Message = "The queue server did not acknowledge request " + message.Id + ". Task: " + message.TaskId + ". The durable request remains; inspect the existing task before retrying.", Task = new QueueTaskInfo { Id = message.TaskId } };
+		long seconds = (AcknowledgeTimeoutMs + 999) / 1000;
+		string cause = reason switch
+		{
+			"host_dispatcher_missing" => "The editor host (" + health.HostOs + ") owns the dispatcher but did not start it within " + seconds + " s. Check agentbridge status; the host needs the native CLI (Tools → Agent Bridge → Update CLI).",
+			"server_silent" => "The queue server is alive but did not acknowledge request " + message.Id + " within " + seconds + " s.",
+			_ => "The queue server did not acknowledge request " + message.Id + "."
+		};
+		return new QueueReply { Code = "dispatcher_unavailable", Message = cause + " Task: " + message.TaskId + ". The durable request remains; inspect the existing task before retrying.", Task = new QueueTaskInfo { Id = message.TaskId } };
 	}
 	// The server deletes the request microseconds after publishing the reply; give it that
 	// moment so the reply is not left behind for the daily sweep.
@@ -72,9 +88,9 @@ internal sealed class QueueClient
 		if (args.Count == 0) executable = QueueRuntime.Snapshot(executable, assembly);
 		args.AddRange(new[] { "queue-server", "--project", _project });
 		var launch = new QueueLaunch { Executable = executable, Arguments = args.ToArray() };
-		// A healthy server reached through a shared filesystem may run on another OS.
-		// Do not replace its host launcher with a path that only this client can execute.
-		if (!QueueFiles.Alive(_project) || !BridgeInspector.Inspect(_project).ForeignHost)
+		// The project may be reached through a shared filesystem from another OS. Never replace
+		// the host launcher with a path that only this client can execute.
+		if (!BridgeInspector.Inspect(_project).ForeignHost)
 			QueueFiles.Write(Path.Combine(QueueFiles.Root(_project), "launch.json"), JsonSerializer.Serialize(launch, Json));
 		return launch;
 	}

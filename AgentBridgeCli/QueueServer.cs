@@ -57,18 +57,32 @@ internal sealed class QueueServer
 		_lastUse = Environment.TickCount64;
 		long lastBeat = 0, lastSync = 0, lastCleanup = 0;
 		string? lastLaunchJson = null;
+		BridgeHealth? health = null;
+		long lastInspect = 0;
 		while (!_stop)
 		{
 			long now = Environment.TickCount64;
+			// A live editor on another OS keeps its own dispatcher; hand the queue over to it.
+			if (health == null || now - lastInspect >= DispatcherHostPolicy.InspectIntervalMs)
+			{
+				health = BridgeInspector.Inspect(_project);
+				lastInspect = now;
+				if (DispatcherHostPolicy.HostOwnsDispatcher(health)) { Log("queue_handover", "", "", health.HostOs); break; }
+			}
 			// A newer CLI publishes its immutable runtime before sending a request. Yield
 			// ownership between transactions; its client restarts us without losing the queue.
+			// A launcher this machine cannot run (another OS's client) is ignored.
 			if (SharedFile.TryReadAllText(Path.Combine(_root, "launch.json"), out var launchJson) && launchJson != lastLaunchJson)
 			{
 				var launch = JsonSerializer.Deserialize<QueueLaunch>(launchJson, QueueClient.Json);
 				if (launch != null && !QueueRuntime.IsCurrent(launch))
 				{
-					Log("queue_runtime_changed", "", "", launch.Executable);
-					break;
+					if (DispatcherHostPolicy.ShouldYield(File.Exists(QueueRuntime.Artifact(launch)), health.ForeignHost))
+					{
+						Log("queue_runtime_changed", "", "", launch.Executable);
+						break;
+					}
+					Log("queue_launch_ignored", "", "", launch.Executable);
 				}
 				lastLaunchJson = launchJson;
 			}
@@ -113,8 +127,9 @@ internal sealed class QueueServer
 				lastCleanup = now;
 			}
 			// Idle shutdown is safe even with queued work: the next client or editor handshake
-			// restarts this process, and the complete queue is already durable.
-			if (now - _lastUse > 120000) break;
+			// restarts this process, and the complete queue is already durable. The server on
+			// the machine of a live editor stays: the editor would only start it again.
+			if (DispatcherHostPolicy.MayIdleExit(now - _lastUse, health)) break;
 			await Task.Delay(20);
 		}
 		File.Delete(Path.Combine(_root, "heartbeat"));
