@@ -26,6 +26,8 @@ internal sealed class BridgeClient
 
 	// Leaving play mode drags a domain reload behind it, and on a heavy project that is slow.
 	private const int StopManualPlaySeconds = 120;
+	// Every poll is a dispatcher transaction with a reply file; the budget still bounds the pause.
+	private const int WaitPollIntervalMs = 1000;
 
 	private readonly BridgePaths _paths;
 	private readonly string _format;
@@ -221,7 +223,8 @@ internal sealed class BridgeClient
 				manualStops++;
 				await StopManualPlayAsync(taskId, DateTime.UtcNow.AddSeconds(Math.Max(0, waitSeconds - watch.Elapsed.TotalSeconds)));
 			}
-			await Task.Delay(250);
+			double remainingMs = waitSeconds * 1000.0 - watch.Elapsed.TotalMilliseconds;
+			await Task.Delay(TimeSpan.FromMilliseconds(Math.Clamp(remainingMs, 1, WaitPollIntervalMs)));
 		}
 	}
 

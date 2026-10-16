@@ -582,7 +582,7 @@ Library/AgentBridge/
 ├── Queue/                      ← durable dispatcher state, available without Unity
 │   ├── Tasks/                  ← frozen requests, claims, cancellation intent and results
 │   ├── Requests/               ← atomic client/editor messages
-│   ├── Replies/                ← operation acknowledgments
+│   ├── Replies/                ← operation acknowledgments; the reader deletes its reply, the dispatcher sweeps leftovers older than 24 h
 │   ├── server.lock             ← single dispatcher ownership
 │   ├── server.json             ← dispatcher process identity
 │   ├── heartbeat               ← dispatcher liveness, separate from the editor heartbeat
@@ -638,6 +638,9 @@ task) — followed by the fields of that event.
 | client | `cli_submit` | `Cmd`, `Note` |
 | client | `cli_wake` | `Action` (`post`/`focus`), `AgeMs`, `Sent` (native call succeeded; not proof of an Editor tick) |
 | client | `cli_exit` | `Cmd`, `Code`, `Status`, `QueuedMs`, `RunningMs`, `Posts`, `Focuses` |
+| client | `queue_unacknowledged` | `Op`, `WaitedMs`, `ServerAlive`, `Starts`, `Host` — the dispatcher did not answer a request in time |
+| client | `queue_cleanup` | `Deleted`, `Failed`, `Kept`, `ElapsedMs`, `Host` — written by the dispatcher's background reply sweep |
+| client | `queue_slow` | `Phase` (`heartbeat`/`request`/`sync`), `Op`, `ElapsedMs`, `Host` — a dispatcher loop phase took ≥ 1 s |
 
 There is no aggregate command on purpose — a fixed report would hide exactly the unexpected thing
 the log exists to reveal. Read the raw JSONL:

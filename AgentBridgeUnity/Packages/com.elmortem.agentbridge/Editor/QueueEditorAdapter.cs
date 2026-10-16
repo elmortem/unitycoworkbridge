@@ -37,6 +37,7 @@ namespace AgentBridge
 				}
 				string json;
 				if (!SharedFile.TryReadAllText(QueueFiles.Reply(BridgePaths.ProjectRoot, id), out json)) return false;
+				QueueFiles.ReleaseReply(BridgePaths.ProjectRoot, id);
 				reply = JsonUtility.FromJson<QueueReply>(json);
 				Pending.Remove(key);
 				return reply != null;

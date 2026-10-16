@@ -175,9 +175,9 @@ Namespace `AgentBridge.Cli`, file-scoped. Собирается в исполня
 | Файл | Роль |
 |---|---|
 | `BridgeClient.cs` | приём задачи через диспетчер, ограниченное ожидание, отдельный EditorState |
-| `QueueClient.cs` | файловые запросы/ответы и скрытый автозапуск отдельного queue-server |
+| `QueueClient.cs` | файловые запросы/ответы и скрытый автозапуск отдельного queue-server, удаляет прочитанный ответ, пишет `queue_unacknowledged` |
 | `QueueRuntime.cs` | исполняемый снимок CLI по хешу содержимого в системном временном каталоге `AgentBridgeQueueRuntime`; сервер не блокирует обновление/пересборку CLI на Windows. Сравнение runtime разрешает ссылки во всех предках пути (включая `/var` → `/private/var` на macOS); при запуске через `dotnet` сравнивает путь CLI-сборки. Новый клиент обновляет `launch.json`, а сервер уступает владение между транзакциями при смене runtime |
-| `QueueServer.cs` | один процесс на физический проект, владение очередью и мутациями координации |
+| `QueueServer.cs` | один процесс на физический проект, владение очередью и мутациями координации, фоновая очистка `Replies/` старше суток, телеметрия медленных фаз цикла |
 | `QueueTaskStore.cs`, `QueueTask.cs` | устойчивые запросы/payload, claims, отмена, порядок, учёт результатов и будущих batch-шагов |
 | `QueueCommands.cs` | `queue list`, `status <id>`, `cancel <id>`, `move <id> [before-id]`, `shutdown` |
 | `TaskRequest.cs` | DTO запроса задачи (то, что попадает в `<id>.task.json`) |

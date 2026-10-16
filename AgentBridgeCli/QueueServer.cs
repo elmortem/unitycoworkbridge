@@ -7,8 +7,13 @@ namespace AgentBridge.Cli;
 
 internal sealed class QueueServer
 {
+	internal const int ReplySweepIntervalMs = 60000;
+	internal const int SlowPhaseMs = 1000;
+	internal static readonly TimeSpan ReplyLifetime = TimeSpan.FromDays(1);
+
 	private readonly string _project;
 	private readonly string _root;
+	private Task? _sweep;
 	private readonly QueueTaskStore _tasks;
 	private readonly CoordinationFileStore _coordination;
 	private readonly TelemetryLog _log;
@@ -69,7 +74,9 @@ internal sealed class QueueServer
 			}
 			if (now - lastBeat >= 1000)
 			{
+				long started = Environment.TickCount64;
 				QueueFiles.Write(Path.Combine(_root, "heartbeat"), DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString());
+				ReportSlow("heartbeat", started);
 				lastBeat = now;
 			}
 			foreach (var path in Directory.GetFiles(Path.Combine(_root, "Requests"), "*.json").OrderBy(File.GetCreationTimeUtc))
@@ -79,6 +86,7 @@ internal sealed class QueueServer
 			}
 			if (now - lastSync >= 250)
 			{
+				long started = Environment.TickCount64;
 				try
 				{
 					_tasks.Synchronize();
@@ -93,12 +101,15 @@ internal sealed class QueueServer
 					}
 				}
 				catch (Exception error) { Log("queue_sync_error", "", "", error.Message); }
+				ReportSlow("sync", started);
 				lastSync = now;
 			}
-			if (now - lastCleanup > 60000)
+			// The sweep runs off the loop: a large Replies folder must not stall the heartbeat
+			// or request handling. Exit does not wait for it; deletion is idempotent.
+			if (now - lastCleanup > ReplySweepIntervalMs && (_sweep == null || _sweep.IsCompleted))
 			{
-				foreach (var path in Directory.Exists(Path.Combine(_root, "Replies")) ? Directory.GetFiles(Path.Combine(_root, "Replies"), "*.json") : Array.Empty<string>())
-					if (File.GetLastWriteTimeUtc(path) < DateTime.UtcNow.AddDays(-1)) File.Delete(path);
+				string replies = Path.Combine(_root, "Replies");
+				_sweep = Task.Run(() => SweepAndLog(replies));
 				lastCleanup = now;
 			}
 			// Idle shutdown is safe even with queued work: the next client or editor handshake
@@ -111,6 +122,7 @@ internal sealed class QueueServer
 
 	private void HandleFile(string path)
 	{
+		long started = Environment.TickCount64;
 		string id = Path.GetFileNameWithoutExtension(path);
 		string replyPath = QueueFiles.Reply(_project, id);
 		if (File.Exists(replyPath)) { File.Delete(path); return; }
@@ -128,6 +140,7 @@ internal sealed class QueueServer
 		catch (Exception error) { reply = Failure("bad_usage", error.Message); }
 		QueueFiles.Write(replyPath, JsonSerializer.Serialize(reply, QueueClient.Json));
 		File.Delete(path);
+		ReportSlow("request", started, message?.Op ?? "");
 		if (message?.Op is not ("get" or "list" or "coord")) Log("queue_" + message?.Op, message?.Session ?? "", message?.TaskId ?? "", reply.Code);
 	}
 
@@ -197,6 +210,49 @@ internal sealed class QueueServer
 		if (reply.Changed) transaction.Commit();
 		return reply;
 	}
+	internal readonly record struct ReplySweep(int Deleted, int Failed, int Kept, long ElapsedMs);
+
+	// Enumeration carries each file's timestamp (on Windows without a per-file metadata call).
+	// Covers *.json replies and *.tmp leftovers of interrupted atomic writes.
+	internal static ReplySweep SweepReplies(string directory, DateTime cutoffUtc)
+	{
+		var watch = Stopwatch.StartNew();
+		int deleted = 0, failed = 0, kept = 0;
+		try
+		{
+			if (Directory.Exists(directory))
+				foreach (var file in new DirectoryInfo(directory).EnumerateFiles())
+				{
+					if (file.LastWriteTimeUtc >= cutoffUtc) { kept++; continue; }
+					try { file.Delete(); deleted++; }
+					catch (Exception error) when (error is IOException or UnauthorizedAccessException) { failed++; }
+				}
+		}
+		catch (Exception error) when (error is IOException or UnauthorizedAccessException) { failed++; }
+		return new ReplySweep(deleted, failed, kept, watch.ElapsedMilliseconds);
+	}
+
+	private void SweepAndLog(string directory)
+	{
+		var sweep = SweepReplies(directory, DateTime.UtcNow - ReplyLifetime);
+		if (sweep.Deleted > 0 || sweep.Failed > 0 || sweep.ElapsedMs >= SlowPhaseMs)
+			_log.Write("queue_cleanup", "", "", new Dictionary<string, object?>
+			{
+				["Deleted"] = sweep.Deleted, ["Failed"] = sweep.Failed, ["Kept"] = sweep.Kept,
+				["ElapsedMs"] = sweep.ElapsedMs, ["Host"] = HostPlatform.Current
+			});
+	}
+
+	private void ReportSlow(string phase, long startedAt, string op = "")
+	{
+		long elapsed = Environment.TickCount64 - startedAt;
+		if (elapsed >= SlowPhaseMs)
+			_log.Write("queue_slow", "", "", new Dictionary<string, object?>
+			{
+				["Phase"] = phase, ["Op"] = op, ["ElapsedMs"] = elapsed, ["Host"] = HostPlatform.Current
+			});
+	}
+
 	private void Log(string name, string session, string id, string result) => _log.Write(name, session, id, new Dictionary<string, object?> { ["Result"] = result });
 	internal static QueueReply Failure(string code, string message) => new() { Code = code, Message = message };
 }

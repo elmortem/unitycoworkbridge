@@ -11,6 +11,7 @@ internal sealed class QueueClient
 	private readonly string _project;
 	private QueueLaunch? _launch;
 	public QueueClient(string project) { _project = project; }
+	internal int AcknowledgeTimeoutMs { get; init; } = 15000;
 	public QueueReply Call(QueueMessage message) => CallAsync(message).GetAwaiter().GetResult();
 	public async Task<QueueReply> CallAsync(QueueMessage message)
 	{
@@ -20,18 +21,38 @@ internal sealed class QueueClient
 		QueueFiles.Write(path, JsonSerializer.Serialize(message, Json));
 		var deadline = Stopwatch.StartNew();
 		long nextStart = 0;
-		while (deadline.ElapsedMilliseconds < 15000)
+		int starts = 0;
+		while (deadline.ElapsedMilliseconds < AcknowledgeTimeoutMs)
 		{
 			if (SharedFile.TryReadAllText(QueueFiles.Reply(_project, message.Id), out var json))
+			{
+				await ReleaseReplyAsync(message.Id);
 				return JsonSerializer.Deserialize<QueueReply>(json, Json) ?? new QueueReply { Code = "dispatcher_invalid_reply" };
+			}
 			if (deadline.ElapsedMilliseconds >= nextStart && !QueueFiles.Alive(_project))
 			{
 				Start();
+				starts++;
 				nextStart = deadline.ElapsedMilliseconds + 3000;
 			}
 			await Task.Delay(20);
 		}
+		new TelemetryLog(_project, true).Write("queue_unacknowledged", message.Session, message.TaskId, new Dictionary<string, object?>
+		{
+			["Op"] = message.Op,
+			["WaitedMs"] = deadline.ElapsedMilliseconds,
+			["ServerAlive"] = QueueFiles.Alive(_project),
+			["Starts"] = starts,
+			["Host"] = HostPlatform.Current
+		});
 		return new QueueReply { Code = "dispatcher_unavailable", Message = "The queue server did not acknowledge request " + message.Id + ". Task: " + message.TaskId + ". The durable request remains; inspect the existing task before retrying.", Task = new QueueTaskInfo { Id = message.TaskId } };
+	}
+	// The server deletes the request microseconds after publishing the reply; give it that
+	// moment so the reply is not left behind for the daily sweep.
+	private async Task ReleaseReplyAsync(string id)
+	{
+		for (int attempt = 0; attempt < 10 && File.Exists(QueueFiles.Request(_project, id)); attempt++) await Task.Delay(20);
+		QueueFiles.ReleaseReply(_project, id);
 	}
 	private QueueLaunch PrepareLaunch()
 	{

@@ -13,6 +13,19 @@ namespace AgentBridge.Queueing
 		public static string Root(string project) { return Path.Combine(project, "Library", "AgentBridge", "Queue"); }
 		public static string Request(string project, string id) { return Path.Combine(Root(project), "Requests", Safe(id) + ".json"); }
 		public static string Reply(string project, string id) { return Path.Combine(Root(project), "Replies", Safe(id) + ".json"); }
+		// The reader owns a reply once the server has finished the transaction: the server deletes
+		// the request right after publishing the reply. While the request still exists the reply
+		// guards it against re-handling after a server crash, so it stays for the server's sweep.
+		public static void ReleaseReply(string project, string id)
+		{
+			try
+			{
+				if (File.Exists(Request(project, id))) return;
+				File.Delete(Reply(project, id));
+			}
+			catch (IOException) { }
+			catch (UnauthorizedAccessException) { }
+		}
 		public static string Task(string project, string id) { return Path.Combine(Root(project), "Tasks", Safe(id) + ".json"); }
 		public static string Safe(string id)
 		{
