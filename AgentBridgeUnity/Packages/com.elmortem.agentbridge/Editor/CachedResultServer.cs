@@ -7,6 +7,8 @@ namespace AgentBridge
 {
 	public static class CachedResultServer
 	{
+		private const int ClaimReplyPollMs = 50;
+		private const int ClaimReplyTimeoutMs = 5000;
 		private static readonly CacheMissMemo Misses = new CacheMissMemo();
 
 		private static async Task ServeAsync(List<PendingTaskInfo> pending)
@@ -107,7 +109,6 @@ namespace AgentBridge
 						}
 
 						// A served result consumes its step exactly once, just like a real run.
-						string reserveError;
 						var verified = await job.Measure("cache_verify", task.Id);
 						string verifiedSources = await CompileInputContext.StartCapture(projectRoot);
 						// The witness closes here: every read the decision stands on — both digests
@@ -117,9 +118,30 @@ namespace AgentBridge
 						// Recheck the actual entry and editor context before consuming a step.
 						if (context != ValidationEvidence.ContextOf(mode, FilterOf(request))
 							|| !TestCacheQuery.TryServe(request, sourceFingerprint, () => inputDigest,
-								DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), out hit)) continue;
-						if (!verified.Complete || inputDigest != verified.Digest || sourceFingerprint != verifiedSources
-							|| !CanPublish(task, requestHash, witness.Monitor)) continue;
+								DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), out hit))
+						{
+							Skip(task.Id, "entry_gone_on_recheck");
+							continue;
+						}
+
+						if (!verified.Complete || inputDigest != verified.Digest)
+						{
+							Skip(task.Id, "digest_moved");
+							continue;
+						}
+
+						if (sourceFingerprint != verifiedSources)
+						{
+							Skip(task.Id, "sources_moved");
+							continue;
+						}
+
+						if (!CanPublish(task, requestHash, witness.Monitor))
+						{
+							Skip(task.Id, "cannot_publish");
+							continue;
+						}
+
 						// Equal digests only say the bytes match now. An input that was edited and put
 						// back during the lookup means the answer describes a project that moved.
 						if (!stat.Complete || stat.Changed != 0)
@@ -132,8 +154,10 @@ namespace AgentBridge
 							continue;
 						}
 
-						if (!TryReserveCache(request, task.Id, out reserveError))
+						string reserveError = await ReserveCacheAsync(request, task.Id);
+						if (reserveError != null)
 						{
+							Skip(task.Id, reserveError);
 							continue;
 						}
 
@@ -169,12 +193,23 @@ namespace AgentBridge
 						// The reuse key is itself made of sizes, times and content of the sources, so
 						// the second capture below already catches an edit that was put back. Only the
 						// observer is needed here, and only now that there is an entry to serve.
-						string reserveError;
 						if (witness == null) witness = await OpenWitness(roots, excluded, ignore, task.Id);
-						if (sourceFingerprint != await CompileInputContext.StartCapture(projectRoot)
-							|| !CanPublish(task, requestHash, witness.Monitor)) continue;
-						if (!TryReserveCache(request, task.Id, out reserveError))
+						if (sourceFingerprint != await CompileInputContext.StartCapture(projectRoot))
 						{
+							Skip(task.Id, "sources_moved");
+							continue;
+						}
+
+						if (!CanPublish(task, requestHash, witness.Monitor))
+						{
+							Skip(task.Id, "cannot_publish");
+							continue;
+						}
+
+						string reserveError = await ReserveCacheAsync(request, task.Id);
+						if (reserveError != null)
+						{
+							Skip(task.Id, reserveError);
 							continue;
 						}
 
@@ -265,12 +300,40 @@ namespace AgentBridge
 				&& requestHash == TaskFileHash.HashOf(task.TaskFilePath, null);
 		}
 
-		private static bool TryReserveCache(TaskRequest request, string taskId, out string reason)
+		// The dispatcher answers a claim on its own schedule, so the first call only publishes it.
+		// The task stays in Checking meanwhile and the coordinator leaves it alone; on timeout the
+		// pending request is kept and the coordinator's own start collects the reply.
+		private static async Task<string> ReserveCacheAsync(TaskRequest request, string taskId)
 		{
-			reason = "";
-			// Uncoordinated readers do not acquire editor ownership. Explicit coordinated
-			// steps still need validation and accounting, including cache hits.
-			return CoordinationGate.TryReserve(request, taskId, out reason);
+			long deadline = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + ClaimReplyTimeoutMs;
+			while (true)
+			{
+				// TryReserve may refuse without calling the dispatcher at all, so a flag left by
+				// someone else's call must not read as our own wait.
+				QueueEditorAdapter.LastCallAwaitingReply = false;
+				string reason;
+				if (CoordinationGate.TryReserve(request, taskId, out reason))
+				{
+					return null;
+				}
+
+				if (!QueueEditorAdapter.LastCallAwaitingReply)
+				{
+					return "claim_refused: " + reason;
+				}
+
+				if (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() >= deadline)
+				{
+					return "claim_reply_timeout";
+				}
+
+				await Task.Delay(ClaimReplyPollMs);
+			}
+		}
+
+		private static void Skip(string taskId, string what)
+		{
+			TelemetryLog.Write("cache_skip", "", taskId, new[] { TelemetryField.Text("What", what) });
 		}
 
 		public static string CurrentInputDigest(TaskRequest request)

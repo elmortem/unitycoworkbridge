@@ -30,6 +30,7 @@ namespace AgentBridge
 		public const string WindowKey = "AgentBridge_EvidenceWindow";
 		public const string ReloadsKey = "AgentBridge_EvidenceReloads";
 		public const string EventsKey = "AgentBridge_EvidenceEvents";
+		public const string NonSourceEventsKey = "AgentBridge_EvidenceNonSourceEvents";
 		public const string ObserverKey = "AgentBridge_EvidenceObserver";
 		public const string ScratchKey = "AgentBridge_EvidenceScratch";
 		public const string ManifestKey = "AgentBridge_EvidenceManifest";
@@ -334,6 +335,7 @@ namespace AgentBridge
 			SessionState.SetString(ExcludedKey, Join(_excluded));
 			SessionState.SetInt(ReloadsKey, 0);
 			SessionState.SetInt(EventsKey, 0);
+			SessionState.SetInt(NonSourceEventsKey, 0);
 			SessionState.SetInt(ObserverKey, _monitor != null && _monitor.Observed ? 1 : 0);
 
 			_preparingTaskId = "";
@@ -344,6 +346,13 @@ namespace AgentBridge
 		// Main thread, after the run finished. Hashes once more and turns the two snapshots plus
 		// the observer verdict into the record that travels with the result.
 		public static bool TryComplete(string taskId, bool artifactsPresent, out EvidenceRecord result)
+		{
+			return TryComplete(taskId, artifactsPresent, false, out result);
+		}
+
+		// resultsFixedAtStart: the results were recorded before anything was compiled, so a change
+		// to compiled sources alone cannot have reached them.
+		public static bool TryComplete(string taskId, bool artifactsPresent, bool resultsFixedAtStart, out EvidenceRecord result)
 		{
 			result = null;
 			if (_completion == null || _completingId != taskId)
@@ -379,13 +388,14 @@ namespace AgentBridge
 			_completionSources = null;
 			_completionManifest = null;
 			_completingId = null;
-			result = Complete(taskId, artifactsPresent, end, stat);
+			result = Complete(taskId, artifactsPresent, resultsFixedAtStart, end, stat);
 			return true;
 		}
 
 		private static EvidenceRecord Complete(
 			string taskId,
 			bool artifactsPresent,
+			bool resultsFixedAtStart,
 			ValidationInputSnapshot end,
 			InputStatVerdict stat)
 		{
@@ -399,6 +409,7 @@ namespace AgentBridge
 			string windowId = SessionState.GetString(WindowKey, "");
 			int reloads = SessionState.GetInt(ReloadsKey, 0);
 			int events = SessionState.GetInt(EventsKey, 0);
+			int nonSourceEvents = SessionState.GetInt(NonSourceEventsKey, 0);
 			bool observerOk = SessionState.GetInt(ObserverKey, 0) == 1;
 			string observerFailure = "";
 
@@ -412,6 +423,7 @@ namespace AgentBridge
 						TelemetryField.Text("Source", "observer") });
 				}
 				events += _monitor.EventCount;
+				nonSourceEvents += _monitor.NonSourceEventCount;
 				observerOk = observerOk && _monitor.Observed;
 				observerFailure = _monitor.Failure;
 			}
@@ -445,19 +457,10 @@ namespace AgentBridge
 				return record;
 			}
 
-			if (startDigest != end.Digest)
+			bool digestChanged = startDigest != end.Digest;
+			if (digestChanged || events > 0)
 			{
-				record.Validity = EvidenceRecord.Stale;
-				record.Reason = "the inputs changed while the validation ran";
-				return record;
-			}
-
-			if (events > 0)
-			{
-				// Same digest, but something touched an input and put it back. The result describes
-				// a project that did not hold still, so it is not evidence.
-				record.Validity = EvidenceRecord.Stale;
-				record.Reason = "an input was modified and restored while the validation ran";
+				ClassifyChange(record, digestChanged, events, nonSourceEvents, observerOk, stat, resultsFixedAtStart);
 				return record;
 			}
 
@@ -487,6 +490,33 @@ namespace AgentBridge
 					+ " domain reload(s); the stat manifest covers the gap; both input digests match"
 				: "";
 			return record;
+		}
+
+		// The inputs moved during the run. A result recorded before any compilation cannot have seen
+		// a change to compiled sources, so when both witnesses say sources were all that moved it
+		// still describes the starting inputs. Anything else — an asset, an unnamed digest change,
+		// a blind observer — describes a project that did not hold still, so it is not evidence.
+		public static void ClassifyChange(EvidenceRecord record, bool digestChanged, int events, int nonSourceEvents,
+			bool observerOk, InputStatVerdict stat, bool resultsFixedAtStart)
+		{
+			bool sourcesOnly = resultsFixedAtStart
+				&& observerOk
+				&& stat.Complete
+				&& (!digestChanged || stat.Changed > 0)
+				&& nonSourceEvents == 0
+				&& stat.NonSourceChanged == 0;
+			if (sourcesOnly)
+			{
+				record.Validity = EvidenceRecord.Valid;
+				record.StartStateOnly = true;
+				record.Reason = "only compiled sources changed after the run started (" + events
+					+ " change(s)) and nothing was compiled before its results; the result describes the starting inputs";
+				return;
+			}
+			record.Validity = EvidenceRecord.Stale;
+			record.Reason = digestChanged
+				? "the inputs changed while the validation ran"
+				: "an input was modified and restored while the validation ran";
 		}
 
 		public static void Abort()
@@ -605,6 +635,7 @@ namespace AgentBridge
 
 			// The count carried across a reload must not be lost with the observer that saw it.
 			SessionState.SetInt(EventsKey, SessionState.GetInt(EventsKey, 0) + _monitor.EventCount);
+			SessionState.SetInt(NonSourceEventsKey, SessionState.GetInt(NonSourceEventsKey, 0) + _monitor.NonSourceEventCount);
 			if (!_monitor.Observed)
 			{
 				SessionState.SetInt(ObserverKey, 0);
@@ -638,6 +669,7 @@ namespace AgentBridge
 			SessionState.EraseString(ManifestKey);
 			SessionState.EraseInt(ReloadsKey);
 			SessionState.EraseInt(EventsKey);
+			SessionState.EraseInt(NonSourceEventsKey);
 			SessionState.EraseInt(ObserverKey);
 			EraseManifests();
 		}

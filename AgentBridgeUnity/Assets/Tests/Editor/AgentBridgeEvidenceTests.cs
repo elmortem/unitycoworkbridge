@@ -166,6 +166,7 @@ public class AgentBridgeEvidenceTests
 			Assert.IsTrue(verdict.Complete, "the comparison is a complete witness");
 			Assert.AreEqual(1, verdict.Changed, "rewriting the same bytes is a change only the manifest can see");
 			Assert.AreEqual(ValidationInputSnapshot.Normalize(script), verdict.Paths[0], "and it names the path");
+			Assert.AreEqual(0, verdict.NonSourceChanged, "a script is a compiled source");
 
 			Assert.AreEqual(
 				digestBefore.Digest,
@@ -182,6 +183,55 @@ public class AgentBridgeEvidenceTests
 			{
 			}
 		}
+	}
+
+	private static EvidenceRecord Classify(bool digestChanged, int events, int nonSourceEvents, int changed, int nonSourceChanged, bool fixedAtStart)
+	{
+		var record = new EvidenceRecord();
+		var stat = new InputStatVerdict { Complete = true, Changed = changed, NonSourceChanged = nonSourceChanged };
+		ValidationEvidence.ClassifyChange(record, digestChanged, events, nonSourceEvents, true, stat, fixedAtStart);
+		return record;
+	}
+
+	[Test]
+	public void SourceEditsBeforeAnyCompilationKeepTheStartingResult()
+	{
+		EvidenceRecord record = Classify(true, 2, 0, 2, 0, true);
+		Assert.AreEqual(EvidenceRecord.Valid, record.Validity);
+		Assert.IsTrue(record.StartStateOnly, "the result describes the starting inputs");
+		StringAssert.Contains("only compiled sources changed", record.Reason);
+
+		EvidenceRecord reverted = Classify(false, 1, 0, 0, 0, true);
+		Assert.AreEqual(EvidenceRecord.Valid, reverted.Validity, "a source edited and put back is still only a source");
+		Assert.IsTrue(reverted.StartStateOnly);
+	}
+
+	[Test]
+	public void AnythingBeyondSourceEditsBeforeCompilationIsStale()
+	{
+		Assert.AreEqual(EvidenceRecord.Stale, Classify(true, 2, 0, 2, 1, true).Validity, "an asset seen by the manifest");
+		Assert.AreEqual(EvidenceRecord.Stale, Classify(true, 2, 1, 2, 0, true).Validity, "an asset seen by the observer");
+		Assert.AreEqual(EvidenceRecord.Stale, Classify(true, 2, 0, 2, 0, false).Validity, "a compilation came before the results");
+		Assert.AreEqual(EvidenceRecord.Stale, Classify(true, 0, 0, 0, 0, true).Validity, "a digest change no witness can name");
+		Assert.IsFalse(Classify(true, 2, 0, 2, 1, true).StartStateOnly);
+
+		var record = new EvidenceRecord();
+		ValidationEvidence.ClassifyChange(record, true, 2, 0, false, new InputStatVerdict { Complete = true, Changed = 2 }, true);
+		Assert.AreEqual(EvidenceRecord.Stale, record.Validity, "a blind observer cannot vouch for what moved");
+	}
+
+	[Test]
+	public void CompiledSourcesAreScriptsAssemblyDefinitionsAndResponseFiles()
+	{
+		Assert.IsTrue(CompileFingerprint.IsSource("Assets/A.cs"));
+		Assert.IsTrue(CompileFingerprint.IsSource("Assets/A.cs.meta"));
+		Assert.IsTrue(CompileFingerprint.IsSource("Assets/B.asmdef"));
+		Assert.IsTrue(CompileFingerprint.IsSource("Assets/C.ASMREF"));
+		Assert.IsTrue(CompileFingerprint.IsSource("Assets/csc.rsp"));
+		Assert.IsFalse(CompileFingerprint.IsSource("Assets/S.unity"));
+		Assert.IsFalse(CompileFingerprint.IsSource("Assets/M.mat"));
+		Assert.IsFalse(CompileFingerprint.IsSource("Assets/D.asset"));
+		Assert.IsFalse(CompileFingerprint.IsSource(""));
 	}
 
 	[Test]

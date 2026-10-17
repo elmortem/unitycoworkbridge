@@ -27,9 +27,13 @@ namespace AgentBridge
 			QueueReply reply;
 			if (TryCall("hello", new QueueMessage { Op = "hello", Incarnation = CoordinationEditorAdapter.Incarnation, EditorPid = Process.GetCurrentProcess().Id, EditorStartedTicks = Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks }, out reply) && reply.Ok) _introduced = true;
 		}
+		// True when the last TryCall published or found its request but the dispatcher has not
+		// answered yet. Read synchronously on the main thread right after the call.
+		public static bool LastCallAwaitingReply { get; internal set; }
 		public static bool TryCall(string key, QueueMessage message, out QueueReply reply)
 		{
 			reply = null;
+			LastCallAwaitingReply = false;
 			try
 			{
 				EnsureServer();
@@ -42,7 +46,11 @@ namespace AgentBridge
 					Pending[key] = id;
 				}
 				string json;
-				if (!SharedFile.TryReadAllText(QueueFiles.Reply(BridgePaths.ProjectRoot, id), out json)) return false;
+				if (!SharedFile.TryReadAllText(QueueFiles.Reply(BridgePaths.ProjectRoot, id), out json))
+				{
+					LastCallAwaitingReply = true;
+					return false;
+				}
 				QueueFiles.ReleaseReply(BridgePaths.ProjectRoot, id);
 				reply = JsonUtility.FromJson<QueueReply>(json);
 				Pending.Remove(key);

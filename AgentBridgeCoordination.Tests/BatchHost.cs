@@ -17,8 +17,15 @@ namespace AgentBridge
 	public static class BridgePaths
 	{
 		public static string Root;
+		public static string ProjectRoot => Root;
 		public static string Inbox => Path.Combine(Root, "Inbox");
 		public static string Journal => Path.Combine(Root, "Journal");
+	}
+	// CompileFingerprint is linked for IsSource, which the stat manifest and the observer use.
+	public static class CompileInputContext
+	{
+		public static string[] Roots => new string[0];
+		public static string Context => "";
 	}
 	public class TaskRecord
 	{

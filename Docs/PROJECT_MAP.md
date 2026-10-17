@@ -303,7 +303,7 @@ package.json       версия и зависимости пакета
 | `TestCacheQuery.cs` | поиск подходящего кэшированного прогона |
 | `TestRunDumpStore.cs` / `TestRunDump.cs` | test-cache-v2: отдельные entry-файлы в `TestCacheV2/` и атомарный индекс |
 | `TestCacheIndex.cs` / `TestCacheEntryInfo.cs` | индекс кэша тестов |
-| `CachedResultServer.cs` | выдача кэшированных результатов `tests`/`compile` без запуска; общий хэш источников считается один раз за скан, свидетели открываются лениво — только при найденном кандидате и один раз за скан, телеметрия `cache_witness`/`cache_skip` |
+| `CachedResultServer.cs` | выдача кэшированных результатов `tests`/`compile` без запуска; общий хэш источников считается один раз за скан, свидетели открываются лениво — только при найденном кандидате и один раз за скан; claim ждёт ответа диспетчера до 5 с, задача держится в `Checking`, и координатор её не стартует; телеметрия `cache_witness` и `cache_skip` с причиной (`entry_gone_on_recheck`, `digest_moved`, `sources_moved`, `cannot_publish`, `claim_refused: …`, `claim_reply_timeout`, сдвиг входов по stat) |
 | `CacheLookupWitness.cs` | оба свидетеля одной проверки кэша: окно наблюдения и stat-манифест входов, открытые и закрытые вместе, без главного потока |
 | `CacheMissMemo.cs` / `CacheMissEntry.cs` | откат промахов: пока отпечаток источников и набор кандидатов те же, дайджест не пересчитывается чаще раза в `RetryMs` (10 с); запись снятой задачи забывается |
 | `ValidationInputSnapshot.cs` | SHA-256 содержимого входов |

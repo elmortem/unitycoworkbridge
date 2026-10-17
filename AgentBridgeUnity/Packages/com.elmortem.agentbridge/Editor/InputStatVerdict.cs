@@ -9,6 +9,7 @@ namespace AgentBridge
 		public bool Complete;
 		public string Reason = "";
 		public int Changed;
+		public int NonSourceChanged;
 		public List<string> Paths = new List<string>();
 	}
 }

@@ -9,8 +9,11 @@ namespace AgentBridge
 			List<TestNameResolver.Node> expected;
 			if (!TrySelectCatalog(dump, request, out expected) || expected.Count == 0) return false;
 			var remaining = new Dictionary<string, int>();
+			bool sameSelection = SameSelection(dump.Filter, request);
 			foreach (TestCaseResult entry in dump.Entries)
 			{
+				// An explicit skip answers only the same selection: a request naming the test would run it.
+				if (entry.ExplicitSkipped && !sameSelection) continue;
 				string key = Key(entry.Assembly, entry.FullName);
 				int count;
 				remaining.TryGetValue(key, out count);
@@ -68,7 +71,13 @@ namespace AgentBridge
 				return true;
 			}
 
-			return SetsEqual(filter.AssemblyNames, request.AssemblyNames)
+			return SameSelection(filter, request);
+		}
+
+		private static bool SameSelection(TestRunFilter filter, TaskRequest request)
+		{
+			return filter != null
+				&& SetsEqual(filter.AssemblyNames, request.AssemblyNames)
 				&& SetsEqual(filter.TestNames, request.TestNames)
 				&& SetsEqual(filter.CategoryNames, request.CategoryNames);
 		}

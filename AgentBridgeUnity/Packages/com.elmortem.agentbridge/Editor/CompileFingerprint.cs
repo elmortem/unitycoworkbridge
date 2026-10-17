@@ -107,6 +107,25 @@ namespace AgentBridge
 			return false;
 		}
 
+		// The files a compilation reads, and nothing it merely references: a change here can only
+		// matter to a result after the editor compiles it.
+		public static bool IsSource(string path)
+		{
+			if (string.IsNullOrEmpty(path))
+			{
+				return false;
+			}
+			string name = path.EndsWith(".meta", StringComparison.OrdinalIgnoreCase) ? path.Substring(0, path.Length - 5) : path;
+			foreach (string extension in Extensions)
+			{
+				if (name.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+				{
+					return true;
+				}
+			}
+			return false;
+		}
+
 		private static void AddIfExists(string path, List<string> files)
 		{
 			if (File.Exists(path))

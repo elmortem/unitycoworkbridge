@@ -336,6 +336,9 @@ static async Task RunAllTestsConfirmationTests(string root)
 	Expect(!AllTestsConfirmation.IsRequired(one, none, none, false), "an assembly filter is an explicit selection");
 	Expect(!AllTestsConfirmation.IsRequired(none, one, none, false), "a test filter is an explicit selection");
 	Expect(!AllTestsConfirmation.IsRequired(none, none, one, false), "a category filter is an explicit selection");
+	Expect(AllTestsConfirmation.IsRequired(none, none, new[] { "!Perf" }, false), "exclusions alone select the whole suite");
+	Expect(!AllTestsConfirmation.IsRequired(none, none, new[] { "!Perf", "Fast" }, false), "an including category is an explicit selection");
+	Expect(!AllTestsConfirmation.IsRequired(none, none, new[] { "!Perf" }, true), "--confirm-all must allow an exclusion-only run");
 	var message = AllTestsConfirmation.Message("PlayMode");
 	Expect(message.Contains("PlayMode") && message.Contains(AllTestsConfirmation.Flag), "the refusal must name the mode and the confirming flag");
 

@@ -23,6 +23,7 @@ namespace AgentBridge
 		private int _observedRoots;
 		private bool _sealed;
 		private int _events;
+		private int _nonSourceEvents;
 		private bool _overflowed;
 		private string _failure = "";
 		private bool _disposed;
@@ -115,6 +116,12 @@ namespace AgentBridge
 			get { lock (_sync) { return _events; } }
 		}
 
+		// The events that were not compiled sources: these move a result even without a compilation.
+		public int NonSourceEventCount
+		{
+			get { lock (_sync) { return _nonSourceEvents; } }
+		}
+
 		// An overflowed or failed observer means unknown, never valid.
 		public bool Observed
 		{
@@ -159,6 +166,10 @@ namespace AgentBridge
 				}
 
 				_events++;
+				if (!CompileFingerprint.IsSource(fullPath))
+				{
+					_nonSourceEvents++;
+				}
 				if (_paths.Count < MaxRecordedPaths && !_paths.Contains(fullPath))
 				{
 					_paths.Add(fullPath);

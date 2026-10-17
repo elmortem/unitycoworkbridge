@@ -10,7 +10,9 @@ internal static class AllTestsConfirmation
 
 	public static bool IsUnfiltered(string[] assemblies, string[] tests, string[] categories)
 	{
-		return assemblies.Length == 0 && tests.Length == 0 && categories.Length == 0;
+		// '!Name' only excludes a category, so exclusions alone still select the whole suite.
+		return assemblies.Length == 0 && tests.Length == 0
+			&& Array.TrueForAll(categories, c => c.StartsWith("!", StringComparison.Ordinal));
 	}
 
 	public static bool IsRequired(string[] assemblies, string[] tests, string[] categories, bool confirmed)
@@ -22,6 +24,7 @@ internal static class AllTestsConfirmation
 	{
 		return "Are you sure you want to run ALL " + mode + " tests of the project? "
 			+ "No --test, --category or --assembly filter was given. "
+			+ "Excluding categories with --category '!Name' alone still selects the whole suite. "
 			+ "Some projects have very many long-running tests: a full run can take a very long time "
 			+ "and holds the editor for every other agent session. "
 			+ "Run the whole suite only with a strong reason, for example when the user explicitly asked for a full run; "

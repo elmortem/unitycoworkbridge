@@ -201,6 +201,10 @@ namespace AgentBridge
 		private static void Note(InputStatVerdict verdict, string path)
 		{
 			verdict.Changed++;
+			if (!CompileFingerprint.IsSource(path))
+			{
+				verdict.NonSourceChanged++;
+			}
 			if (verdict.Paths.Count < MaxRecordedPaths)
 			{
 				verdict.Paths.Add(path);

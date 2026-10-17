@@ -13,5 +13,7 @@ namespace AgentBridge
 		public double DurationSeconds;
 		public string Message;
 		public string StackTrace;
+		// NUnit skipped this [Explicit] case because the run did not select it explicitly.
+		public bool ExplicitSkipped;
 	}
 }

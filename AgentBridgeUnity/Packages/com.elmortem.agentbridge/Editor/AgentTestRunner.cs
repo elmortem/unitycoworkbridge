@@ -13,8 +13,14 @@ namespace AgentBridge
 		public const string CoordinatorTestSourceKey = "AgentBridge_CoordinatorTestSource";
 		public const string CoordinatorTestFilterKey = "AgentBridge_CoordinatorTestFilter";
 		public const string CoordinatorTestCatalogKey = "AgentBridge_CoordinatorTestCatalog";
+		public const string CoordinatorTestCycleKey = "AgentBridge_CoordinatorTestCycle";
+		// Set at RunFinished: the results exist, and whether no compilation came before them.
+		private const string CoordinatorResultsTaskKey = "AgentBridge_CoordinatorResultsTask";
+		private const string CoordinatorResultsFixedKey = "AgentBridge_CoordinatorResultsFixed";
 		private static TestRunnerApi _api;
 		private const string FinalizationKey = "AgentBridge_TestFinalization";
+		private const string ExplicitGuardCategory = "!AgentBridge.ExplicitGuard";
+		private const string ExplicitSkippedState = "Skipped:Explicit";
 		[System.Serializable]
 		private class PendingFinalization
 		{
@@ -87,6 +93,9 @@ namespace AgentBridge
 			SessionState.SetString(CoordinatorTestCatalogKey, catalog == null ? "" : JsonUtility.ToJson(catalog));
 			SessionState.SetString(CoordinatorTestModeKey, mode.ToString());
 			SessionState.SetString(CoordinatorTestSourceKey, ValidationEvidence.PreparedSources);
+			SessionState.SetString(CoordinatorTestCycleKey, CompileTaskExecutor.LastCycleId);
+			SessionState.EraseString(CoordinatorResultsTaskKey);
+			SessionState.EraseBool(CoordinatorResultsFixedKey);
 			SessionState.SetString(CoordinatorTestFilterKey, JsonUtility.ToJson(new TestRunFilter
 			{
 				TestMode = mode.ToString(),
@@ -161,9 +170,17 @@ namespace AgentBridge
 			{
 				filter.testNames = testNames;
 			}
-			if (categoryNames != null && categoryNames.Length > 0)
+			// Test Framework 1.1.33 matches assembly filters as explicit selections and would run [Explicit]
+			// tests. A NotFilter inside the AndFilter clears that match, and no test has this category.
+			string[] unityCategories = categoryNames ?? new string[0];
+			if (!TestNameResolver.SelectsExplicitly(testNames, categoryNames))
 			{
-				filter.categoryNames = categoryNames;
+				var guarded = new List<string>(unityCategories) { ExplicitGuardCategory };
+				unityCategories = guarded.ToArray();
+			}
+			if (unityCategories.Length > 0)
+			{
+				filter.categoryNames = unityCategories;
 			}
 
 			return filter;
@@ -238,7 +255,8 @@ namespace AgentBridge
 				Status = node.TestStatus.ToString(),
 				DurationSeconds = node.Duration,
 				Message = node.Message,
-				StackTrace = node.StackTrace
+				StackTrace = node.StackTrace,
+				ExplicitSkipped = node.ResultState == ExplicitSkippedState
 			};
 
 			if (node.Test != null && node.Test.Categories != null)
@@ -287,8 +305,10 @@ namespace AgentBridge
 			TaskRecord prior;
 			if (TaskJournal.TryRead(taskId, out prior) && TaskCoordinator.IsTerminal(prior.Status)) return;
 			if (TestRunLifecycle.IsStopping(taskId)) return;
+			bool resultsFixedAtStart = SessionState.GetString(CoordinatorResultsTaskKey, "") == taskId
+				&& SessionState.GetBool(CoordinatorResultsFixedKey, false);
 			EvidenceRecord evidence;
-			if (!ValidationEvidence.TryComplete(taskId, prior != null && ArtifactsExist(prior), out evidence))
+			if (!ValidationEvidence.TryComplete(taskId, prior != null && ArtifactsExist(prior), resultsFixedAtStart, out evidence))
 			{
 				return;
 			}
@@ -300,6 +320,9 @@ namespace AgentBridge
 			SessionState.EraseString(CoordinatorTestSourceKey);
 			SessionState.EraseString(CoordinatorTestFilterKey);
 			SessionState.EraseString(CoordinatorTestCatalogKey);
+			SessionState.EraseString(CoordinatorTestCycleKey);
+			SessionState.EraseString(CoordinatorResultsTaskKey);
+			SessionState.EraseBool(CoordinatorResultsFixedKey);
 
 			TaskRecord record;
 			if (!TaskJournal.TryRead(taskId, out record))
@@ -367,6 +390,7 @@ namespace AgentBridge
 				&& ranCleanly
 				&& run.total > 0
 				&& evidence.Validity == EvidenceRecord.Valid
+				&& !evidence.StartStateOnly
 				&& !string.IsNullOrEmpty(startSources)
 				&& startSources == ValidationEvidence.CompletedSources;
 
@@ -381,6 +405,12 @@ namespace AgentBridge
 				dump.Artifacts = new List<string>(record.Artifacts);
 				TestRunDumpStore.Publish(dump, System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
 				TestRunAttachments.Resolve(taskId, dump, evidence);
+			}
+			else if (hasDump && ranCleanly && evidence.StartStateOnly)
+			{
+				// An attached request may have arrived after the edit; the starting state does not
+				// cover it, so it runs again on its own.
+				TestRunAttachments.Requeue(taskId);
 			}
 			else if (hasDump && ranCleanly)
 			{
@@ -494,6 +524,9 @@ namespace AgentBridge
 				SessionState.EraseString(CoordinatorTestSourceKey);
 				SessionState.EraseString(CoordinatorTestFilterKey);
 				SessionState.EraseString(CoordinatorTestCatalogKey);
+				SessionState.EraseString(CoordinatorTestCycleKey);
+				SessionState.EraseString(CoordinatorResultsTaskKey);
+				SessionState.EraseBool(CoordinatorResultsFixedKey);
 			}
 			SceneDirtyWatcher.Disarm(taskId);
 			ValidationEvidence.Abort();
@@ -523,6 +556,22 @@ namespace AgentBridge
 				string taskId = SessionState.GetString(CoordinatorTestTaskKey, "");
 				if (string.IsNullOrEmpty(taskId))
 				{
+					return;
+				}
+				// The framework can fail after RunFinished, for example restoring its PlayMode task
+				// across a reload. The results are already recorded and finalize on their usual path.
+				if (SessionState.GetString(CoordinatorResultsTaskKey, "") == taskId)
+				{
+					TaskRecord record;
+					if (TaskJournal.TryRead(taskId, out record) && !TaskCoordinator.IsTerminal(record.Status))
+					{
+						if (record.Logs == null)
+						{
+							record.Logs = new List<string>();
+						}
+						record.Logs.Add("Unity Test Framework failed after the results were recorded; the results are kept: " + message);
+						TaskJournal.Write(record);
+					}
 					return;
 				}
 				TestRunLifecycle.RequestStop(taskId, "runtime_error", "Unity test run failed: " + message);
@@ -557,6 +606,9 @@ namespace AgentBridge
 					}
 					TaskRecord completed;
 					if (TaskJournal.TryRead(coordinatorTaskId, out completed) && TaskCoordinator.IsTerminal(completed.Status)) return;
+					SessionState.SetString(CoordinatorResultsTaskKey, coordinatorTaskId);
+					SessionState.SetBool(CoordinatorResultsFixedKey, !EditorApplication.isCompiling
+						&& CompileTaskExecutor.LastCycleId == SessionState.GetString(CoordinatorTestCycleKey, ""));
 					TestRunResult run = BuildResult(result);
 					WritePendingDump(coordinatorTaskId, result);
 					if (SessionState.GetString(CoordinatorTestModeKey, "") == TestMode.PlayMode.ToString()

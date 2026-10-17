@@ -18,6 +18,68 @@ namespace AgentBridge.Tests
 			};
 		}
 
+		private static List<TestNameResolver.Node> ExplicitCatalog()
+		{
+			var catalog = Catalog();
+			catalog.Add(new TestNameResolver.Node { Name = "Manual", FullName = "One.Fixture.Manual", Assembly = "A",
+				Explicit = true, Ancestors = new List<string> { "One.Fixture" }, Categories = new List<string> { "Showcase" } });
+			return catalog;
+		}
+
+		private static TestRunDump ExplicitDump(TestRunFilter filter)
+		{
+			var dump = new TestRunDump { Catalog = new TestNameResolver.CatalogData { Nodes = ExplicitCatalog() }, Filter = filter };
+			dump.Entries.Add(new TestCaseResult { FullName = "One.Fixture.Case(1)", Assembly = "A", Status = "Passed" });
+			dump.Entries.Add(new TestCaseResult { FullName = "One.Fixture.Case(2)", Assembly = "A", Status = "Passed" });
+			dump.Entries.Add(new TestCaseResult { FullName = "One.Fixture.Manual", Assembly = "A", Status = "Skipped",
+				ExplicitSkipped = true });
+			return dump;
+		}
+
+		private static List<string> SelectedNames(TestRunDump dump, TaskRequest request)
+		{
+			return TestFilterCoverage.Select(dump, request).ConvertAll(entry => entry.FullName);
+		}
+
+		[Test]
+		public void AssemblyRunSkipsExplicitCase()
+		{
+			var request = new TaskRequest { AssemblyNames = new[] { "A" } };
+			var dump = ExplicitDump(new TestRunFilter { AssemblyNames = new[] { "A" } });
+			CollectionAssert.DoesNotContain(SelectedNames(dump, request), "One.Fixture.Manual");
+			Assert.IsTrue(TestFilterCoverage.Covers(dump, request));
+		}
+
+		[Test]
+		public void ExplicitSkipAnswersOnlyTheSameSelection()
+		{
+			var request = new TaskRequest { TestNames = new[] { "One.Fixture.Manual" } };
+			Assert.IsFalse(TestFilterCoverage.Covers(ExplicitDump(new TestRunFilter { AssemblyNames = new[] { "A" } }), request),
+				"an assembly run skipped the explicit test; naming it would run it");
+			Assert.IsTrue(TestFilterCoverage.Covers(ExplicitDump(new TestRunFilter { TestNames = new[] { "One.Fixture.Manual" } }), request));
+		}
+
+		[Test]
+		public void CategoryExclusionsFollowUnity()
+		{
+			var dump = ExplicitDump(new TestRunFilter());
+			CollectionAssert.AreEqual(new[] { "One.Fixture.Case(1)" },
+				SelectedNames(dump, new TaskRequest { CategoryNames = new[] { "!Slow" } }));
+			CollectionAssert.AreEqual(new[] { "One.Fixture.Case(1)" },
+				SelectedNames(dump, new TaskRequest { CategoryNames = new[] { "Fast", "!Slow" } }));
+			CollectionAssert.AreEqual(new[] { "One.Fixture.Manual" },
+				SelectedNames(dump, new TaskRequest { CategoryNames = new[] { "Showcase" } }),
+				"an including category selects explicit tests");
+		}
+
+		[Test]
+		public void ExclusionsCanLeaveANameWithoutCases()
+		{
+			Assert.IsFalse(TestNameResolver.TryResolve(ExplicitCatalog(), new[] { "One.Fixture" }, null, new[] { "!Fast", "!Slow" },
+				out _, out var status, out _));
+			Assert.AreEqual("no_tests_matched", status);
+		}
+
 		[TestCase("Fixture")]
 		[TestCase("One.Fixture")]
 		public void FixtureResolvesWithoutCountingMethods(string name)

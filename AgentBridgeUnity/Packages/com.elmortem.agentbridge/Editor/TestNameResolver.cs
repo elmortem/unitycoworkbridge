@@ -20,6 +20,8 @@ namespace AgentBridge
 			public string FullName;
 			public string Assembly;
 			public bool IsSuite;
+			// True when RunState.Explicit is set on this node or any ancestor.
+			public bool Explicit;
 			public List<string> Ancestors = new List<string>();
 			public List<string> Categories = new List<string>();
 		}
@@ -27,22 +29,45 @@ namespace AgentBridge
 		public static List<Node> Catalog(ITestAdaptor root)
 		{
 			var nodes = new List<Node>();
-			Collect(root, "", new List<string>(), new List<string>(), nodes);
+			Collect(root, "", new List<string>(), new List<string>(), false, nodes);
 			return nodes;
 		}
 
 		private static void Collect(ITestAdaptor test, string assembly, List<string> ancestors,
-			List<string> categories, List<Node> nodes)
+			List<string> categories, bool underExplicit, List<Node> nodes)
 		{
 			if (test == null) return;
 			if (test.IsTestAssembly) assembly = Path.GetFileNameWithoutExtension(test.FullName);
 			var inherited = new List<string>(categories);
 			if (test.Categories != null) inherited.AddRange(test.Categories);
+			bool isExplicit = underExplicit || test.RunState == RunState.Explicit;
 			nodes.Add(new Node { Name = test.Name, FullName = test.FullName, Assembly = assembly,
-				IsSuite = test.IsSuite, Ancestors = new List<string>(ancestors), Categories = inherited });
+				IsSuite = test.IsSuite, Explicit = isExplicit, Ancestors = new List<string>(ancestors), Categories = inherited });
 			var parents = new List<string>(ancestors) { test.FullName };
 			if (test.HasChildren)
-				foreach (ITestAdaptor child in test.Children) Collect(child, assembly, parents, inherited, nodes);
+				foreach (ITestAdaptor child in test.Children) Collect(child, assembly, parents, inherited, isExplicit, nodes);
+		}
+
+		// A request selects [Explicit] tests only by naming a test or by an including category.
+		// Any '!Name' exclusion puts a NotFilter into Unity's AndFilter, and that clears the explicit
+		// match of every node, named ones included.
+		public static bool SelectsExplicitly(string[] names, string[] categories)
+		{
+			bool selects = names != null && names.Length > 0;
+			foreach (string category in categories ?? new string[0])
+			{
+				if (IsExclusion(category))
+				{
+					return false;
+				}
+				selects = true;
+			}
+			return selects;
+		}
+
+		public static bool IsExclusion(string category)
+		{
+			return category != null && category.StartsWith("!", StringComparison.Ordinal);
 		}
 
 		public static bool TryResolve(List<Node> nodes, string[] names, string[] assemblies, string[] categories,
@@ -52,6 +77,7 @@ namespace AgentBridge
 			resolved = new string[0];
 			status = null;
 			message = null;
+			bool selectsExplicit = SelectsExplicitly(names, categories);
 			foreach (string name in names ?? new string[0])
 			{
 				var exact = new List<Node>();
@@ -76,7 +102,8 @@ namespace AgentBridge
 				}
 				string fullName = matches[0].FullName;
 				bool hasCase = nodes.Exists(node => !node.IsSuite && Includes(assemblies, node.Assembly)
-					&& (node.FullName == fullName || node.Ancestors.Contains(fullName)) && HasCategory(categories, node.Categories));
+					&& (node.FullName == fullName || node.Ancestors.Contains(fullName)) && HasCategory(categories, node.Categories)
+					&& (!node.Explicit || selectsExplicit));
 				if (!hasCase)
 				{
 					status = "no_tests_matched";
@@ -93,6 +120,7 @@ namespace AgentBridge
 		{
 			return nodes.FindAll(node => !node.IsSuite && Includes(assemblies, node.Assembly)
 				&& HasCategory(categories, node.Categories)
+				&& (!node.Explicit || SelectsExplicitly(resolved, categories))
 				&& (resolved == null || resolved.Length == 0 || Array.Exists(resolved,
 					name => node.FullName == name || node.Ancestors.Contains(name))));
 		}
@@ -102,11 +130,34 @@ namespace AgentBridge
 			return values == null || values.Length == 0 || Array.IndexOf(values, value) >= 0;
 		}
 
+		// Same as Unity: inclusions are OR-ed, '!Name' exclusions are AND-ed.
 		private static bool HasCategory(string[] requested, List<string> categories)
 		{
-			if (requested == null || requested.Length == 0) return true;
-			foreach (string category in requested) if (categories.Contains(category)) return true;
-			return false;
+			if (requested == null || requested.Length == 0)
+			{
+				return true;
+			}
+			bool hasInclusion = false;
+			bool included = false;
+			foreach (string category in requested)
+			{
+				if (IsExclusion(category))
+				{
+					if (categories.Contains(category.Substring(1)))
+					{
+						return false;
+					}
+				}
+				else
+				{
+					hasInclusion = true;
+					if (categories.Contains(category))
+					{
+						included = true;
+					}
+				}
+			}
+			return !hasInclusion || included;
 		}
 	}
 }

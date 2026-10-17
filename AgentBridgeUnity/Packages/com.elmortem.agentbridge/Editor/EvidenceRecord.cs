@@ -17,6 +17,8 @@ namespace AgentBridge
 		public string WindowId = "";
 		public string Reason = "";
 		public bool ArtifactsPresent;
+		// The inputs moved after the start, but the result describes the starting InputDigest.
+		public bool StartStateOnly;
 
 		public static EvidenceRecord UnknownBecause(string reason)
 		{
