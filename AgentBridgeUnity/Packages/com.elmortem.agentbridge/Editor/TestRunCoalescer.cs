@@ -90,7 +90,8 @@ namespace AgentBridge
 					// rests on, exactly as it did when it was installed for the whole scan.
 					if (monitor == null)
 					{
-						monitor = await ValidationInputMonitor.OpenAsync(ValidationEvidence.CollectRoots(), ValidationEvidence.CollectExcludedRoots(),
+						monitor = await ValidationInputMonitor.OpenAsync(ValidationEvidence.CollectRoots(),
+								InputStatManifest.ObserverExcludedRoots(ValidationEvidence.CollectExcludedRoots(), ValidationEvidence.ContentWitnessedRoot()),
 							ValidationEvidence.BuildIgnore(PlayModeSceneRecovery.BootstrapScenePath()));
 					}
 

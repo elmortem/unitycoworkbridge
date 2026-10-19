@@ -33,6 +33,14 @@ namespace AgentBridge
 		// so the two witnesses can never disagree about what counts as an input.
 		public static InputStatManifest Capture(string[] roots, string[] excludedRoots, Func<string, bool> ignore)
 		{
+			return Capture(roots, excludedRoots, ignore, "");
+		}
+
+		// Files under contentRoot are witnessed by their bytes, not by their write time: Unity rewrites
+		// ProjectSettings with unchanged content on its own, and such a rewrite is not an edit.
+		public static InputStatManifest Capture(string[] roots, string[] excludedRoots, Func<string, bool> ignore, string contentRoot)
+		{
+			string content = ValidationInputSnapshot.Normalize(contentRoot ?? "").TrimEnd('/');
 			var manifest = new InputStatManifest();
 			try
 			{
@@ -58,11 +66,13 @@ namespace AgentBridge
 							continue;
 						}
 
+						string path = ValidationInputSnapshot.Normalize(file);
 						manifest.Entries.Add(new InputStatEntry
 						{
-							Path = ValidationInputSnapshot.Normalize(file),
+							Path = path,
 							Length = info.Length,
-							WriteTicks = info.LastWriteTimeUtc.Ticks
+							WriteTicks = info.LastWriteTimeUtc.Ticks,
+							Hash = IsUnder(path, content) ? HashOf(file) : ""
 						});
 					}
 				}
@@ -80,6 +90,34 @@ namespace AgentBridge
 			return manifest;
 		}
 
+		// The observer cannot tell a same-bytes rewrite from an edit, so it skips the content root
+		// and leaves that root to the manifest, which can.
+		public static string[] ObserverExcludedRoots(string[] excluded, string contentRoot)
+		{
+			var result = new List<string>(excluded ?? new string[0]);
+			result.Add(contentRoot);
+			return result.ToArray();
+		}
+
+		private static bool IsUnder(string path, string root)
+		{
+			if (root.Length == 0)
+			{
+				return false;
+			}
+
+			return path.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase);
+		}
+
+		private static string HashOf(string file)
+		{
+			using (var sha = ContentHash.Create())
+			using (var input = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read))
+			{
+				return ValidationInputSnapshot.ToHex(sha.ComputeHash(input));
+			}
+		}
+
 		public void Save(string path)
 		{
 			var lines = new List<string>(Entries.Count);
@@ -87,6 +125,7 @@ namespace AgentBridge
 			{
 				lines.Add(entry.WriteTicks.ToString(CultureInfo.InvariantCulture)
 					+ "|" + entry.Length.ToString(CultureInfo.InvariantCulture)
+					+ "|" + entry.Hash
 					+ "|" + entry.Path);
 			}
 
@@ -112,8 +151,8 @@ namespace AgentBridge
 				var manifest = new InputStatManifest();
 				foreach (string line in File.ReadAllLines(path))
 				{
-					string[] parts = line.Split(new[] { '|' }, 3);
-					if (parts.Length != 3)
+					string[] parts = line.Split(new[] { '|' }, 4);
+					if (parts.Length != 4)
 					{
 						return Incomplete("the input stat manifest is unreadable");
 					}
@@ -122,7 +161,8 @@ namespace AgentBridge
 					{
 						WriteTicks = long.Parse(parts[0], CultureInfo.InvariantCulture),
 						Length = long.Parse(parts[1], CultureInfo.InvariantCulture),
-						Path = parts[2]
+						Hash = parts[2],
+						Path = parts[3]
 					});
 				}
 
@@ -186,7 +226,18 @@ namespace AgentBridge
 					InputStatEntry after = end.Entries[right];
 					if (before.Length != after.Length || before.WriteTicks != after.WriteTicks)
 					{
-						Note(verdict, after.Path);
+						if (before.Hash.Length > 0 && before.Length == after.Length && before.Hash == after.Hash)
+						{
+							verdict.Restored++;
+							if (verdict.RestoredPaths.Count < MaxRecordedPaths)
+							{
+								verdict.RestoredPaths.Add(after.Path);
+							}
+						}
+						else
+						{
+							Note(verdict, after.Path);
+						}
 					}
 
 					left++;

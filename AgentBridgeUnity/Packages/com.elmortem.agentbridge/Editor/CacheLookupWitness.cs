@@ -17,24 +17,27 @@ namespace AgentBridge
 		private readonly string[] _roots;
 		private readonly string[] _excluded;
 		private readonly Func<string, bool> _ignore;
+		private readonly string _contentRoot;
 
 		public ValidationInputMonitor Monitor;
 		public InputStatManifest Start;
 
-		private CacheLookupWitness(string[] roots, string[] excluded, Func<string, bool> ignore)
+		private CacheLookupWitness(string[] roots, string[] excluded, Func<string, bool> ignore, string contentRoot)
 		{
 			_roots = (string[])roots.Clone();
 			_excluded = (string[])excluded.Clone();
 			_ignore = ignore;
+			_contentRoot = contentRoot ?? "";
 		}
 
 		// The editor tick pays for neither: the observers arm on workers and the manifest is walked on
 		// one more, so the two halves of the window open in parallel.
-		public static async Task<CacheLookupWitness> OpenAsync(string[] roots, string[] excluded, Func<string, bool> ignore)
+		public static async Task<CacheLookupWitness> OpenAsync(string[] roots, string[] excluded, Func<string, bool> ignore, string contentRoot)
 		{
-			var witness = new CacheLookupWitness(roots, excluded, ignore);
-			Task<ValidationInputMonitor> monitor = ValidationInputMonitor.OpenAsync(witness._roots, witness._excluded, ignore);
-			Task<InputStatManifest> start = Task.Run(() => InputStatManifest.Capture(witness._roots, witness._excluded, ignore));
+			var witness = new CacheLookupWitness(roots, excluded, ignore, contentRoot);
+			Task<ValidationInputMonitor> monitor = ValidationInputMonitor.OpenAsync(witness._roots,
+				InputStatManifest.ObserverExcludedRoots(witness._excluded, witness._contentRoot), ignore);
+			Task<InputStatManifest> start = Task.Run(() => InputStatManifest.Capture(witness._roots, witness._excluded, ignore, witness._contentRoot));
 			witness.Monitor = await monitor;
 			witness.Start = await start;
 			return witness;
@@ -48,7 +51,8 @@ namespace AgentBridge
 			string[] roots = _roots;
 			string[] excluded = _excluded;
 			Func<string, bool> ignore = _ignore;
-			return Task.Run(() => InputStatManifest.Compare(start, InputStatManifest.Capture(roots, excluded, ignore)));
+			string contentRoot = _contentRoot;
+			return Task.Run(() => InputStatManifest.Compare(start, InputStatManifest.Capture(roots, excluded, ignore, contentRoot)));
 		}
 
 		public void Dispose()

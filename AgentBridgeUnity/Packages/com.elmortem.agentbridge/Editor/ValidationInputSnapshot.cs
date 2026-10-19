@@ -236,7 +236,7 @@ namespace AgentBridge
 			stream.Write(bytes, 0, bytes.Length);
 		}
 
-		private static string ToHex(byte[] bytes)
+		internal static string ToHex(byte[] bytes)
 		{
 			var builder = new StringBuilder(bytes.Length * 2);
 			foreach (byte value in bytes)

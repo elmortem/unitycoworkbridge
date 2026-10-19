@@ -102,7 +102,8 @@ scripts/                           Сборка плагина, вендорин
    завершении. Он закрывает разрыв, который наблюдатель проспал: под Unity это опрашивающий
    `System.IO.DefaultWatcher`, и между `InputWatchHub.Shutdown` и новой установкой не наблюдает
    никто. Расхождение манифеста — такое же событие `input_changes` (с полем `Source`), потерянный
-   манифест — `unknown`. Результат классифицируется (`EvidenceClassification`) и пишется в
+   манифест — `unknown`. Для `ProjectSettings/` манифест хранит SHA-256: совпавшие длина и хеш дают
+   `input_restored` вместо `input_changes`, и наблюдатель этот корень не считает. Результат классифицируется (`EvidenceClassification`) и пишется в
    `EvidenceRecord`.
 8. **Завершение.** `TaskJournal` атомарно пишет `Journal/<id>.json`, артефакты уходят в
    `Artifacts/<id>/`, `BridgeStatusWriter` обновляет `status.json`.

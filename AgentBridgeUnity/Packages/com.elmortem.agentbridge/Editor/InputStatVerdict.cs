@@ -11,5 +11,7 @@ namespace AgentBridge
 		public int Changed;
 		public int NonSourceChanged;
 		public List<string> Paths = new List<string>();
+		public int Restored;
+		public List<string> RestoredPaths = new List<string>();
 	}
 }

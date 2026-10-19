@@ -23,6 +23,7 @@ namespace AgentBridge
 			string projectRoot = BridgePaths.ProjectRoot;
 			string[] roots = ValidationEvidence.CollectRoots();
 			string[] excluded = ValidationEvidence.CollectExcludedRoots();
+			string contentRoot = ValidationEvidence.ContentWitnessedRoot();
 			var ignore = ValidationEvidence.BuildIgnore(PlayModeSceneRecovery.BootstrapScenePath());
 			CacheLookupWitness witness = null;
 			try
@@ -89,7 +90,7 @@ namespace AgentBridge
 						// candidates will miss again a second later. It is asked again when either
 						// changes, and otherwise only once the backstop is due.
 						if (Misses.ShouldSkip(task.Id, sourceFingerprint, candidateKey, nowMs)) continue;
-						if (witness == null) witness = await OpenWitness(roots, excluded, ignore, task.Id);
+						if (witness == null) witness = await OpenWitness(roots, excluded, ignore, contentRoot, task.Id);
 						var snapshot = await job.Measure("cache_lookup", task.Id);
 						string inputDigest = snapshot.Complete ? snapshot.Digest : "";
 						// The content digest is only ever computed once a cheap candidate exists, and
@@ -114,6 +115,12 @@ namespace AgentBridge
 						// The witness closes here: every read the decision stands on — both digests
 						// and the closing source fingerprint — lies between the two manifests.
 						InputStatVerdict stat = await witness.VerifyAsync();
+						if (stat.Complete && stat.Restored > 0)
+						{
+							TelemetryLog.Write("input_restored", "", task.Id, new[] {
+								TelemetryField.Number("Files", stat.Restored),
+								TelemetryField.Text("Paths", string.Join(";", stat.RestoredPaths)) });
+						}
 						// Await allowed cancellation, cache eviction and artifact removal to run.
 						// Recheck the actual entry and editor context before consuming a step.
 						if (context != ValidationEvidence.ContextOf(mode, FilterOf(request))
@@ -193,7 +200,7 @@ namespace AgentBridge
 						// The reuse key is itself made of sizes, times and content of the sources, so
 						// the second capture below already catches an edit that was put back. Only the
 						// observer is needed here, and only now that there is an entry to serve.
-						if (witness == null) witness = await OpenWitness(roots, excluded, ignore, task.Id);
+						if (witness == null) witness = await OpenWitness(roots, excluded, ignore, contentRoot, task.Id);
 						if (sourceFingerprint != await CompileInputContext.StartCapture(projectRoot))
 						{
 							Skip(task.Id, "sources_moved");
@@ -241,10 +248,10 @@ namespace AgentBridge
 
 		// One open per scan, and it is worth seeing in the log: this is the cost a lookup pays the
 		// moment a candidate appears.
-		private static async Task<CacheLookupWitness> OpenWitness(string[] roots, string[] excluded, Func<string, bool> ignore, string taskId)
+		private static async Task<CacheLookupWitness> OpenWitness(string[] roots, string[] excluded, Func<string, bool> ignore, string contentRoot, string taskId)
 		{
 			var watch = System.Diagnostics.Stopwatch.StartNew();
-			CacheLookupWitness witness = await CacheLookupWitness.OpenAsync(roots, excluded, ignore);
+			CacheLookupWitness witness = await CacheLookupWitness.OpenAsync(roots, excluded, ignore, contentRoot);
 			TelemetryLog.Write("cache_witness", "", taskId, new[] {
 				TelemetryField.Number("ElapsedMs", watch.ElapsedMilliseconds),
 				TelemetryField.Number("Files", witness.Start.Entries.Count)

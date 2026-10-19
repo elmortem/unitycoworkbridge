@@ -112,7 +112,7 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
   `InputWatchHub.cs` + `InputWatchRoot.cs` + `InputWatchHubLifetime.cs` (один `FileSystemWatcher` на
   корень входов на весь редактор), `ValidationEvidence.cs`, `EvidenceClassification.cs`,
   `InputStatManifest.cs` + `InputStatEntry.cs` + `InputStatVerdict.cs` (второй свидетель:
-  путь/размер/mtime входов в файле, переживающем domain reload)
+  путь/размер/mtime входов и SHA-256 для `ProjectSettings/` в файле, переживающем domain reload)
 - Кэш: `CompileFingerprint.cs`, `CompileCacheStore.cs`, `TestFingerprint.cs`, `TestCacheQuery.cs`,
   `TestRunDumpStore.cs` (test-cache-v2: отдельные entry-файлы и атомарный индекс),
   `TestCacheIndex.cs`, `TestCacheEntryInfo.cs`

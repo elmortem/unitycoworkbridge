@@ -21,6 +21,7 @@ internal static class StatManifestScenarios
 		ALostManifestIsNotAnEmptyOne(root);
 		ManyChangesAreCountedAndSampled(root);
 		AnUnreachableRootIsUnknown(root);
+		ASettingsRewriteWithSameBytesIsRestored(root);
 		covered.Add("C23_stat_manifest");
 	}
 
@@ -189,6 +190,49 @@ internal static class StatManifestScenarios
 			Array.Empty<string>(), null);
 		Expect(!manifest.Complete, "an unreachable input root makes the manifest unknown");
 		Expect(manifest.Reason.Length > 0, "and it says which root");
+	}
+
+	// Unity rewrites ProjectSettings with unchanged bytes on its own. Under the content root the
+	// manifest trusts the bytes, so such a rewrite is restored, while a real edit of the same length
+	// is still a change.
+	private static void ASettingsRewriteWithSameBytesIsRestored(string project)
+	{
+		var assets = NewTree(project, "settings");
+		var settings = Path.Combine(Path.GetDirectoryName(assets)!, "ProjectSettings");
+		Directory.CreateDirectory(settings);
+		var quality = Path.Combine(settings, "QualitySettings.asset");
+		File.WriteAllText(quality, "m_CurrentQuality: 1");
+		var roots = new[] { assets, settings };
+		var file = Path.Combine(project, "stat", "settings.txt");
+
+		var start = InputStatManifest.Capture(roots, Array.Empty<string>(), null, settings);
+		Expect(start.Complete, "a readable tree produces a complete manifest");
+		start.Save(file);
+		var before = InputStatManifest.Load(file);
+		Expect(before.Complete, "a manifest with hashes loads back complete");
+		Expect(before.Entries.Exists(entry => entry.Path == ValidationInputSnapshot.Normalize(quality) && entry.Hash.Length > 0),
+			"the hash of a settings file survives the round trip to disk");
+		Expect(before.Entries.Exists(entry => entry.Path == ValidationInputSnapshot.Normalize(Path.Combine(assets, "Thing.cs")) && entry.Hash.Length == 0),
+			"a file outside the content root carries no hash");
+
+		Thread.Sleep(50);
+		File.WriteAllText(quality, "m_CurrentQuality: 1");
+
+		var same = InputStatManifest.Compare(before, InputStatManifest.Capture(roots, Array.Empty<string>(), null, settings));
+		Expect(same.Complete, "the comparison is a complete witness");
+		Expect(same.Changed == 0, "a settings file rewritten with the same bytes is not a change");
+		Expect(same.Restored == 1, "it is counted as restored");
+		Expect(same.RestoredPaths.Count == 1 && same.RestoredPaths[0] == ValidationInputSnapshot.Normalize(quality),
+			"and named by its path");
+
+		Thread.Sleep(50);
+		File.WriteAllText(quality, "m_CurrentQuality: 2");
+
+		var edited = InputStatManifest.Compare(before, InputStatManifest.Capture(roots, Array.Empty<string>(), null, settings));
+		Expect(edited.Complete, "the comparison is a complete witness");
+		Expect(edited.Changed == 1, "a settings edit of the same length is a change");
+		Expect(edited.NonSourceChanged == 1, "and it is not a source change");
+		Expect(edited.Restored == 0, "an edit is never restored");
 	}
 
 	private static InputStatManifest Capture(string assets)

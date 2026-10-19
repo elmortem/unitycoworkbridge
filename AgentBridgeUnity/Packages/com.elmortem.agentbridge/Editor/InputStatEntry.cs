@@ -8,5 +8,6 @@ namespace AgentBridge
 		public string Path = "";
 		public long Length;
 		public long WriteTicks;
+		public string Hash = "";
 	}
 }

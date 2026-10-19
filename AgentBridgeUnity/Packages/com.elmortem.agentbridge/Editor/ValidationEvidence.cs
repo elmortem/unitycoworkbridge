@@ -205,9 +205,10 @@ namespace AgentBridge
 			string[] roots = (string[])_roots.Clone();
 			string[] excluded = (string[])_excluded.Clone();
 			Func<string, bool> ignore = _ignore;
+			string contentRoot = ContentWitnessedRoot();
 			return Task.Run(() =>
 			{
-				InputStatManifest manifest = InputStatManifest.Capture(roots, excluded, ignore);
+				InputStatManifest manifest = InputStatManifest.Capture(roots, excluded, ignore, contentRoot);
 				if (!manifest.Complete)
 				{
 					return manifest;
@@ -366,10 +367,11 @@ namespace AgentBridge
 				// Read on the main thread, walked on a worker: the closing manifest must describe
 				// exactly the inputs the closing digest describes.
 				string startPath = SessionState.GetString(ManifestKey, "");
+				string contentRoot = ContentWitnessedRoot();
 				_completionSources = CompileInputContext.StartCapture(projectRoot);
 				_completion = job.Measure("validation_complete", taskId);
 				_completionManifest = Task.Run(() => InputStatManifest.Compare(
-					InputStatManifest.Load(startPath), InputStatManifest.Capture(roots, excluded, ignore)));
+					InputStatManifest.Load(startPath), InputStatManifest.Capture(roots, excluded, ignore, contentRoot)));
 				return false;
 			}
 			if (!_completion.IsCompleted || !_completionSources.IsCompleted || !_completionManifest.IsCompleted) return false;
@@ -437,6 +439,13 @@ namespace AgentBridge
 					TelemetryField.Text("Paths", string.Join(";", stat.Paths)),
 					TelemetryField.Text("Source", "manifest") });
 				events += stat.Changed;
+			}
+
+			if (stat.Complete && stat.Restored > 0)
+			{
+				TelemetryLog.Write("input_restored", "", taskId, new[] {
+					TelemetryField.Number("Files", stat.Restored),
+					TelemetryField.Text("Paths", string.Join(";", stat.RestoredPaths)) });
 			}
 
 			// The observer remains alive until the worker finishes and we evaluate its events.
@@ -620,10 +629,16 @@ namespace AgentBridge
 			return excluded.ToArray();
 		}
 
+		// Main thread: reads BridgePaths.ProjectRoot.
+		public static string ContentWitnessedRoot()
+		{
+			return Path.Combine(BridgePaths.ProjectRoot, "ProjectSettings");
+		}
+
 		private static void InstallMonitor()
 		{
 			DisposeMonitor();
-			_monitor = new ValidationInputMonitor(_roots, _excluded, _ignore);
+			_monitor = new ValidationInputMonitor(_roots, InputStatManifest.ObserverExcludedRoots(_excluded, ContentWitnessedRoot()), _ignore);
 		}
 
 		private static void DisposeMonitor()
