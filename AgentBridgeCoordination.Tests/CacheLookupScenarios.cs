@@ -137,7 +137,7 @@ internal static class CacheLookupScenarios
 	{
 		var missing = Path.Combine(project, "lookup", "never-created", "Assets");
 		using var witness = CacheLookupWitness
-			.OpenAsync(new[] { missing }, Array.Empty<string>(), null).GetAwaiter().GetResult();
+			.OpenAsync(new[] { missing }, Array.Empty<string>(), null, "").GetAwaiter().GetResult();
 
 		Expect(!witness.Start.Complete, "an unreachable root cannot be captured");
 		Expect(witness.Start.Reason.Length > 0, "and it says why");
@@ -245,7 +245,7 @@ internal static class CacheLookupScenarios
 
 	private static CacheLookupWitness Open(string assets, string[] excluded, Func<string, bool> ignore)
 	{
-		var witness = CacheLookupWitness.OpenAsync(new[] { assets }, excluded, ignore).GetAwaiter().GetResult();
+		var witness = CacheLookupWitness.OpenAsync(new[] { assets }, excluded, ignore, "").GetAwaiter().GetResult();
 		Expect(witness.Monitor.Observed && witness.Start.Complete, "a readable tree opens both witnesses");
 		return witness;
 	}
