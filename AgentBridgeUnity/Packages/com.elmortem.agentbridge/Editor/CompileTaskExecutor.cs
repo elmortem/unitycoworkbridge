@@ -29,6 +29,25 @@ namespace AgentBridge
 		public static string LastCycleId { get { return SessionState.GetString(CycleIdKey, ""); } }
 		public static string LastCycleFinishedUtc { get { return SessionState.GetString(CycleFinishedUtcKey, ""); } }
 
+		// Errors of the last finished cycle, including a foreign cycle that no task requested.
+		public static List<TaskDiagnostic> LastCycleErrors()
+		{
+			try
+			{
+				var list = JsonUtility.FromJson<TaskDiagnosticList>(SessionState.GetString(CycleErrorsKey, ""));
+				if (list == null || list.Items == null)
+				{
+					return new List<TaskDiagnostic>();
+				}
+
+				return list.Items;
+			}
+			catch
+			{
+				return new List<TaskDiagnostic>();
+			}
+		}
+
 		static CompileTaskExecutor()
 		{
 			if (!Application.isBatchMode) EnsureSubscribed();

@@ -133,13 +133,26 @@ internal static class BridgeInspector
 			}
 		}
 
+		// A dialog explains the stale heartbeat that follows it, so it outranks heartbeat_stale; the
+		// snapshot is believed only for the live editor that status.json names.
+		if (health.Bridge != null && health.ProjectMatches && (health.ForeignHost || health.EditorProcessAlive == true))
+		{
+			health.BlockedBy = EditorDialogReader.Read(paths.DialogsFile, health.Bridge, health.ForeignHost,
+				DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+			if (health.BlockedBy.Length > 0)
+			{
+				health.Problems.Add(EditorDialogReader.Code);
+			}
+		}
+
 		health.BridgeReady = health.PackageDeclared
 			&& health.Bridge != null
 			&& health.ProtocolCompatible
 			&& health.ProjectMatches
 			&& (health.ForeignHost || health.EditorProcessAlive == true)
 			&& health.Bridge.Enabled
-			&& health.HeartbeatAgeMs <= health.HeartbeatToleranceMs;
+			&& health.HeartbeatAgeMs <= health.HeartbeatToleranceMs
+			&& health.BlockedBy.Length == 0;
 		health.CSharpReady = health.BridgeReady && health.Bridge!.RoslynReady;
 		health.Ok = health.BridgeReady;
 		health.DispatcherOwner = DispatcherHostPolicy.HostOwnsDispatcher(health) ? "editor_host" : "any_client";
@@ -169,6 +182,7 @@ internal static class BridgeInspector
 			"status_invalid",
 			"protocol_mismatch",
 			"project_mismatch",
+			EditorDialogReader.Code,
 			"heartbeat_missing",
 			"heartbeat_invalid",
 			"heartbeat_stale",

@@ -52,7 +52,8 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
 `status`, `doctor`, `coord`, `queue`, `cancel <TaskId>`. Общие флаги: `--project`, `--wait`, `--format json|human`, `--session`,
 `--note`, `--coord-window`, `--coord-step`. Неизвестный флаг — ошибка использования, а не позиционный
 аргумент. Коды выхода: `0` успех операции/исполнения или принятие с `--wait 0`, `1` отказ
-(включая `test_failure`, `stale_input`, `evidence_unavailable`), `2` бюджет клиента исчерпан,
+(включая `test_failure`, `stale_input`, `evidence_unavailable`), `2` бюджет клиента исчерпан или
+ожидание прервано модальным окном редактора (`Reason: editor_blocked_by_dialog`),
 `3` проект/диспетчер недоступен, файловая ошибка или ошибка использования. Принятая задача при
 выходе 2 сохраняет Id; ответ содержит `Accepted: true`, команду продолжения и `EditorState`.
 Недоступность редактора не запрещает постановку и операции `queue`/`coord`.
@@ -67,6 +68,8 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
 - `QueueDiscussionStore.cs` — переговоры о прогонах дольше 300 с, 15 с на ответ, бронь и уведомления; `QueueDiscussionTests.cs` проверяет гонки, повторную подачу и возврат из ожидания. `queue reserve/request-stop/respond/inbox`, `--expected-seconds`, `--reservation` и курсоры обсуждений обслуживает внешний диспетчер. Отмена по возрасту без переговоров запрещена.
 - `QueueCommands.cs` — `queue list`, `status <id>`, `cancel <id>`, `move <id> [before-id]`, `shutdown`; работают без Unity
 - `BridgeInspector.cs` — `status` / `doctor`, фатальные `Problems` и нефатальные `Warnings`
+- Модальные окна: `EditorDialogReader.cs` читает `dialogs.json` пакета (только PID из `status.json`, только свежий)
+  и даёт `blocked_by_dialog` + `BlockedBy` в health; `BridgeClient` по нему досрочно завершает ожидание кодом 2
 - `TaskResultFormatter.cs` — вывод `json` (стабильный контракт) и `human`
 - `ProjectLocator.cs`, `BridgePaths.cs` — поиск проекта и раскладка `Library/AgentBridge/`
 - Пробуждение уснувшего редактора: `WakePolicy.cs` (чистое решение, точка тестирования),
@@ -119,6 +122,10 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
   `AgentEditorWakeTimer.cs` (выбор backend, `SetTimer` как fallback), `BackgroundTickTimer.cs`
   (независимый короткий вызов потокобезопасного `SignalTick`, остановка до reload), `InteractionModeProbe.cs`
 - Протокол: `BridgePaths.cs`, `BridgeStatusWriter.cs`, `TaskJournal.cs`, `TaskRecord.cs`
+- Модальные окна (`dialog-detection-v1`): `EditorDialogMonitor.cs` (фоновый таймер публикует `dialogs.json`, пока
+  главный поток держит окно; строки `modal dialog: …` в `Logs` задачи), `EditorDialogEventsHook.cs` (рефлексия на
+  `EditorDialogEvents` Unity 6.7+), `NativeDialogProbe.cs` (Windows-скан окон главного потока). Вне главного потока —
+  никакого Unity API и никаких ожиданий без таймаута. Живая проверка: `scripts/verify-modal-dialog.ps1`
 - Выбор тестов: `TestNameResolver.cs` разрешает полные/короткие имена по полному каталогу Unity; `TestFilterCoverage.cs` проверяет покрытие кэша по тестовым случаям. `no_tests_matched` и `ambiguous_test_filter` — терминальные ошибки тестов, CLI возвращает `1`.
 - Телеметрия: `TelemetryLog.cs` (запись JSONL в `Logs/`, ротация по суткам), `TelemetryJson.cs`
   (конверт строки и экранирование), `TelemetryField.cs`

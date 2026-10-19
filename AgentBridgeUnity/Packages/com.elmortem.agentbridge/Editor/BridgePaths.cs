@@ -67,6 +67,12 @@ namespace AgentBridge
 			get { return Path.Combine(WorkingRoot, "scheduler-state.json"); }
 		}
 
+		// Modal dialogs holding the main thread, written by EditorDialogMonitor from a background thread.
+		public static string DialogsFile
+		{
+			get { return Path.Combine(WorkingRoot, "dialogs.json"); }
+		}
+
 		public static string CliRoot
 		{
 			get { return EnsureDirectory(Path.Combine(WorkingRoot, "cli")); }

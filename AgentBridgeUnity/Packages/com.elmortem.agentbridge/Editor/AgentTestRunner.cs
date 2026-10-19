@@ -339,6 +339,7 @@ namespace AgentBridge
 			}
 
 			record.Logs.AddRange(SceneDirtyWatcher.DrainLogs());
+			record.Logs.AddRange(EditorDialogMonitor.DrainTaskLogs(taskId));
 			SceneDirtyWatcher.Disarm(taskId);
 
 			TestRunDump dump;
@@ -541,6 +542,7 @@ namespace AgentBridge
 			if (record.Logs == null) record.Logs = new List<string>();
 			record.Logs.Add(reason);
 			record.Logs.AddRange(SceneDirtyWatcher.DrainLogs());
+			record.Logs.AddRange(EditorDialogMonitor.DrainTaskLogs(taskId));
 			TaskJournal.Write(record);
 			TelemetryLog.TaskFinished(record);
 			TestRunAttachments.Terminate(taskId, outcome, reason, record.Evidence);

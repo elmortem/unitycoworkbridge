@@ -80,6 +80,7 @@ namespace AgentBridge
 			Current.WakeTimerInstalled = AgentEditorWakeTimer.Installed;
 			Current.WakeTimerKind = AgentEditorWakeTimer.Kind ?? "none";
 			Current.InteractionMode = InteractionModeProbe.Read();
+			Current.DialogDetection = EditorDialogMonitor.Detection;
 			Current.TelemetryEnabled = AgentBridgeSettingsStore.GetTelemetryEnabled();
 
 			Write();
@@ -166,7 +167,7 @@ namespace AgentBridge
 			{
 				"csharp", "ui", "sceneshot", "compile", "tests", "release", "play", "stopplay",
 				"evidence-v1", "test-cache-v2", "cancel-v1", "long-run-negotiation-v1", TaskCancellationPolicy.Capability, Queueing.QueueFiles.Capability,
-				Queueing.QueueFiles.HostCapability
+				Queueing.QueueFiles.HostCapability, EditorDialogMonitor.Capability
 			};
 
 			if (CoordinationEditorAdapter.Available)

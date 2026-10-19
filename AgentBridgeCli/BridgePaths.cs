@@ -11,6 +11,7 @@ internal sealed class BridgePaths
 		StatusFile = Path.Combine(WorkingRoot, "status.json");
 		HeartbeatFile = Path.Combine(WorkingRoot, "heartbeat");
 		ProjectIdFile = Path.Combine(WorkingRoot, "project-id");
+		DialogsFile = Path.Combine(WorkingRoot, "dialogs.json");
 		Scratch = Path.Combine(projectRoot, "Temp", "AgentBridge");
 		AssetsRoot = Path.Combine(projectRoot, "Assets");
 	}
@@ -22,6 +23,7 @@ internal sealed class BridgePaths
 	public string StatusFile { get; }
 	public string HeartbeatFile { get; }
 	public string ProjectIdFile { get; }
+	public string DialogsFile { get; }
 	public string Scratch { get; }
 	public string AssetsRoot { get; }
 

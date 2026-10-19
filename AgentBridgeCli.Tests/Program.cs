@@ -40,6 +40,7 @@ try
 	RunBackgroundTickTimerTests();
 	await RunStaleSubmissionTests(root);
 	await RunQueueBudgetTests(root);
+	await EditorDialogTests.RunAsync(root);
 	await IndependentQueueTests.RunAsync(root);
 	await QueueDiscussionTests.RunAsync(root);
 	await QueueReplyLifetimeTests.RunAsync(root);

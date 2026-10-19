@@ -116,7 +116,7 @@ scripts/                           Сборка плагина, вендорин
 |---|---|
 | `0` | успех операции/исполнения или принятие задачи с `--wait 0` |
 | `1` | терминальный отказ задачи (`test_failure`, `stale_input`, `evidence_unavailable`, `no_tests_matched`, `ambiguous_test_filter`) |
-| `2` | бюджет ожидания исчерпан; задача принята, сохранена и ожидает/исполняется |
+| `2` | бюджет ожидания исчерпан или ожидание прервано модальным окном редактора (`Reason: editor_blocked_by_dialog`); задача принята, сохранена и ожидает/исполняется |
 | `3` | проект/диспетчер недоступен, файловая ошибка или ошибка использования; health-команды отдельно отражают недоступность редактора |
 
 ---
@@ -145,6 +145,7 @@ scripts/                           Сборка плагина, вендорин
 	pending-playmode-scene.json         сцены, которые надо восстановить после плеймода
 	play-session.json                   владелец текущего плеймода
 	scheduler-state.json                ротация агентских сессий
+	dialogs.json                        модальные окна, держащие главный поток (пишется фоновым потоком, обновляется раз в секунду)
 
 <project>/Logs/AgentBridge-<writer>-<YYYYMMDD>.jsonl   телеметрия, живёт вне Library
 <project>/ProjectSettings/AgentBridge.json            настройки моста (таймауты, политики сцен, KeepCompletedCount)
@@ -174,7 +175,7 @@ Namespace `AgentBridge.Cli`, file-scoped. Собирается в исполня
 
 | Файл | Роль |
 |---|---|
-| `BridgeClient.cs` | приём задачи через диспетчер, ограниченное ожидание, отдельный EditorState |
+| `BridgeClient.cs` | приём задачи через диспетчер, ограниченное ожидание, отдельный EditorState; при модальном окне возвращает код 2 с `Reason: editor_blocked_by_dialog` и `BlockedBy`, не дожидаясь конца бюджета |
 | `QueueClient.cs` | файловые запросы/ответы и скрытый автозапуск отдельного queue-server, удаляет прочитанный ответ, пишет `queue_unacknowledged` с причиной. Клиент на другой ОС, чем живой редактор с `dispatcher-host-v1`, сервер не запускает и `launch.json` не пишет — ждёт редакторский |
 | `DispatcherHostPolicy.cs` | чистые решения о владельце диспетчера: владеет ли им редактор, уступать ли чужому `launch.json`, можно ли выходить по простою |
 | `QueueRuntime.cs` | исполняемый снимок CLI по хешу содержимого в системном временном каталоге `AgentBridgeQueueRuntime`; сервер не блокирует обновление/пересборку CLI на Windows. Сравнение runtime разрешает ссылки во всех предках пути (включая `/var` → `/private/var` на macOS); при запуске через `dotnet` сравнивает путь CLI-сборки. Новый клиент обновляет `launch.json`, а сервер уступает владение между транзакциями при смене runtime |
@@ -195,7 +196,8 @@ Namespace `AgentBridge.Cli`, file-scoped. Собирается в исполня
 | Файл | Роль |
 |---|---|
 | `BridgeInspector.cs` | `status` и `doctor`: собирает `BridgeHealth`, различает фатальные `Problems` и нефатальные `Warnings` |
-| `BridgeHealth.cs` | модель отчёта здоровья: свежесть heartbeat, живость процесса редактора, совместимость протокола, совпадение проекта |
+| `BridgeHealth.cs` | модель отчёта здоровья: свежесть heartbeat, живость процесса редактора, совместимость протокола, совпадение проекта, `BlockedBy` |
+| `EditorDialogReader.cs` / `EditorDialogInfo.cs` | клиентская половина `dialog-detection-v1`: верит `dialogs.json` только для PID из `status.json`, пока он свежий (5 с, для чужой ОС 60 с) и пока `MainThreadIdleMs` ≥ 1,5 с, даёт `blocked_by_dialog` в health и досрочный выход ожидания (`ShouldInterruptWait`, окно открыто ≥ 2 с) |
 | `TaskResultFormatter.cs` | форматирование результата в `json` (стабильный контракт) и `human` |
 | `TelemetryLog.cs` | клиентская половина телеметрии в `Logs/AgentBridge-client-*.jsonl`; включённость читается из `status.json`, а не из настроек проекта |
 
@@ -404,6 +406,23 @@ package.json       версия и зависимости пакета
 | `TelemetryJson.cs` | конверт строки и экранирование |
 | `TelemetryField.cs` | типизированное поле события |
 
+### 6.12 Модальные окна (`dialog-detection-v1`)
+
+Пока модальное окно держит главный поток, редактор не тикает и не пишет `status.json`, поэтому
+сообщает о нём фоновый поток — так же, как Unity CLI отдаёт `STATUS_BLOCKED_BY_DIALOG`.
+
+| Файл | Роль |
+|---|---|
+| `EditorDialogMonitor.cs` | `[InitializeOnLoad]`: таймер на потоке пула (раз в секунду) сводит оба источника, публикует `dialogs.json`, гасится до reload/quit с ожиданием скана в нативном коде; ловит исключения инициализатора, чтобы не сломать `FinishTask`; `DrainTaskLogs` отдаёт строки `modal dialog: …` в `Logs` задачи (`TaskCoordinator.FinishTask`, `AgentTestRunner`); событие телеметрии `editor_dialog` при закрытии окна |
+| `EditorDialogEventsHook.cs` | рефлексивная подписка на `UnityEditor.EditorDialogEvents` (Unity 6.7+): `dialogWillShow`/`dialogDismissed`, разбор `DialogEventInfo` (Title, Message, Level, ButtonLabels, Source) |
+| `NativeDialogProbe.cs` | Windows-скан окон редактора: только окна главного потока с выключенным владельцем (или `#32770` без владельца), без прогресс-окон; `InternalGetWindowText` вместо `GetWindowText` и `SendMessageTimeout(WM_NULL, 200 мс)` как проверка модального цикла. Запускается, только если главный поток не тикал ≥ 1 с |
+| `EditorDialogInfo.cs` / `EditorDialogSnapshot.cs` | DTO окна и ручная JSON-сборка `dialogs.json` (никакого Unity API вне главного потока) |
+
+`BridgeStatusWriter` публикует capability `dialog-detection-v1` и поле `DialogDetection`
+(`editor_dialog_events+win32`, `editor_dialog_events`, `win32`, `unsupported`, `unavailable`). Снимок несёт
+`MainThreadIdleMs` — сколько главный поток не тикал по часам самого редактора; тик закрывает нативные окна из событий,
+даже если Unity не прислала `dialogDismissed`.
+
 ---
 
 ## 7. Координация — `Editor/Coordination/`
@@ -483,6 +502,7 @@ ProjectSettings/CoworkBridge.json            настройки предыдущ
 | `TaskQueueSnapshotTests.cs`, `TaskQueueWindowTests.cs` | наблюдение очереди и её окно |
 | `TestCancellationPolicyTests.cs` | политика отмены задач |
 | `UnfocusedWindowTests.cs` | показ окна без захвата фокуса |
+| `ModalDialogProbeTests.cs` | `[Explicit]` живые пробы для `verify-modal-dialog.ps1`: самозакрывающийся `DisplayDialog` (Win32) и прогресс-бар на занятом главном потоке, который не должен считаться окном; в обычный прогон не входят |
 | `UiTextWrappingTests.cs` | переключение переноса TMP через декларацию и сохранение режима при отсутствии `wrap`; совместим со старым и новым API |
 
 ### PlayMode-тесты (`Assets/Tests/PlayMode/`)
@@ -500,7 +520,7 @@ ProjectSettings/CoworkBridge.json            настройки предыдущ
 
 | Проект | Что покрывает | Как запустить |
 |---|---|---|
-| `AgentBridgeCli.Tests/` | разбор флагов, форматирование результата, политика пробуждения, клиентская логика; `QueueRuntimeTests.cs` — реальные серверы со ссылкой в предках runtime, автозапуск из временного каталога через ссылку, запуск через `dotnet` и передача владения при смене runtime | `dotnet run --project AgentBridgeCli.Tests/AgentBridgeCli.Tests.csproj -c Release` |
+| `AgentBridgeCli.Tests/` | разбор флагов, форматирование результата, политика пробуждения, клиентская логика; `EditorDialogTests.cs` — свежесть/PID `dialogs.json`, приоритет `blocked_by_dialog` над `heartbeat_stale`, досрочный выход ожидания; `QueueRuntimeTests.cs` — реальные серверы со ссылкой в предках runtime, автозапуск из временного каталога через ссылку, запуск через `dotnet` и передача владения при смене runtime | `dotnet run --project AgentBridgeCli.Tests/AgentBridgeCli.Tests.csproj -c Release` |
 | `AgentBridgeCoordination.Tests/` | coordination-v1 и evidence-v1; `Harness.cs` — стенд, `Child.cs`/`BatchHost.cs` — дочерние процессы для гонок и обрывов, `Scenarios.cs`/`BatchScenarios.cs`/`HashingScenarios.cs`/`ObserverHubScenarios.cs`/`StatManifestScenarios.cs`/`CacheLookupScenarios.cs`/`SharedFileScenarios.cs` — сценарии | `dotnet run --project AgentBridgeCoordination.Tests/AgentBridgeCoordination.Tests.csproj -c Release -- --group all` (также `--group state\|store`) |
 | `AgentBridgeCompile.Tests/` | executor, отпечаток и кэш компиляции с управляемыми compilation callbacks (`Stubs.cs`) | `dotnet run --project AgentBridgeCompile.Tests -c Release` |
 | `AgentBridgeRecovery.Tests/` | восстановление сцен: повторный вход, ожидание cleanup, повторная финализация (`EditorStubs.cs`) | `dotnet run --project AgentBridgeRecovery.Tests -c Release` |
@@ -558,6 +578,7 @@ unity-bridge-plugin.zip        собранный артефакт: закомм
 | `verify-compilation.ps1` | поведение параллельных запросов компиляции |
 | `verify-coordinator-performance.ps1` | стоимость тика координатора; `-IncludeBlockingBaseline` добавляет базовую линию |
 | `verify-dynamic-tmp.ps1` | задачи, работающие с динамически подключаемыми зависимостями (TMP) |
+| `verify-modal-dialog.ps1` | Windows: `status` даёт `blocked_by_dialog` с заголовком и TaskId пробы, ожидание соседа завершается кодом 2 за секунды, после закрытия обе задачи выполняются и запись пробы логирует окно; прогресс-бар не считается окном |
 
 ---
 

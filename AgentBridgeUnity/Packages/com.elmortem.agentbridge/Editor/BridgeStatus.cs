@@ -21,6 +21,8 @@ namespace AgentBridge
 		public bool WakeTimerInstalled;
 		public string WakeTimerKind;
 		public string InteractionMode;
+		// What EditorDialogMonitor can see: editor_dialog_events+win32, editor_dialog_events, win32, unsupported.
+		public string DialogDetection;
 		public bool TelemetryEnabled;
 		public int LoadedTaskAssemblies;
 		public int ExecutedTasks;

@@ -228,9 +228,23 @@ internal sealed class BridgeClient
 				WriteResult(JsonSerializer.Serialize(new { Id = taskId, Kind = task.Kind, Status = task.Status, Accepted = true,
 					WaitExpired = waitSeconds > 0, CancelRequested = task.CancelRequested, EditorAvailable = health.BridgeReady && health.Bridge?.Capabilities.Contains(QueueFiles.Capability) == true,
 					EditorState = health.BridgeReady && health.Bridge?.Capabilities.Contains(QueueFiles.Capability) != true ? "executor_update_required" : health.Code, Reason = task.BatchRequestId.Length > 0 ? "batch_step_pending" : "awaiting_executor",
-					Resume = "agentbridge wait " + taskId }, JsonSupport.Task));
+					health.BlockedBy, Resume = "agentbridge wait " + taskId }, JsonSupport.Task));
 				_telemetry.Write("cli_exit", _session, taskId, new Dictionary<string, object?> { ["Cmd"] = kind, ["Code"] = code, ["Status"] = task.Status, ["EditorState"] = health.Code });
 				return code;
+			}
+			// Nothing moves until a person answers the dialog, so the rest of the budget would only be
+			// spent waiting. The task stays accepted under the same Id, exactly as on budget expiry.
+			if (EditorDialogReader.ShouldInterruptWait(health))
+			{
+				WriteResult(JsonSerializer.Serialize(new { Id = taskId, Kind = task.Kind, Status = task.Status, Accepted = true,
+					WaitExpired = false, CancelRequested = task.CancelRequested, EditorAvailable = false,
+					EditorState = EditorDialogReader.Code, Reason = EditorDialogReader.WaitReason,
+					health.BlockedBy, Resume = "agentbridge wait " + taskId }, JsonSupport.Task));
+				Console.Error.WriteLine("[agentbridge] Unity is held by a modal dialog: " + EditorDialogReader.Describe(health.BlockedBy[0])
+					+ ". It needs a person; the task stays queued. Resume with: agentbridge wait " + taskId);
+				_telemetry.Write("cli_exit", _session, taskId, new Dictionary<string, object?> { ["Cmd"] = kind, ["Code"] = 2, ["Status"] = task.Status,
+					["EditorState"] = EditorDialogReader.Code, ["Dialog"] = health.BlockedBy[0].Title });
+				return 2;
 			}
 			if (ManualPlayPolicy.ShouldStop(health, kind, manualStops, task.Status))
 			{

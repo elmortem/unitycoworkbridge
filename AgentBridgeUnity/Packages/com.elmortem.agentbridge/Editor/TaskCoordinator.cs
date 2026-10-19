@@ -889,6 +889,13 @@ namespace AgentBridge
 					BeginValidationPrepare(request, "compile");
 					break;
 				case "tests":
+					// Unity never enters Play Mode with red scripts and Test Framework would wait for it forever.
+					// The queue scan skips while compiling, so the flag here belongs to a finished cycle.
+					if (request.TestMode == "PlayMode" && EditorUtility.scriptCompilationFailed)
+					{
+						RefusePlayModeOnCompileErrors(request);
+						break;
+					}
 					BeginValidationPrepare(request, "tests");
 					break;
 				case "sceneshot":
@@ -1230,6 +1237,36 @@ namespace AgentBridge
 			}
 		}
 
+		private static void RefusePlayModeOnCompileErrors(TaskRequest request)
+		{
+			List<TaskDiagnostic> errors = CompileTaskExecutor.LastCycleErrors();
+			string message = PlayModeCompileGateMessage(errors);
+			// Test Framework never got the run, so nothing will disarm the watcher later.
+			SceneDirtyWatcher.Disarm(request.Id);
+			_activeRecord.Diagnostics = errors;
+			_activeRecord.Tests = new TestRunResult { aborted = true, message = message };
+			FinishTask("compiler_error", null, new List<string> { message }, true);
+		}
+
+		private static string PlayModeCompileGateMessage(List<TaskDiagnostic> errors)
+		{
+			var files = new List<string>();
+			foreach (TaskDiagnostic error in errors)
+			{
+				if (!string.IsNullOrEmpty(error.File) && !files.Contains(error.File))
+				{
+					files.Add(error.File);
+				}
+			}
+
+			if (files.Count == 0)
+			{
+				return "playmode_blocked_by_compile_errors: Unity cannot enter Play Mode while scripts have compile errors; no diagnostics from the last compile cycle, run 'agentbridge compile' to list them";
+			}
+
+			return "playmode_blocked_by_compile_errors: Unity cannot enter Play Mode while scripts have compile errors in " + string.Join(", ", files);
+		}
+
 		private static void PollExternallyFinalizedTask()
 		{
 			TaskRecord latest;
@@ -1342,6 +1379,7 @@ namespace AgentBridge
 
 			if (!string.IsNullOrEmpty(_cancelReason)) logs.Add(_cancelReason);
 			logs.AddRange(SceneDirtyWatcher.DrainLogs());
+			logs.AddRange(EditorDialogMonitor.DrainTaskLogs(_activeRecord.Id));
 
 			if (_activeRestoreLogs != null && _activeRestoreLogs.Count > 0)
 			{

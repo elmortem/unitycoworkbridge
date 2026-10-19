@@ -95,6 +95,7 @@ internal static class TaskResultFormatter
 		AppendEvidence(output, root);
 		AppendLabeledValue(output, "Editor", GetString(root, "EditorState"));
 		AppendLabeledValue(output, "Reason", GetString(root, "Reason"));
+		AppendBlockedBy(output, root);
 		if (root.TryGetProperty("Discussions", out var discussions))
 			output.AppendLine().Append("Discussions: ").Append(discussions.GetRawText());
 		AppendLabeledValue(output, "Resume", GetString(root, "Resume"));
@@ -271,6 +272,49 @@ internal static class TaskResultFormatter
 				output.AppendLine().Append("- ").Append(note.GetString());
 			}
 		}
+	}
+
+	private static void AppendBlockedBy(StringBuilder output, JsonElement root)
+	{
+		if (!root.TryGetProperty("BlockedBy", out var blocked) || blocked.ValueKind != JsonValueKind.Array || blocked.GetArrayLength() == 0)
+		{
+			return;
+		}
+
+		EditorDialogInfo[]? dialogs;
+		try
+		{
+			dialogs = blocked.Deserialize<EditorDialogInfo[]>(JsonSupport.Read);
+		}
+		catch (JsonException)
+		{
+			return;
+		}
+
+		if (dialogs == null)
+		{
+			return;
+		}
+
+		output.AppendLine().Append("Blocked by:");
+		foreach (var dialog in dialogs)
+		{
+			if (dialog != null)
+			{
+				Normalize(dialog);
+				output.AppendLine().Append("- ").Append(EditorDialogReader.Describe(dialog));
+			}
+		}
+	}
+
+	private static void Normalize(EditorDialogInfo dialog)
+	{
+		dialog.Kind ??= "";
+		dialog.Level ??= "";
+		dialog.Title ??= "";
+		dialog.Message ??= "";
+		dialog.Buttons ??= Array.Empty<string>();
+		dialog.TaskId ??= "";
 	}
 
 	private static void AppendStringArray(StringBuilder output, JsonElement root, string propertyName, string label)

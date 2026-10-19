@@ -26,5 +26,7 @@ internal sealed class BridgeHealth
 	public bool CSharpReady { get; set; }
 	public List<string> Problems { get; set; } = new();
 	public List<string> Warnings { get; set; } = new();
+	// Modal dialogs that hold the editor's main thread right now (dialog-detection-v1).
+	public EditorDialogInfo[] BlockedBy { get; set; } = Array.Empty<EditorDialogInfo>();
 	public BridgeStatus? Bridge { get; set; }
 }

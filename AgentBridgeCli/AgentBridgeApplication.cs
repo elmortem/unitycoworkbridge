@@ -330,6 +330,10 @@ internal static class AgentBridgeApplication
 		{
 			Console.Out.WriteLine("Queue: " + (health.QueueReady ? "available" : "not checked") + "; editor: " + health.Code);
 			Console.Out.WriteLine(health.BridgeReady ? "Agent Bridge is ready." : "Agent Bridge is unavailable: " + health.Code);
+			foreach (var dialog in health.BlockedBy)
+			{
+				Console.Out.WriteLine("Blocked by dialog: " + EditorDialogReader.Describe(dialog));
+			}
 			Console.Out.WriteLine("Project: " + health.ProjectPath);
 			Console.Out.WriteLine("Task files: " + health.ScratchDir);
 			if (health.ForeignHost)
@@ -349,6 +353,7 @@ internal static class AgentBridgeApplication
 				Console.Out.WriteLine("Wake timer: "
 					+ (health.Bridge.WakeTimerInstalled ? (health.Bridge.WakeTimerKind ?? "installed") : "missing"));
 				Console.Out.WriteLine("Interaction mode: " + (health.Bridge.InteractionMode ?? "unknown"));
+				Console.Out.WriteLine("Dialog detection: " + (health.Bridge.DialogDetection ?? "not reported by this package"));
 				Console.Out.WriteLine("Active task: " + (health.Bridge.ActiveTaskId ?? "none"));
 				if (!string.IsNullOrEmpty(health.Bridge.ActiveTaskId) && health.Bridge.Capabilities.Contains("long-running-tasks-v1"))
 					Console.Out.WriteLine("Execution: " + health.Bridge.ActiveTaskElapsedSeconds + " seconds; cancellation by another agent: "

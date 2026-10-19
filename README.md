@@ -253,7 +253,7 @@ agentbridge coord status --session AB_20260813_1500_a1f --format human
 
 Every command also accepts `--session <id>` and `--note <text>`, which identify the agent session behind the task; see [Multi-Agent Sessions](#multi-agent-sessions). The `coord` group is described in [Coordinating Several Agents](#coordinating-several-agents).
 
-Exit codes: `0` successful execution, a successful control/read operation, or admission with `--wait 0`; `1` refusal or a terminal task failure including `test_failure`, `no_tests_matched`, `ambiguous_test_filter`, `stale_input` and `evidence_unavailable`; `2` client wait exhausted while the accepted task remains queued/running — resume with `agentbridge wait <TaskId>`; `3` project/dispatcher unavailable, file access failure, bad usage, or an unconfirmed run of all tests (`all_tests_confirmation_required`). Health commands retain their editor diagnostics; an unavailable editor does not reject admission.
+Exit codes: `0` successful execution, a successful control/read operation, or admission with `--wait 0`; `1` refusal or a terminal task failure including `test_failure`, `no_tests_matched`, `ambiguous_test_filter`, `stale_input` and `evidence_unavailable`; `2` client wait exhausted, or ended early because a modal dialog holds the Editor (`Reason: editor_blocked_by_dialog`, see [Modal Dialogs](#modal-dialogs)), while the accepted task remains queued/running — resume with `agentbridge wait <TaskId>`; `3` project/dispatcher unavailable, file access failure, bad usage, or an unconfirmed run of all tests (`all_tests_confirmation_required`). Health commands retain their editor diagnostics; an unavailable editor does not reject admission.
 
 Filesystem failures return exit `3` with `access_denied` or `io_error` in the selected JSON/human format instead of crashing the CLI. Check the reported filesystem error, project permissions, sandbox access and file locks. Do not delete coordination state to recover access. An I/O failure is not proof that an already submitted task stopped; inspect its status before resubmitting.
 
@@ -289,7 +289,7 @@ To stop Claude Code from asking for confirmation on every call, allow this exact
 }
 ```
 
-`agentbridge status` validates the project path, package presence, Editor PID, heartbeat freshness and protocol version. `agentbridge doctor` additionally reports the CLI path/version, Unity/package versions, Roslyn readiness, capabilities, active task, and the two wake diagnostics described below (`Wake timer`, `Interaction mode`).
+`agentbridge status` validates the project path, package presence, Editor PID, heartbeat freshness and protocol version, and reports a modal dialog that holds the Editor as `code: blocked_by_dialog` with `blockedBy` (see [Modal Dialogs](#modal-dialogs)). `agentbridge doctor` additionally reports the CLI path/version, Unity/package versions, Roslyn readiness, capabilities, active task, and the two wake diagnostics described below (`Wake timer`, `Interaction mode`).
 
 Beyond the fatal `Problems` that make the bridge unavailable, health also carries non-fatal `Warnings`. `doctor` prints them prefixed with `!` in human format and exposes them as `Health.Warnings` in JSON. They never affect `Ok`, `Code`, or the exit code:
 
@@ -308,11 +308,33 @@ On the Editor side, `Wake timer: background_signal` means a timer independently 
 
 On the client side, submission and waiting use the dispatcher without requiring editor health. `status` and `doctor` report stale or unavailable editor state honestly; those diagnostics do not remove or duplicate accepted work. `EditorState` accompanies nonterminal wait responses, so agents can distinguish an accepted task from an editor that cannot currently execute it.
 
-Missing heartbeat progress does not prove that a task ended: import, compilation, a long test or domain reload can block updates. A positive client wait expires with exit code `2`, the same accepted task ID and a resume command; it does not turn into `bridge_asleep` or `bridge_unavailable` merely because Unity stopped responding. A wake signal cannot dismiss a modal dialog or unblock deadlocked user code.
+Missing heartbeat progress does not prove that a task ended: import, compilation, a long test or domain reload can block updates. A positive client wait expires with exit code `2`, the same accepted task ID and a resume command; it does not turn into `bridge_asleep` or `bridge_unavailable` merely because Unity stopped responding. A wake signal cannot dismiss a modal dialog or unblock deadlocked user code; a dialog the bridge can see is reported as `blocked_by_dialog` instead (see [Modal Dialogs](#modal-dialogs)).
 
 The independent signal timer has no Windows dependency; its background/reload behavior has been tested on Windows with Unity 2022.3 and 6.4. If the private API is missing or fails, Windows falls back to a native message timer (`Wake timer: thread`); other platforms report `unsupported`. That fallback can wake the OS message queue but does not guarantee an Editor update. `agentbridge doctor` warns with `! interaction_throttled` when the Editor reports a throttling mode. Unity versions without an `EditorApplication.interactionMode` property report `Interaction mode: unknown`.
 
 The external dispatcher owns the durable queue. Only the interactive editor executes Unity tasks. Batch mode and Asset Import Workers do not start the editor coordinator, test callbacks, scene recovery or wake timer. Workers share the project's Library but not the editor's SessionState; letting them recover records could otherwise mark a live task `interrupted_by_domain_reload`.
+
+### Modal Dialogs
+
+A modal dialog — a save prompt, *API Update Required*, a file picker, any `EditorUtility.DisplayDialog` or `EditorWindow.ShowModal` — holds Unity's main thread until a person answers it. Nothing in the queue moves, the heartbeat stops, and no wake signal can help. Like Unity CLI's `STATUS_BLOCKED_BY_DIALOG`, the bridge reports this state instead of letting agents wait out their budgets:
+
+- `agentbridge status` / `doctor` return `code: blocked_by_dialog` (it outranks the `heartbeat_stale` that follows) and `blockedBy`: one entry per dialog with `title`, `message`, `buttons`, `level` (`info`/`warning`/`error` when known), `kind`, `source`, `openMs` and `taskId` — the task that was executing when the dialog appeared, empty for an idle Editor. `--format human` prints `Blocked by dialog: [warning] "Scene(s) Have Been Modified" (native_message_box, 12s, task Task_…) — … [Save | Don't Save]`. `bridgeReady` is `false` while a dialog is open.
+- A waiting task command (`csharp`, `compile`, `tests`, `wait`, …) returns as soon as a dialog has been open for 2 seconds: exit `2`, `Accepted: true`, the same `Id`, `EditorState: blocked_by_dialog`, `Reason: editor_blocked_by_dialog`, `BlockedBy` and a `Resume` command. The task stays queued or running; resume with `agentbridge wait <TaskId>` after the dialog is answered. `--wait 0` still returns exit `0` and carries the same `BlockedBy`.
+- When a dialog was open while a task ran, the task's `Logs` get a line such as `modal dialog: "Save Scene" (native_dialog) held the editor for 14.2 s during this task`, so an agent can tell that its own action raised it.
+
+The Editor keeps `Library/AgentBridge/dialogs.json` up to date from a background thread, because the main thread is the one that is stuck. The file is rewritten every second while a dialog stays open; the CLI believes it only for the Editor PID in `status.json`, only while it is fresh (5 seconds on the same machine, the heartbeat allowance of 60 seconds for a client on another OS) and only while the Editor's own `MainThreadIdleMs` shows that `update` has not run for at least 1.5 seconds — an Editor that still ticks is not held by any window it shows.
+
+Detection sources, reported as `DialogDetection` in `status.json` and as `Dialog detection` by `status --format human`:
+
+| Value | Meaning |
+|---|---|
+| `editor_dialog_events+win32` | Unity 6.7+ on Windows: Unity's own `EditorDialogEvents` (title, message, buttons, level) plus the window scan for file pickers, which those events do not cover. |
+| `editor_dialog_events` | Unity 6.7+ on macOS/Linux: `EditorDialogEvents` only; native file pickers are not seen. |
+| `win32` | Unity before 6.7 on Windows: the window scan only. `level` stays empty. |
+| `unsupported` | Unity before 6.7 on macOS/Linux: dialogs are not detected; a blocked Editor still looks like `heartbeat_stale`. |
+| `unavailable` | The detector failed to start (its error is logged once in the Unity console); nothing is detected. |
+
+The Windows scan starts only after the main thread has missed its updates for a second. It reports enabled windows of the Editor's main thread whose owner window is disabled — the Win32 mark of a modal window — or ownerless native dialogs (`#32770`), skips progress windows and tooltips, and confirms with a 200 ms `SendMessageTimeout(WM_NULL)` that the main thread is pumping messages — a modal loop does, a long import, compilation or script does not. Dialogs shown while no package code is loaded (Unity's startup prompts, Safe Mode, the middle of a domain reload) are not detected. `scripts/verify-modal-dialog.ps1` checks the whole chain on a Windows host editor with self-closing probe dialogs.
 
 ### C# Task Script
 
@@ -376,6 +398,7 @@ agentbridge stopplay [--session <id>]
 - The session ends on its own at the deadline, and a human pressing Stop ends it too (`stopped:external`). The Editor itself never exits a play mode a human started; play mode an agent slipped into without a session it does exit, and the culprit's journal record says so.
 - Play mode that belongs to nobody is taken over by the client instead. The client submits an immediate `stopplay`, waits for it, and continues waiting for the original task — up to three takeovers per wait, after which it just waits. The takeover is announced on stderr (`editor is in play mode without an agent session; stopping it (stopplay #1)`); stdout still carries exactly one result, the task's own. A queued task that has since started, or any active test/script, suppresses this automatic stop even during a domain transition. Play mode owned by an agent session is never taken over this way — it keeps the `stopplay` rules above.
 - During tests, `play` waits for the editor; an owner can use `stopplay` to stop its own PlayMode test.
+- Unity cannot enter play mode while scripts have compile errors, and Test Framework would wait for that entry forever. So `tests --mode PlayMode` with a red project is refused at once: `Status: compiler_error`, `ForeignErrors: true`, the files and lines of the last compile cycle in `Diagnostics`, and a `playmode_blocked_by_compile_errors ...` line in `Logs` (exit code `1`). The queue moves on to the next task immediately. EditMode tests still run on the last successfully built assemblies.
 - Entering play mode does not steal your focus. Both bridge entries — `play` and `tests --mode PlayMode` — suppress the Editor's habit of activating the Game View, and the session runs with `Application.runInBackground`, so the game keeps ticking while Unity sits in the background. If the Editor still jumps to the front, the bridge hands focus back to the window that had it, at most twice per entry — click into Unity yourself and it stays yours. Windows only; elsewhere the suppression applies and the hand-back is a no-op.
 - `agentbridge status` reports `IsPlaying`, `PlaySessionAgentId` and `PlaySessionDeadlineUtc`; in `--format human` an unowned play mode reads `Playing: yes (manual)`. `doctor` warns with `! editor_playing_manual`. If a wait does run out of its queue budget while the Editor plays manually, the `Status: queued` result carries `Reason: editor_playing_manual`.
 
@@ -718,6 +741,7 @@ Telemetry never fails a task: a write that cannot happen is dropped silently.
 - A running task can be aborted via **Tools → Agent Bridge → Cancel Running Task**
 - `csharp` tasks compile against whatever assemblies are already loaded in the domain — they cannot reference project code that has compilation errors, since the broken assembly itself would never have loaded. Use a `compile` task first to confirm the project builds.
 - Background execution uses a private Unity API with a native Windows fallback. macOS/Linux behavior has not been runtime-validated, and a blocked main thread still requires intervention. See [Running While the Editor Is in the Background](#running-while-the-editor-is-in-the-background).
+- Modal dialogs are detected on Windows and, from Unity 6.7, through `EditorDialogEvents` on every platform; Unity before 6.7 on macOS/Linux cannot report them, and dialogs raised before the package loads are never seen. See [Modal Dialogs](#modal-dialogs).
 - Roslyn ships inside the package (`Roslyn~/`), so no download and no network access are required; third-party licenses are in `Roslyn~/THIRD-PARTY-NOTICES.md`.
 
 ## Releasing
