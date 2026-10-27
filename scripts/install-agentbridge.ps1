@@ -103,6 +103,79 @@ function Get-ReleaseAsset {
 	}
 }
 
+function Read-TarBytes {
+	param($Stream, [byte[]]$Buffer, [int]$Count)
+	$offset = 0
+	while ($offset -lt $Count) {
+		$read = $Stream.Read($Buffer, $offset, $Count - $offset)
+		if ($read -le 0) { break }
+		$offset += $read
+	}
+	return $offset
+}
+
+function Get-TarString {
+	param([byte[]]$Header, [int]$Offset, [int]$Length)
+	$end = [Array]::IndexOf($Header, [byte]0, $Offset, $Length)
+	if ($end -lt 0) { $end = $Offset + $Length }
+	return [Text.Encoding]::UTF8.GetString($Header, $Offset, $end - $Offset)
+}
+
+function Expand-TarGzEntry {
+	param([string]$Archive, [string]$EntryName, [string]$Destination)
+	# PATH may resolve tar to Git/MSYS GNU tar, which reads "C:\..." as a remote host.
+	# Reading the archive in-process removes the dependency on whichever tar comes first.
+	$file = [IO.File]::OpenRead($Archive)
+	try {
+		$gzip = New-Object IO.Compression.GZipStream($file, [IO.Compression.CompressionMode]::Decompress)
+		try {
+			$header = New-Object byte[] 512
+			$buffer = New-Object byte[] 81920
+			$longName = $null
+			while ($true) {
+				$read = Read-TarBytes $gzip $header 512
+				if ($read -eq 0) { break }
+				if ($read -ne 512) { throw "Truncated tar header." }
+				if (@($header | Where-Object { $_ -ne 0 }).Count -eq 0) { break }
+				$sizeText = (Get-TarString $header 124 12).Trim([char]0, [char]32)
+				if ($sizeText -notmatch '^[0-7]+$') { throw "Invalid tar entry size '$sizeText'." }
+				$size = [Convert]::ToInt64($sizeText, 8)
+				$type = [char]$header[156]
+				$name = Get-TarString $header 0 100
+				if ((Get-TarString $header 257 5) -eq "ustar") {
+					$prefix = Get-TarString $header 345 155
+					if ($prefix) { $name = "$prefix/$name" }
+				}
+				if ($longName) { $name = $longName; $longName = $null }
+				while ($name.StartsWith("./")) { $name = $name.Substring(2) }
+
+				$output = $null
+				$nameBytes = $null
+				if ($type -eq 'L') { $nameBytes = New-Object IO.MemoryStream }
+				elseif (($type -eq '0' -or $type -eq [char]0) -and $name -eq $EntryName) {
+					$output = [IO.File]::Create($Destination)
+				}
+				try {
+					$remaining = $size
+					while ($remaining -gt 0) {
+						$chunk = [int][Math]::Min([long]$buffer.Length, $remaining)
+						$got = Read-TarBytes $gzip $buffer $chunk
+						if ($got -ne $chunk) { throw "Truncated tar entry '$name'." }
+						if ($output) { $output.Write($buffer, 0, $got) }
+						if ($nameBytes) { $nameBytes.Write($buffer, 0, $got) }
+						$remaining -= $got
+					}
+				} finally { if ($output) { $output.Dispose() } }
+				if ($nameBytes) { $longName = [Text.Encoding]::UTF8.GetString($nameBytes.ToArray()).TrimEnd([char]0) }
+				$padding = [int]((512 - ($size % 512)) % 512)
+				if ($padding -gt 0 -and (Read-TarBytes $gzip $buffer $padding) -ne $padding) { throw "Truncated tar padding." }
+				if ($output) { return $true }
+			}
+		} finally { $gzip.Dispose() }
+	} finally { $file.Dispose() }
+	return $false
+}
+
 $temporaryDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ("agentbridge-install-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $temporaryDirectory | Out-Null
 $committed = $false
@@ -122,8 +195,8 @@ try {
 			Add-Type -AssemblyName System.IO.Compression.FileSystem
 			[IO.Compression.ZipFile]::ExtractToDirectory($archivePath, $expandedPath)
 		} else {
-			& tar -xzf $archivePath -C $expandedPath
-			if ($LASTEXITCODE -ne 0) { throw "Failed to extract $($target.Asset). The tar command is required (Windows 10 1803 or newer)." }
+			try { Expand-TarGzEntry $archivePath $target.Binary (Join-Path $expandedPath $target.Binary) | Out-Null }
+			catch { throw "Failed to extract $($target.Asset). $($_.Exception.Message)" }
 		}
 		$source = Join-Path $expandedPath $target.Binary
 		if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Missing $($target.Binary) in $($target.Asset)" }

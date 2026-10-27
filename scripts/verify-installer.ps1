@@ -28,7 +28,8 @@ try {
 	$linuxSource = New-Item -ItemType Directory -Path (Join-Path $testRoot "linux-source")
 	[IO.File]::WriteAllText((Join-Path $linuxSource.FullName "agentbridge"), "new linux CLI")
 	$tarball = Join-Path $testRoot "fixture.tar.gz"
-	& tar -czf $tarball -C $linuxSource.FullName agentbridge
+	# Git/MSYS tar earlier in PATH treats "C:" as a remote host; the fixture uses the system bsdtar.
+	& (Join-Path $env:SystemRoot "System32/tar.exe") -czf $tarball -C $linuxSource.FullName agentbridge
 	Check ($LASTEXITCODE -eq 0) "Could not create Linux archive fixture"
 	$zipHash = (Get-FileHash -LiteralPath $zip).Hash
 	$tarHash = (Get-FileHash -LiteralPath $tarball).Hash
@@ -39,6 +40,8 @@ try {
 	$env:PSModulePath = Join-Path $testRoot "no-modules"
 	function Get-FileHash { throw "Get-FileHash is unavailable in this regression scenario" }
 	function Expand-Archive { throw "Expand-Archive is unavailable in this regression scenario" }
+	# The installer extracts tar.gz in-process: any tar found in PATH must stay unused.
+	function tar { throw "tar from PATH must not be used by the installer" }
 	function Invoke-WebRequest {
 		param($Uri, $OutFile, [switch]$UseBasicParsing)
 		Check $UseBasicParsing "Basic parsing is required"
@@ -92,9 +95,15 @@ try {
 	$fixtureState.Missing = 'agentbridge-linux-x64.tar.gz'
 	Expect-Failure { & $installer -Version test -Rid win-x64 -Project $project -InstallDirectory $destination -NoPathUpdate } 'Failed to download*'
 	$fixtureState.Missing = ''
-	function tar { $global:LASTEXITCODE = 1 }
+	$validTarball = $tarball
+	$validTarHash = $tarHash
+	$tarball = Join-Path $testRoot "corrupt.tar.gz"
+	[IO.File]::WriteAllText($tarball, "not a gzip archive")
+	$sha = [Security.Cryptography.SHA256]::Create()
+	try { $tarHash = [BitConverter]::ToString($sha.ComputeHash([IO.File]::ReadAllBytes($tarball))).Replace('-', '') }
+	finally { $sha.Dispose() }
 	try { Expect-Failure { & $installer -Version test -Rid win-x64 -Project $project -InstallDirectory $destination -NoPathUpdate } 'Failed to extract*' }
-	finally { Remove-Item Function:tar }
+	finally { $tarball = $validTarball; $tarHash = $validTarHash }
 	Check-Bytes $native "old windows CLI"
 	Check-Bytes $linux "old linux CLI"
 	# A failure during publication of Linux rolls Windows back too.
