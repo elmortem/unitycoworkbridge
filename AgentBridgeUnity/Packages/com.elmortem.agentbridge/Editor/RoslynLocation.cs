@@ -9,5 +9,6 @@ namespace AgentBridge
 		public bool Available;
 		public string Reason;
 		public string DirectoryPath;
+		public string Version;
 	}
 }

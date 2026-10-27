@@ -52,8 +52,10 @@ namespace AgentBridge
 			}
 
 			var result = new List<object>();
+			var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-			foreach (System.Reflection.Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+			foreach (System.Reflection.Assembly assembly in EnumerateAssemblies())
 			{
 				if (assembly.IsDynamic)
 				{
@@ -66,30 +68,63 @@ namespace AgentBridge
 					continue;
 				}
 
-				string location;
-				try
-				{
-					location = assembly.Location;
-				}
-				catch
+				string location = AssemblyCompat.GetAssemblyPath(assembly);
+				if (string.IsNullOrEmpty(location) || !File.Exists(location) || !paths.Add(Path.GetFullPath(location)))
 				{
 					continue;
 				}
 
-				if (string.IsNullOrEmpty(location) || !File.Exists(location))
+				names.Add(name);
+				AddReference(result, location);
+			}
+
+			// CoreCLR loads facades such as System.Runtime lazily, yet Unity's assemblies are built
+			// against them, so a task would fail with CS0012 without the platform list.
+			foreach (KeyValuePair<string, string> platform in AssemblyCompat.GetPlatformAssemblies())
+			{
+				if (!IsFrameworkAssembly(platform.Key) || names.Contains(platform.Key) || !File.Exists(platform.Value)
+					|| !paths.Add(Path.GetFullPath(platform.Value)))
 				{
 					continue;
 				}
 
-				object reference = GetOrCreateReference(location);
-				if (reference != null)
-				{
-					result.Add(reference);
-				}
+				AddReference(result, platform.Value);
 			}
 
 			_snapshot = result;
 			return _snapshot;
+		}
+
+		// AppDomain sees every load context and Unity's list sees its code-reload contexts; on Mono
+		// both are the same and the path check above drops the repeats.
+		private static IEnumerable<System.Reflection.Assembly> EnumerateAssemblies()
+		{
+			foreach (System.Reflection.Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+			{
+				yield return assembly;
+			}
+
+			foreach (System.Reflection.Assembly assembly in AssemblyCompat.GetLoadedAssemblies())
+			{
+				yield return assembly;
+			}
+		}
+
+		private static bool IsFrameworkAssembly(string name)
+		{
+			return name == "mscorlib" || name == "netstandard" || name == "System"
+				|| name.StartsWith("System.", StringComparison.Ordinal)
+				|| name.StartsWith("Microsoft.Win32.", StringComparison.Ordinal)
+				|| name == "Microsoft.CSharp" || name == "Microsoft.VisualBasic";
+		}
+
+		private static void AddReference(List<object> result, string location)
+		{
+			object reference = GetOrCreateReference(location);
+			if (reference != null)
+			{
+				result.Add(reference);
+			}
 		}
 
 		private static object GetOrCreateReference(string path)

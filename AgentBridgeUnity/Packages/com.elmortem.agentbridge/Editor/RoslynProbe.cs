@@ -10,6 +10,7 @@ namespace AgentBridge
 			AppendResult(builder, RoslynSourceKind.Vendored);
 			AppendResult(builder, RoslynSourceKind.Project);
 			AppendResult(builder, RoslynSourceKind.Local);
+			AppendResult(builder, RoslynSourceKind.Editor);
 			return builder.ToString();
 		}
 

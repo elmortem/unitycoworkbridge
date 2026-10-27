@@ -98,6 +98,8 @@ The package has no dependencies on other project assemblies and will work even i
 
 Roslyn is bundled in the package under `Roslyn~/` — nothing to download and no setup step.
 
+On a CoreCLR editor (Unity 7) the bundled Roslyn is loaded into a private `AssemblyLoadContext`, because the editor refuses `Assembly.LoadFrom` for its dependencies (`Could not load file or assembly 'Microsoft.CodeAnalysis …'. Operation is not supported`). Task assemblies are loaded through Unity's `CurrentAssemblies.LoadFromBytes`. If the bundled copy still fails, **Tools → Agent Bridge → Setup…** offers an **Editor** source — the Roslyn that ships with the Unity 7 editor itself; `Auto` falls back to it after `Vendored`.
+
 ## Installing Agent Plugin
 
 ### Requirements

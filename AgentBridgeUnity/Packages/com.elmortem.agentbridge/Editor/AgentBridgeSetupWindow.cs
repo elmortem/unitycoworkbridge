@@ -9,7 +9,8 @@ namespace AgentBridge
 		{
 			RoslynSourceKind.Vendored,
 			RoslynSourceKind.Project,
-			RoslynSourceKind.Local
+			RoslynSourceKind.Local,
+			RoslynSourceKind.Editor
 		};
 
 		private Vector2 _scroll;
@@ -149,7 +150,10 @@ namespace AgentBridge
 			EditorGUILayout.LabelField(kind + " — " + DescriptionFor(kind), EditorStyles.boldLabel);
 
 			EditorGUILayout.BeginHorizontal();
-			EditorGUILayout.SelectableLabel(location.Available ? "Ready" : location.Reason, GUILayout.Height(EditorGUIUtility.singleLineHeight));
+			string state = location.Available
+				? "Ready" + (string.IsNullOrEmpty(location.Version) ? "" : " (" + location.Version + ")")
+				: location.Reason;
+			EditorGUILayout.SelectableLabel(state, GUILayout.Height(EditorGUIUtility.singleLineHeight));
 
 			using (new EditorGUI.DisabledScope(!location.Available))
 			{
@@ -173,6 +177,8 @@ namespace AgentBridge
 					return "Roslyn already referenced by the project";
 				case RoslynSourceKind.Local:
 					return "Roslyn from a local folder";
+				case RoslynSourceKind.Editor:
+					return "Roslyn shipped with a CoreCLR editor (Unity 7)";
 				default:
 					return "";
 			}

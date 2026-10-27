@@ -279,7 +279,9 @@ package.json       версия и зависимости пакета
 
 | Файл | Роль |
 |---|---|
-| `RoslynResolver.cs` | поиск сборок Roslyn (вендоренных или системных) |
+| `RoslynResolver.cs` | поиск сборок Roslyn: Project, Local, Vendored, Editor (Roslyn редактора на CoreCLR) |
+| `RoslynLoadContext.cs` | загрузка Roslyn в собственный `AssemblyLoadContext` на CoreCLR-редакторе (Unity 7), контекст переживает code reload через данные AppDomain |
+| `AssemblyCompat.cs` | Mono/CoreCLR-совместимость через рефлексию: `CurrentAssemblies`, `GetLoadedAssemblyPath`, список платформенных сборок |
 | `RoslynLocation.cs` / `RoslynSourceKind.cs` | где и какого происхождения найденный Roslyn |
 | `RoslynProbe.cs` | проверка готовности Roslyn для `doctor` |
 | `RoslynCompiler.cs` | компиляция скрипта в память, без файлов в `Assets/` и без domain reload |

@@ -56,7 +56,8 @@ namespace AgentBridge
 			Current.UnityVersion = Application.unityVersion;
 			Current.EditorPid = Process.GetCurrentProcess().Id;
 			Current.SessionId = Guid.NewGuid().ToString("N");
-			Current.AssemblyBuildTimeUtc = File.GetLastWriteTimeUtc(typeof(BridgeStatusWriter).Assembly.Location).ToString("o");
+			string assemblyPath = AssemblyCompat.GetAssemblyPath(typeof(BridgeStatusWriter).Assembly);
+			Current.AssemblyBuildTimeUtc = assemblyPath != null ? File.GetLastWriteTimeUtc(assemblyPath).ToString("o") : null;
 			Current.Enabled = AgentBridgeSettingsStore.IsEnabled();
 			Current.ActiveTaskId = null;
 			Current.HolderAgentSessionId = null;

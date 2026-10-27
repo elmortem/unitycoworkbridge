@@ -81,7 +81,7 @@ namespace AgentBridge
 							return result;
 						}
 
-						result.Assembly = Assembly.Load(peStream.ToArray(), pdbStream.ToArray());
+						result.Assembly = AssemblyCompat.LoadFromBytes(peStream.ToArray(), pdbStream.ToArray());
 					}
 				}
 				else
@@ -95,7 +95,7 @@ namespace AgentBridge
 						return result;
 					}
 
-					result.Assembly = Assembly.Load(peStream.ToArray());
+					result.Assembly = AssemblyCompat.LoadFromBytes(peStream.ToArray(), null);
 				}
 			}
 

@@ -5,6 +5,7 @@ namespace AgentBridge
 		Auto,
 		Vendored,
 		Project,
-		Local
+		Local,
+		Editor
 	}
 }

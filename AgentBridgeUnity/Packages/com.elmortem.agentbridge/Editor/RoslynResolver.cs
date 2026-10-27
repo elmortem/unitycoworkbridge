@@ -11,6 +11,14 @@ namespace AgentBridge
 	{
 		private const string CSharpDllFileName = "Microsoft.CodeAnalysis.CSharp.dll";
 		private const int MaxSearchDepth = 4;
+		private const int EditorSearchDepth = 3;
+
+		private static readonly string[] EditorRoslynDirectories =
+		{
+			"DotNetSdkRoslyn",
+			"Tools/Roslyn",
+			"Roslyn"
+		};
 
 		private static readonly Dictionary<RoslynSourceKind, RoslynLocation> _probeCache = new Dictionary<RoslynSourceKind, RoslynLocation>();
 
@@ -35,6 +43,8 @@ namespace AgentBridge
 					return ProbeProject();
 				case RoslynSourceKind.Local:
 					return ProbeDirectory(kind, AgentBridgeSettingsStore.GetRoslynLocalPath());
+				case RoslynSourceKind.Editor:
+					return ProbeEditor();
 				default:
 					return new RoslynLocation { Kind = kind, Available = false, Reason = "unsupported" };
 			}
@@ -64,7 +74,8 @@ namespace AgentBridge
 			{
 				RoslynSourceKind.Project,
 				RoslynSourceKind.Local,
-				RoslynSourceKind.Vendored
+				RoslynSourceKind.Vendored,
+				RoslynSourceKind.Editor
 			};
 
 			foreach (RoslynSourceKind kind in order)
@@ -171,25 +182,33 @@ namespace AgentBridge
 		{
 			string vendoredDirectory = GetVendoredDirectory();
 
-			foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+			foreach (Assembly assembly in AssemblyCompat.GetLoadedAssemblies())
 			{
 				if (assembly.GetName().Name != "Microsoft.CodeAnalysis.CSharp")
 				{
 					continue;
 				}
 
-				string assemblyLocation;
-				try
-				{
-					assemblyLocation = assembly.Location;
-				}
-				catch
+				string assemblyLocation = AssemblyCompat.GetAssemblyPath(assembly);
+
+				if (vendoredDirectory != null && !string.IsNullOrEmpty(assemblyLocation)
+					&& Path.GetFullPath(assemblyLocation).StartsWith(Path.GetFullPath(vendoredDirectory), StringComparison.OrdinalIgnoreCase))
 				{
 					continue;
 				}
 
-				if (vendoredDirectory != null && !string.IsNullOrEmpty(assemblyLocation)
-					&& Path.GetFullPath(assemblyLocation).StartsWith(Path.GetFullPath(vendoredDirectory), StringComparison.OrdinalIgnoreCase))
+				if (RoslynLoadContext.IsSupported)
+				{
+					// The bridge's own contexts and the editor's platform copy are other sources.
+					if (RoslynLoadContext.Owns(assembly) || IsPlatformPath(assemblyLocation))
+					{
+						continue;
+					}
+
+					return UseLoaded(RoslynSourceKind.Project, assembly, assemblyLocation);
+				}
+
+				if (string.IsNullOrEmpty(assemblyLocation))
 				{
 					continue;
 				}
@@ -225,6 +244,11 @@ namespace AgentBridge
 
 		private static RoslynLocation TryLoadAndVerify(RoslynSourceKind kind, string dllPath)
 		{
+			if (RoslynLoadContext.IsSupported)
+			{
+				return TryLoadIsolated(kind, dllPath);
+			}
+
 			string previousActiveDirectory = _activeDirectory;
 			try
 			{
@@ -258,13 +282,151 @@ namespace AgentBridge
 				CodeAnalysisAssembly = baseAssembly;
 				CodeAnalysisCSharpAssembly = csharpAssembly;
 
-				return new RoslynLocation { Kind = kind, Available = true, Reason = "ok", DirectoryPath = directory };
+				return new RoslynLocation { Kind = kind, Available = true, Reason = "ok", DirectoryPath = directory, Version = VersionOf(csharpAssembly) };
 			}
 			catch (Exception ex)
 			{
 				_activeDirectory = previousActiveDirectory;
 				return new RoslynLocation { Kind = kind, Available = false, Reason = ex.Message };
 			}
+		}
+
+		private static RoslynLocation TryLoadIsolated(RoslynSourceKind kind, string dllPath)
+		{
+			string directory = Path.GetDirectoryName(dllPath);
+			try
+			{
+				IList<Assembly> loaded = RoslynLoadContext.Load(directory);
+				Assembly csharpAssembly = FindByName(loaded, "Microsoft.CodeAnalysis.CSharp");
+				if (csharpAssembly == null)
+				{
+					return new RoslynLocation { Kind = kind, Available = false, Reason = CSharpDllFileName + " did not load", DirectoryPath = directory };
+				}
+
+				return UseLoaded(kind, csharpAssembly, directory, FindByName(loaded, "Microsoft.CodeAnalysis"));
+			}
+			catch (Exception ex)
+			{
+				return new RoslynLocation { Kind = kind, Available = false, Reason = ex.Message, DirectoryPath = directory };
+			}
+		}
+
+		// Binds to a Roslyn the runtime already resolved, instead of loading a second copy that
+		// would split its types from the first. The type lookup below pulls Microsoft.CodeAnalysis
+		// in through the assembly's own load context, so a broken dependency surfaces here.
+		private static RoslynLocation UseLoaded(RoslynSourceKind kind, Assembly csharpAssembly, string location, Assembly baseAssembly = null)
+		{
+			string directory = string.IsNullOrEmpty(location) ? null
+				: Directory.Exists(location) ? location : Path.GetDirectoryName(location);
+			try
+			{
+				Type syntaxTreeType = csharpAssembly.GetType("Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree");
+				if (syntaxTreeType == null)
+				{
+					return new RoslynLocation { Kind = kind, Available = false, Reason = "CSharpSyntaxTree type missing", DirectoryPath = directory };
+				}
+
+				if (baseAssembly == null)
+				{
+					Type baseTreeType = syntaxTreeType.BaseType;
+					while (baseTreeType != null && baseTreeType.FullName != "Microsoft.CodeAnalysis.SyntaxTree")
+					{
+						baseTreeType = baseTreeType.BaseType;
+					}
+
+					baseAssembly = baseTreeType != null ? baseTreeType.Assembly : null;
+				}
+
+				if (baseAssembly == null)
+				{
+					return new RoslynLocation { Kind = kind, Available = false, Reason = "Microsoft.CodeAnalysis.dll not found", DirectoryPath = directory };
+				}
+
+				CodeAnalysisAssembly = baseAssembly;
+				CodeAnalysisCSharpAssembly = csharpAssembly;
+
+				return new RoslynLocation { Kind = kind, Available = true, Reason = "ok", DirectoryPath = directory, Version = VersionOf(csharpAssembly) };
+			}
+			catch (Exception ex)
+			{
+				return new RoslynLocation { Kind = kind, Available = false, Reason = ex.Message, DirectoryPath = directory };
+			}
+		}
+
+		// Unity 7 compiles scripts with a Roslyn of its own. When the editor puts it on the
+		// runtime's platform list it is bound by name; otherwise the copy in the editor's
+		// installation is loaded like any other directory.
+		private static RoslynLocation ProbeEditor()
+		{
+			if (!RoslynLoadContext.IsSupported)
+			{
+				return new RoslynLocation { Kind = RoslynSourceKind.Editor, Available = false, Reason = "CoreCLR editor only" };
+			}
+
+			string platformPath;
+			if (AssemblyCompat.GetPlatformAssemblies().TryGetValue("Microsoft.CodeAnalysis.CSharp", out platformPath))
+			{
+				try
+				{
+					Assembly platformAssembly = Assembly.Load(new AssemblyName("Microsoft.CodeAnalysis.CSharp"));
+					return UseLoaded(RoslynSourceKind.Editor, platformAssembly, platformPath);
+				}
+				catch (Exception ex)
+				{
+					return new RoslynLocation { Kind = RoslynSourceKind.Editor, Available = false, Reason = ex.Message, DirectoryPath = Path.GetDirectoryName(platformPath) };
+				}
+			}
+
+			string contents = EditorApplication.applicationContentsPath;
+			string found = null;
+			foreach (string relative in EditorRoslynDirectories)
+			{
+				string candidate = Path.Combine(Path.Combine(contents, relative), CSharpDllFileName);
+				if (File.Exists(candidate))
+				{
+					found = candidate;
+					break;
+				}
+			}
+
+			if (found == null)
+			{
+				found = FindFileRecursive(contents, CSharpDllFileName, EditorSearchDepth);
+			}
+
+			if (found == null)
+			{
+				return new RoslynLocation { Kind = RoslynSourceKind.Editor, Available = false, Reason = "not found in " + contents };
+			}
+
+			return TryLoadIsolated(RoslynSourceKind.Editor, found);
+		}
+
+		private static bool IsPlatformPath(string path)
+		{
+			string platformPath;
+			return !string.IsNullOrEmpty(path)
+				&& AssemblyCompat.GetPlatformAssemblies().TryGetValue(Path.GetFileNameWithoutExtension(path), out platformPath)
+				&& string.Equals(Path.GetFullPath(platformPath), Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase);
+		}
+
+		private static Assembly FindByName(IEnumerable<Assembly> assemblies, string name)
+		{
+			foreach (Assembly assembly in assemblies)
+			{
+				if (assembly.GetName().Name == name)
+				{
+					return assembly;
+				}
+			}
+
+			return null;
+		}
+
+		private static string VersionOf(Assembly assembly)
+		{
+			Version version = assembly.GetName().Version;
+			return version != null ? version.ToString() : null;
 		}
 
 		private static Assembly FindLoadedAssembly(string name)
