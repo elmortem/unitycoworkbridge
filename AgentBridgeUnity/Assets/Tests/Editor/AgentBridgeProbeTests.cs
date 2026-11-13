@@ -17,6 +17,7 @@ public class AgentBridgeProbeTests
 	private const string SavedScenePath = "Assets/AgentBridgeSceneSafetyTest.unity";
 	private const string TestScenePath = "Assets/InitTestSceneAgentBridgeSafety.unity";
 	private const string MissingMetaSourcePath = "Assets/AgentBridgeMissingMetaProbe.cs";
+	private const string RenamedPackageSourcePath = "Packages/AgentBridgeRenamedPackageProbe/Editor/RenamedPackageProbe.cs";
 	private const string PrefabProbePath = "Assets/AgentBridgePrefabStageProbe.prefab";
 	private const string SecondPrefabProbePath = "Assets/AgentBridgePrefabStageProbeB.prefab";
 	private const string WatcherLogsKey = SceneDirtyWatcher.OwnerTaskKey + "_Logs";
@@ -632,5 +633,19 @@ public static class SafePrefabStage
 			File.Delete(fullPath);
 			File.Delete(fullPath + ".meta");
 		}
+	}
+
+	[Test]
+	public void SourceImportVerifier_AcceptsEmbeddedPackageInFolderUnlikeItsName()
+	{
+		string projectRoot = Path.GetDirectoryName(Application.dataPath);
+		Assert.IsTrue(File.Exists(Path.Combine(projectRoot, RenamedPackageSourcePath)),
+			"The embedded package fixture must stay in a folder whose name differs from the package name.");
+
+		List<TaskDiagnostic> diagnostics = SourceImportVerifier.ValidateProjectSources()
+			.Where(item => item.File == RenamedPackageSourcePath)
+			.ToList();
+		Assert.IsEmpty(diagnostics,
+			"An imported and compiled source of an embedded package must pass verification whatever its folder name.");
 	}
 }

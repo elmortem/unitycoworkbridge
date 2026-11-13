@@ -8,6 +8,12 @@
         "com.unity.test-framework": "1.1.33"
       }
     },
+    "com.elmortem.agentbridge.renamedpackageprobe": {
+      "version": "file:AgentBridgeRenamedPackageProbe",
+      "depth": 0,
+      "source": "embedded",
+      "dependencies": {}
+    },
     "com.unity.collab-proxy": {
       "version": "2.12.4",
       "depth": 0,

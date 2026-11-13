@@ -15,14 +15,15 @@ namespace AgentBridge
 			var diagnostics = new List<TaskDiagnostic>();
 			string projectRoot = Path.GetFullPath(BridgePaths.ProjectRoot);
 			HashSet<string> compiledSources = CollectCompiledSources(projectRoot);
+			Dictionary<string, string> packageRoots = CollectPackageRoots();
 
-			ValidateRoot(Path.Combine(projectRoot, "Assets"), projectRoot, compiledSources, diagnostics);
-			ValidateRoot(Path.Combine(projectRoot, "Packages"), projectRoot, compiledSources, diagnostics);
+			ValidateRoot(Path.Combine(projectRoot, "Assets"), projectRoot, compiledSources, packageRoots, diagnostics);
+			ValidateRoot(Path.Combine(projectRoot, "Packages"), projectRoot, compiledSources, packageRoots, diagnostics);
 			return diagnostics;
 		}
 
 		private static void ValidateRoot(string root, string projectRoot, HashSet<string> compiledSources,
-			List<TaskDiagnostic> diagnostics)
+			Dictionary<string, string> packageRoots, List<TaskDiagnostic> diagnostics)
 		{
 			if (!Directory.Exists(root) || diagnostics.Count >= MaxDiagnostics)
 			{
@@ -36,22 +37,23 @@ namespace AgentBridge
 					break;
 				}
 
-				string assetPath = ToAssetPath(sourcePath, projectRoot);
-				if (IsIgnoredPackagePath(assetPath))
+				string projectPath = ToProjectPath(sourcePath, projectRoot);
+				if (IsIgnoredPackagePath(projectPath))
 				{
 					continue;
 				}
 
 				if (!File.Exists(sourcePath + ".meta"))
 				{
-					diagnostics.Add(Error("ABIMPORT001", assetPath,
+					diagnostics.Add(Error("ABIMPORT001", projectPath,
 						"C# source has no .meta file and is not proven to be imported by Unity."));
 					continue;
 				}
 
+				string assetPath = ToUnityAssetPath(sourcePath, projectPath, packageRoots);
 				if (string.IsNullOrEmpty(AssetDatabase.AssetPathToGUID(assetPath)))
 				{
-					diagnostics.Add(Error("ABIMPORT002", assetPath,
+					diagnostics.Add(Error("ABIMPORT002", projectPath,
 						"C# source has no Unity AssetDatabase GUID after a synchronous refresh."));
 					continue;
 				}
@@ -59,15 +61,15 @@ namespace AgentBridge
 				string assemblyName = CompilationPipeline.GetAssemblyNameFromScriptPath(assetPath);
 				if (string.IsNullOrEmpty(assemblyName))
 				{
-					diagnostics.Add(Error("ABIMPORT003", assetPath,
+					diagnostics.Add(Error("ABIMPORT003", projectPath,
 						"Unity did not assign the C# source to a script assembly."));
 					continue;
 				}
 
-				string fullPath = NormalizeFullPath(sourcePath);
-				if (!compiledSources.Contains(fullPath))
+				if (!compiledSources.Contains(NormalizeFullPath(sourcePath))
+					&& !compiledSources.Contains(NormalizeFullPath(Path.Combine(projectRoot, assetPath))))
 				{
-					diagnostics.Add(Error("ABIMPORT004", assetPath,
+					diagnostics.Add(Error("ABIMPORT004", projectPath,
 						"C# source is assigned to " + assemblyName + " but is absent from Unity's compiled source inventory."));
 				}
 			}
@@ -93,12 +95,49 @@ namespace AgentBridge
 			return result;
 		}
 
-		private static string ToAssetPath(string fullPath, string projectRoot)
+		private static Dictionary<string, string> CollectPackageRoots()
+		{
+			var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+			foreach (UnityEditor.PackageManager.PackageInfo package
+				in UnityEditor.PackageManager.PackageInfo.GetAllRegisteredPackages())
+			{
+				if (string.IsNullOrEmpty(package.resolvedPath))
+				{
+					continue;
+				}
+
+				result[NormalizeFullPath(package.resolvedPath).TrimEnd('/') + "/"] = package.assetPath + "/";
+			}
+
+			return result;
+		}
+
+		private static string ToProjectPath(string fullPath, string projectRoot)
 		{
 			string normalizedRoot = projectRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
 				+ Path.DirectorySeparatorChar;
 			string normalizedPath = Path.GetFullPath(fullPath);
 			return normalizedPath.Substring(normalizedRoot.Length).Replace('\\', '/');
+		}
+
+		private static string ToUnityAssetPath(string sourcePath, string projectPath,
+			Dictionary<string, string> packageRoots)
+		{
+			if (!projectPath.StartsWith("Packages/", StringComparison.OrdinalIgnoreCase))
+			{
+				return projectPath;
+			}
+
+			string fullPath = NormalizeFullPath(sourcePath);
+			foreach (KeyValuePair<string, string> packageRoot in packageRoots)
+			{
+				if (fullPath.StartsWith(packageRoot.Key, StringComparison.OrdinalIgnoreCase))
+				{
+					return packageRoot.Value + fullPath.Substring(packageRoot.Key.Length);
+				}
+			}
+
+			return projectPath;
 		}
 
 		private static string NormalizeFullPath(string path)

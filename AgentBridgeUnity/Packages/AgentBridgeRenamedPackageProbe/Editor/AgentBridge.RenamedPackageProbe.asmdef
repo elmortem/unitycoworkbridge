@@ -1,0 +1,6 @@
+{
+	"name": "AgentBridge.RenamedPackageProbe",
+	"includePlatforms": [
+		"Editor"
+	]
+}

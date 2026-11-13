@@ -1,0 +1,7 @@
+{
+	"name": "com.elmortem.agentbridge.renamedpackageprobe",
+	"displayName": "Agent Bridge Renamed Package Probe",
+	"version": "1.0.0",
+	"unity": "2022.3",
+	"description": "Test fixture of the host project: an embedded package whose folder name differs from its package name."
+}

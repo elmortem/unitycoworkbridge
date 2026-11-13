@@ -483,6 +483,7 @@ Assets/Scenes/SampleScene.unity              сцена для задач и п�
 Assets/Tests/Editor/                         EditMode-тесты (asmdef AgentBridge.ProbeTests)
 Assets/Tests/PlayMode/                       PlayMode-тесты (asmdef AgentBridge.PlayModeProbeTests)
 Packages/com.elmortem.agentbridge/           ← сам пакет
+Packages/AgentBridgeRenamedPackageProbe/     фикстура: встроенный пакет, папка которого не совпадает с именем пакета
 ProjectSettings/AgentBridge.json             настройки моста
 ProjectSettings/CoworkBridge.json            настройки предыдущего поколения моста
 *.csproj                                     генерируются Unity, в репозитории не редактируются вручную
