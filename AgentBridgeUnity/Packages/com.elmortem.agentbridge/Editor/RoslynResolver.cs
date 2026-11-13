@@ -25,12 +25,36 @@ namespace AgentBridge
 		private static bool _handlerInstalled;
 		private static string _activeDirectory;
 
-		public static Assembly CodeAnalysisAssembly { get; private set; }
-		public static Assembly CodeAnalysisCSharpAssembly { get; private set; }
+		// Probing a source only reports it. The pair compiles use changes in one step when a source
+		// is activated, so a compile on the thread pool never sees two copies of Roslyn mixed.
+		private static volatile RoslynLocation _active;
+
+		public static RoslynLocation Active
+		{
+			get { return _active; }
+		}
+
+		public static Assembly CodeAnalysisAssembly
+		{
+			get
+			{
+				RoslynLocation active = _active;
+				return active != null ? active.CodeAnalysisAssembly : null;
+			}
+		}
+
+		public static Assembly CodeAnalysisCSharpAssembly
+		{
+			get
+			{
+				RoslynLocation active = _active;
+				return active != null ? active.CSharpAssembly : null;
+			}
+		}
 
 		public static bool IsReady
 		{
-			get { return CodeAnalysisAssembly != null && CodeAnalysisCSharpAssembly != null; }
+			get { return _active != null; }
 		}
 
 		public static RoslynLocation Probe(RoslynSourceKind kind)
@@ -90,15 +114,26 @@ namespace AgentBridge
 			return new RoslynLocation { Kind = RoslynSourceKind.Auto, Available = false, Reason = "no source available" };
 		}
 
+		// Resolves the configured source and makes it the one compiles use.
 		public static RoslynLocation ResolveConfigured()
 		{
 			RoslynSourceKind configured = ParseSourceKind(AgentBridgeSettingsStore.GetRoslynSource());
-			if (configured == RoslynSourceKind.Auto)
+			RoslynLocation location = configured == RoslynSourceKind.Auto ? ResolveAuto() : ProbeCached(configured);
+			Activate(location);
+			return location;
+		}
+
+		private static void Activate(RoslynLocation location)
+		{
+			if (location == null || !location.Available || location.CSharpAssembly == null || location.CodeAnalysisAssembly == null)
 			{
-				return ResolveAuto();
+				_active = null;
+				return;
 			}
 
-			return ProbeCached(configured);
+			// Mono binds the rest of Roslyn's dependencies lazily, through the resolve handler.
+			_activeDirectory = location.DirectoryPath;
+			_active = location;
 		}
 
 		private static string GetVendoredDirectory()
@@ -249,45 +284,23 @@ namespace AgentBridge
 				return TryLoadIsolated(kind, dllPath);
 			}
 
-			string previousActiveDirectory = _activeDirectory;
+			string directory = Path.GetDirectoryName(dllPath);
+			string activeDirectory = _activeDirectory;
 			try
 			{
-				string directory = Path.GetDirectoryName(dllPath);
+				// The resolve handler serves the probed directory while its compiler binds
+				// Microsoft.CodeAnalysis, then goes back to the active source.
 				InstallAssemblyResolve(directory);
-
 				Assembly csharpAssembly = Assembly.LoadFrom(dllPath);
-				Type syntaxTreeType = csharpAssembly.GetType("Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree");
-				if (syntaxTreeType == null)
-				{
-					_activeDirectory = previousActiveDirectory;
-					return new RoslynLocation { Kind = kind, Available = false, Reason = "CSharpSyntaxTree type missing", DirectoryPath = directory };
-				}
-
-				Assembly baseAssembly = FindLoadedAssembly("Microsoft.CodeAnalysis");
-				if (baseAssembly == null)
-				{
-					string baseDllPath = Path.Combine(directory, "Microsoft.CodeAnalysis.dll");
-					if (File.Exists(baseDllPath))
-					{
-						baseAssembly = Assembly.LoadFrom(baseDllPath);
-					}
-				}
-
-				if (baseAssembly == null)
-				{
-					_activeDirectory = previousActiveDirectory;
-					return new RoslynLocation { Kind = kind, Available = false, Reason = "Microsoft.CodeAnalysis.dll not found", DirectoryPath = directory };
-				}
-
-				CodeAnalysisAssembly = baseAssembly;
-				CodeAnalysisCSharpAssembly = csharpAssembly;
-
-				return new RoslynLocation { Kind = kind, Available = true, Reason = "ok", DirectoryPath = directory, Version = VersionOf(csharpAssembly) };
+				return UseLoaded(kind, csharpAssembly, directory);
 			}
 			catch (Exception ex)
 			{
-				_activeDirectory = previousActiveDirectory;
-				return new RoslynLocation { Kind = kind, Available = false, Reason = ex.Message };
+				return new RoslynLocation { Kind = kind, Available = false, Reason = ex.Message, DirectoryPath = directory };
+			}
+			finally
+			{
+				_activeDirectory = activeDirectory;
 			}
 		}
 
@@ -303,7 +316,7 @@ namespace AgentBridge
 					return new RoslynLocation { Kind = kind, Available = false, Reason = CSharpDllFileName + " did not load", DirectoryPath = directory };
 				}
 
-				return UseLoaded(kind, csharpAssembly, directory, FindByName(loaded, "Microsoft.CodeAnalysis"));
+				return UseLoaded(kind, csharpAssembly, directory);
 			}
 			catch (Exception ex)
 			{
@@ -312,9 +325,13 @@ namespace AgentBridge
 		}
 
 		// Binds to a Roslyn the runtime already resolved, instead of loading a second copy that
-		// would split its types from the first. The type lookup below pulls Microsoft.CodeAnalysis
-		// in through the assembly's own load context, so a broken dependency surfaces here.
-		private static RoslynLocation UseLoaded(RoslynSourceKind kind, Assembly csharpAssembly, string location, Assembly baseAssembly = null)
+		// would split its types from the first. Microsoft.CodeAnalysis is taken from the compiler's
+		// own base types and never looked up by name: when the editor holds another copy of Roslyn
+		// (Unity MCP installs one into Assets/Plugins/NuGet), the first assembly with that name may
+		// belong to it, and its OutputKind or SyntaxTree would not fit this compiler. The walk also
+		// pulls the dependency in through the assembly's own load context, so a broken one surfaces here.
+		// Nothing global changes: the location carries the pair until ResolveConfigured activates it.
+		private static RoslynLocation UseLoaded(RoslynSourceKind kind, Assembly csharpAssembly, string location)
 		{
 			string directory = string.IsNullOrEmpty(location) ? null
 				: Directory.Exists(location) ? location : Path.GetDirectoryName(location);
@@ -326,26 +343,28 @@ namespace AgentBridge
 					return new RoslynLocation { Kind = kind, Available = false, Reason = "CSharpSyntaxTree type missing", DirectoryPath = directory };
 				}
 
-				if (baseAssembly == null)
+				Type baseTreeType = syntaxTreeType.BaseType;
+				while (baseTreeType != null && baseTreeType.FullName != "Microsoft.CodeAnalysis.SyntaxTree")
 				{
-					Type baseTreeType = syntaxTreeType.BaseType;
-					while (baseTreeType != null && baseTreeType.FullName != "Microsoft.CodeAnalysis.SyntaxTree")
-					{
-						baseTreeType = baseTreeType.BaseType;
-					}
-
-					baseAssembly = baseTreeType != null ? baseTreeType.Assembly : null;
+					baseTreeType = baseTreeType.BaseType;
 				}
 
+				Assembly baseAssembly = baseTreeType != null ? baseTreeType.Assembly : null;
 				if (baseAssembly == null)
 				{
 					return new RoslynLocation { Kind = kind, Available = false, Reason = "Microsoft.CodeAnalysis.dll not found", DirectoryPath = directory };
 				}
 
-				CodeAnalysisAssembly = baseAssembly;
-				CodeAnalysisCSharpAssembly = csharpAssembly;
-
-				return new RoslynLocation { Kind = kind, Available = true, Reason = "ok", DirectoryPath = directory, Version = VersionOf(csharpAssembly) };
+				return new RoslynLocation
+				{
+					Kind = kind,
+					Available = true,
+					Reason = "ok",
+					DirectoryPath = directory,
+					Version = VersionOf(csharpAssembly),
+					CSharpAssembly = csharpAssembly,
+					CodeAnalysisAssembly = baseAssembly
+				};
 			}
 			catch (Exception ex)
 			{
@@ -427,19 +446,6 @@ namespace AgentBridge
 		{
 			Version version = assembly.GetName().Version;
 			return version != null ? version.ToString() : null;
-		}
-
-		private static Assembly FindLoadedAssembly(string name)
-		{
-			foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
-			{
-				if (assembly.GetName().Name == name)
-				{
-					return assembly;
-				}
-			}
-
-			return null;
 		}
 
 		private static string FindFileRecursive(string rootDirectory, string fileName, int maxDepth)

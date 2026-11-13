@@ -100,6 +100,8 @@ Roslyn is bundled in the package under `Roslyn~/` — nothing to download and no
 
 On a CoreCLR editor (Unity 7) the bundled Roslyn is loaded into a private `AssemblyLoadContext`, because the editor refuses `Assembly.LoadFrom` for its dependencies (`Could not load file or assembly 'Microsoft.CodeAnalysis …'. Operation is not supported`). Task assemblies are loaded through Unity's `CurrentAssemblies.LoadFromBytes`. If the bundled copy still fails, **Tools → Agent Bridge → Setup…** offers an **Editor** source — the Roslyn that ships with the Unity 7 editor itself; `Auto` falls back to it after `Vendored`.
 
+Some packages bring their own Roslyn into the editor: Unity MCP (`com.ivanmurzak.unity.mcp`), for example, installs `Microsoft.CodeAnalysis` into `Assets/Plugins/NuGet`. `Auto` uses such a copy first (**Project**) instead of loading a second one. Whatever the source, Bridge pairs the C# compiler with the `Microsoft.CodeAnalysis` that compiler is actually bound to, so the bundled copy also works next to a different project version. Package versions before 0.43.1 took the first loaded `Microsoft.CodeAnalysis` by name and failed every `csharp` task with `Object reference not set to an instance of an object` in such projects. **Use** in **Tools → Agent Bridge → Setup…** applies the chosen source to the next task without a domain reload; opening the window or running `doctor` only probes the sources and never switches the compiler.
+
 ## Installing Agent Plugin
 
 ### Requirements
@@ -358,6 +360,8 @@ public static class Task_20260226_143052
 ```
 
 The class name must match the file name — that name becomes the `TaskId`. `Run()` must return `Task<string>` (an overload taking a `CancellationToken` is also accepted and preferred when present) — any other signature is rejected before compilation. Bridge compiles the script in memory with Roslyn and invokes `Run()` on the main thread without blocking it, so you can freely `await` async APIs (thread pool, `Task.Delay`, Unity async operations); it writes the result only after the returned `Task` completes. Blocking constructs (`.Wait()`, `.GetAwaiter().GetResult()`, `.Result`, `Thread.Sleep`, unconditional `while(true)`/`for(;;)`) are rejected before execution — use `await` instead.
+
+When the script throws, the task ends as `runtime_error` with the exception message and its stack trace in `Logs`. A failure inside Bridge before the script runs reads `Agent Bridge failed to compile the task: …` and carries the full exception chain: it is not a bug in the script, so rewriting the script will not help.
 
 ### Cleaning Up Tasks
 

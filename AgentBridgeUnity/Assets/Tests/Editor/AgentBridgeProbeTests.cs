@@ -187,6 +187,42 @@ public class AgentBridgeProbeTests
 	}
 
 	[Test]
+	public void RoslynProbe_DoesNotSwitchTheActiveCompiler()
+	{
+		RoslynResolver.ResolveConfigured();
+		RoslynLocation active = RoslynResolver.Active;
+		Assert.IsNotNull(active, "Roslyn must resolve in the host project.");
+
+		RoslynResolver.ClearProbeCache();
+		RoslynProbe.Run();
+
+		Assert.AreSame(active, RoslynResolver.Active, "Probing sources (Setup window, doctor) must not change the pair compiles use.");
+	}
+
+	[Test]
+	public void ActiveRoslyn_PairsCompilerWithTheCodeAnalysisItIsBoundTo()
+	{
+		RoslynResolver.ResolveConfigured();
+		Assembly csharp = RoslynResolver.CodeAnalysisCSharpAssembly;
+		Assert.IsNotNull(csharp, "Roslyn must resolve in the host project.");
+
+		// A project may hold another copy of Roslyn (Unity MCP ships one); the pair must still be one copy.
+		Type tree = csharp.GetType("Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree");
+		while (tree != null && tree.FullName != "Microsoft.CodeAnalysis.SyntaxTree")
+		{
+			tree = tree.BaseType;
+		}
+
+		Assert.IsNotNull(tree);
+		Assert.AreSame(tree.Assembly, RoslynResolver.CodeAnalysisAssembly);
+
+		Type outputKind = RoslynResolver.CodeAnalysisAssembly.GetType("Microsoft.CodeAnalysis.OutputKind");
+		Type options = csharp.GetType("Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions");
+		Assert.IsNotNull(RoslynReflectionHelper.FindBestConstructor(options, outputKind),
+			"CSharpCompilationOptions(OutputKind) is where a mixed pair used to fail with NullReferenceException.");
+	}
+
+	[Test]
 	public void SceneSafetyGuard_SavesDirtyPersistedScene()
 	{
 		Scene scene = SceneManager.GetActiveScene();

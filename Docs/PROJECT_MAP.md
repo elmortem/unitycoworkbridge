@@ -279,14 +279,14 @@ package.json       версия и зависимости пакета
 
 | Файл | Роль |
 |---|---|
-| `RoslynResolver.cs` | поиск сборок Roslyn: Project, Local, Vendored, Editor (Roslyn редактора на CoreCLR) |
+| `RoslynResolver.cs` | поиск сборок Roslyn: Project, Local, Vendored, Editor (Roslyn редактора на CoreCLR). `Microsoft.CodeAnalysis` берётся из базовых типов самого компилятора, а не по имени — в проекте может быть вторая копия Roslyn (Unity MCP). Пробы источников без побочных эффектов; пару для компиляции меняет только `ResolveConfigured` (через `Active`), в том числе на лету из окна Setup |
 | `RoslynLoadContext.cs` | загрузка Roslyn в собственный `AssemblyLoadContext` на CoreCLR-редакторе (Unity 7), контекст переживает code reload через данные AppDomain |
 | `AssemblyCompat.cs` | Mono/CoreCLR-совместимость через рефлексию: `CurrentAssemblies`, `GetLoadedAssemblyPath`, список платформенных сборок |
-| `RoslynLocation.cs` / `RoslynSourceKind.cs` | где и какого происхождения найденный Roslyn |
+| `RoslynLocation.cs` / `RoslynSourceKind.cs` | где и какого происхождения найденный Roslyn, плюс пара сборок (компилятор и его `Microsoft.CodeAnalysis`) |
 | `RoslynProbe.cs` | проверка готовности Roslyn для `doctor` |
-| `RoslynCompiler.cs` | компиляция скрипта в память, без файлов в `Assets/` и без domain reload |
+| `RoslynCompiler.cs` | компиляция скрипта в память, без файлов в `Assets/` и без domain reload; одна пара сборок на всю компиляцию, отсутствующий член Roslyn — явная ошибка с версиями и путями сборок |
 | `RoslynReflectionHelper.cs` | доступ к Roslyn через рефлексию |
-| `ReferenceCatalog.cs` | набор ссылок на сборки проекта для компиляции |
+| `ReferenceCatalog.cs` | набор ссылок на сборки проекта для компиляции; кэш принадлежит `Microsoft.CodeAnalysis`, который его построил, и сбрасывается при смене источника |
 | `SourceGuardrail.cs` | отклонение блокирующих и модальных API **до** исполнения |
 | `GuardrailViolation.cs` | описание нарушения guardrail |
 | `CompileResult.cs` | результат компиляции |

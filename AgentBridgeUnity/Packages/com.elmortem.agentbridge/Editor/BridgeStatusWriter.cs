@@ -74,9 +74,7 @@ namespace AgentBridge
 			Current.Capabilities = BuildCapabilities();
 			RefreshCoordination();
 
-			RoslynLocation location = RoslynResolver.ResolveConfigured();
-			Current.RoslynReady = location.Available;
-			Current.RoslynSource = location.Available ? location.Kind.ToString() : AgentBridgeSettingsStore.GetRoslynSource();
+			ApplyRoslyn(RoslynResolver.ResolveConfigured());
 
 			Current.WakeTimerInstalled = AgentEditorWakeTimer.Installed;
 			Current.WakeTimerKind = AgentEditorWakeTimer.Kind ?? "none";
@@ -85,6 +83,20 @@ namespace AgentBridge
 			Current.TelemetryEnabled = AgentBridgeSettingsStore.GetTelemetryEnabled();
 
 			Write();
+		}
+
+		// The Setup window switches the Roslyn source while the editor runs; the next task and
+		// status.json follow the new pair without a domain reload.
+		public static void RefreshRoslyn()
+		{
+			ApplyRoslyn(RoslynResolver.ResolveConfigured());
+			Write();
+		}
+
+		private static void ApplyRoslyn(RoslynLocation location)
+		{
+			Current.RoslynReady = location.Available;
+			Current.RoslynSource = location.Available ? location.Kind.ToString() : AgentBridgeSettingsStore.GetRoslynSource();
 		}
 
 		// Emit after EditorTickPump has published its initialized wake backend. Static

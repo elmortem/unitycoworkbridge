@@ -20,7 +20,9 @@ namespace AgentBridge
 				RoslynResolver.ResolveConfigured();
 			}
 
-			if (!RoslynResolver.IsReady)
+			// One pair for the whole compile, even if the source is switched meanwhile.
+			RoslynLocation roslyn = RoslynResolver.Active;
+			if (roslyn == null)
 			{
 				result.Success = false;
 				result.Diagnostics.Add(new TaskDiagnostic
@@ -33,7 +35,7 @@ namespace AgentBridge
 				return result;
 			}
 
-			object tree = ParseText(source, sourcePath, cancellationToken);
+			object tree = ParseText(roslyn, source, sourcePath, cancellationToken);
 
 			List<GuardrailViolation> violations;
 			if (!SourceGuardrail.TryValidate(tree, out violations))
@@ -60,9 +62,9 @@ namespace AgentBridge
 			int counter = Interlocked.Increment(ref _counter);
 			string assemblyName = "AgentTask_" + taskId + "_" + counter;
 
-			dynamic compilation = CreateCompilation(assemblyName, tree);
+			dynamic compilation = CreateCompilation(roslyn, assemblyName, tree);
 			bool emitPdb = AgentBridgeSettingsStore.GetEmitPdb();
-			dynamic emitOptions = CreatePortableEmitOptions();
+			dynamic emitOptions = CreatePortableEmitOptions(roslyn);
 
 			using (var peStream = new MemoryStream())
 			{
@@ -139,31 +141,34 @@ namespace AgentBridge
 			}
 		}
 
-		private static object CreatePortableEmitOptions()
+		private static object CreatePortableEmitOptions(RoslynLocation roslyn)
 		{
-			Type emitOptionsType = RoslynResolver.CodeAnalysisAssembly.GetType("Microsoft.CodeAnalysis.Emit.EmitOptions");
-			Type debugFormatType = RoslynResolver.CodeAnalysisAssembly.GetType("Microsoft.CodeAnalysis.Emit.DebugInformationFormat");
+			Type emitOptionsType = RequireType(roslyn, roslyn.CodeAnalysisAssembly, "Microsoft.CodeAnalysis.Emit.EmitOptions");
+			Type debugFormatType = RequireType(roslyn, roslyn.CodeAnalysisAssembly, "Microsoft.CodeAnalysis.Emit.DebugInformationFormat");
 
 			object portable = Enum.Parse(debugFormatType, "PortablePdb");
 
-			ConstructorInfo ctor = RoslynReflectionHelper.FindConstructorWithParameterName(emitOptionsType, "debugInformationFormat");
+			ConstructorInfo ctor = Require(roslyn, RoslynReflectionHelper.FindConstructorWithParameterName(emitOptionsType, "debugInformationFormat"),
+				"EmitOptions(debugInformationFormat)");
 			var overrides = new Dictionary<string, object> { { "debugInformationFormat", portable } };
 			object[] args = RoslynReflectionHelper.BuildArgsAllNamed(ctor, overrides);
 			return ctor.Invoke(args);
 		}
 
-		private static object ParseText(string source, string path, CancellationToken cancellationToken)
+		private static object ParseText(RoslynLocation roslyn, string source, string path, CancellationToken cancellationToken)
 		{
-			Type syntaxTreeType = RoslynResolver.CodeAnalysisCSharpAssembly.GetType("Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree");
-			Type parseOptionsType = RoslynResolver.CodeAnalysisCSharpAssembly.GetType("Microsoft.CodeAnalysis.CSharp.CSharpParseOptions");
-			Type languageVersionType = RoslynResolver.CodeAnalysisCSharpAssembly.GetType("Microsoft.CodeAnalysis.CSharp.LanguageVersion");
+			Type syntaxTreeType = RequireType(roslyn, roslyn.CSharpAssembly, "Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree");
+			Type parseOptionsType = RequireType(roslyn, roslyn.CSharpAssembly, "Microsoft.CodeAnalysis.CSharp.CSharpParseOptions");
+			Type languageVersionType = RequireType(roslyn, roslyn.CSharpAssembly, "Microsoft.CodeAnalysis.CSharp.LanguageVersion");
 
 			dynamic latest = Enum.Parse(languageVersionType, "Latest");
-			object defaultOptions = RoslynReflectionHelper.GetStaticMember(parseOptionsType, "Default");
+			object defaultOptions = Require(roslyn, RoslynReflectionHelper.GetStaticMember(parseOptionsType, "Default"), "CSharpParseOptions.Default");
 			dynamic defaultOptionsDyn = defaultOptions;
 			dynamic parseOptions = defaultOptionsDyn.WithLanguageVersion(latest);
 
-			MethodInfo parseTextMethod = RoslynReflectionHelper.FindBestOverload(syntaxTreeType, "ParseText", BindingFlags.Public | BindingFlags.Static, typeof(string));
+			MethodInfo parseTextMethod = Require(roslyn,
+				RoslynReflectionHelper.FindBestOverload(syntaxTreeType, "ParseText", BindingFlags.Public | BindingFlags.Static, typeof(string)),
+				"CSharpSyntaxTree.ParseText(string)");
 
 			var overrides = new Dictionary<string, object>
 			{
@@ -177,25 +182,29 @@ namespace AgentBridge
 			return parseTextMethod.Invoke(null, args);
 		}
 
-		private static object CreateCompilation(string assemblyName, object tree)
+		private static object CreateCompilation(RoslynLocation roslyn, string assemblyName, object tree)
 		{
-			Type compilationType = RoslynResolver.CodeAnalysisCSharpAssembly.GetType("Microsoft.CodeAnalysis.CSharp.CSharpCompilation");
-			Type optionsType = RoslynResolver.CodeAnalysisCSharpAssembly.GetType("Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions");
-			Type outputKindType = RoslynResolver.CodeAnalysisAssembly.GetType("Microsoft.CodeAnalysis.OutputKind");
-			Type optimizationLevelType = RoslynResolver.CodeAnalysisAssembly.GetType("Microsoft.CodeAnalysis.OptimizationLevel");
+			Type compilationType = RequireType(roslyn, roslyn.CSharpAssembly, "Microsoft.CodeAnalysis.CSharp.CSharpCompilation");
+			Type optionsType = RequireType(roslyn, roslyn.CSharpAssembly, "Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions");
+			Type outputKindType = RequireType(roslyn, roslyn.CodeAnalysisAssembly, "Microsoft.CodeAnalysis.OutputKind");
+			Type optimizationLevelType = RequireType(roslyn, roslyn.CodeAnalysisAssembly, "Microsoft.CodeAnalysis.OptimizationLevel");
 
 			object dllOutputKind = Enum.Parse(outputKindType, "DynamicallyLinkedLibrary");
 			object debugLevel = Enum.Parse(optimizationLevelType, "Debug");
 
-			ConstructorInfo optionsCtor = RoslynReflectionHelper.FindBestConstructor(optionsType, outputKindType);
+			// The first place where the two assemblies meet: a miss means they come from different copies of Roslyn.
+			ConstructorInfo optionsCtor = Require(roslyn, RoslynReflectionHelper.FindBestConstructor(optionsType, outputKindType),
+				"CSharpCompilationOptions(OutputKind)");
 			var optionsOverrides = new Dictionary<string, object> { { "optimizationLevel", debugLevel } };
 			object[] optionsArgs = RoslynReflectionHelper.BuildArgs(optionsCtor, dllOutputKind, optionsOverrides);
 			object compilationOptions = optionsCtor.Invoke(optionsArgs);
 
-			object syntaxTreeList = CreateSyntaxTreeList(tree);
-			object referenceList = CreateReferenceList();
+			object syntaxTreeList = CreateSyntaxTreeList(roslyn, tree);
+			object referenceList = CreateReferenceList(roslyn);
 
-			MethodInfo createMethod = RoslynReflectionHelper.FindBestOverload(compilationType, "Create", BindingFlags.Public | BindingFlags.Static, typeof(string));
+			MethodInfo createMethod = Require(roslyn,
+				RoslynReflectionHelper.FindBestOverload(compilationType, "Create", BindingFlags.Public | BindingFlags.Static, typeof(string)),
+				"CSharpCompilation.Create(string)");
 			var createOverrides = new Dictionary<string, object>
 			{
 				{ "syntaxTrees", syntaxTreeList },
@@ -207,26 +216,55 @@ namespace AgentBridge
 			return createMethod.Invoke(null, createArgs);
 		}
 
-		private static object CreateSyntaxTreeList(object tree)
+		private static object CreateSyntaxTreeList(RoslynLocation roslyn, object tree)
 		{
-			Type syntaxTreeType = RoslynResolver.CodeAnalysisAssembly.GetType("Microsoft.CodeAnalysis.SyntaxTree");
+			Type syntaxTreeType = RequireType(roslyn, roslyn.CodeAnalysisAssembly, "Microsoft.CodeAnalysis.SyntaxTree");
 			object list = RoslynReflectionHelper.CreateGenericList(syntaxTreeType);
 			((IList)list).Add(tree);
 			return list;
 		}
 
-		private static object CreateReferenceList()
+		private static object CreateReferenceList(RoslynLocation roslyn)
 		{
-			Type metadataReferenceType = RoslynResolver.CodeAnalysisAssembly.GetType("Microsoft.CodeAnalysis.MetadataReference");
+			Type metadataReferenceType = RequireType(roslyn, roslyn.CodeAnalysisAssembly, "Microsoft.CodeAnalysis.MetadataReference");
 			object list = RoslynReflectionHelper.CreateGenericList(metadataReferenceType);
 			IList ilist = (IList)list;
 
-			foreach (object reference in ReferenceCatalog.GetReferences())
+			foreach (object reference in ReferenceCatalog.GetReferences(roslyn))
 			{
 				ilist.Add(reference);
 			}
 
 			return list;
+		}
+
+		private static Type RequireType(RoslynLocation roslyn, Assembly assembly, string name)
+		{
+			return Require(roslyn, assembly.GetType(name), name);
+		}
+
+		// Roslyn is reached by reflection, so a missing member would otherwise surface as a bare
+		// NullReferenceException with no hint which copy of Roslyn is at fault.
+		private static T Require<T>(RoslynLocation roslyn, T value, string member) where T : class
+		{
+			if (value != null)
+			{
+				return value;
+			}
+
+			throw new InvalidOperationException("Roslyn API not found: " + member + ". Source " + roslyn.Kind
+				+ ", C# compiler " + Describe(roslyn.CSharpAssembly) + ", Microsoft.CodeAnalysis " + Describe(roslyn.CodeAnalysisAssembly));
+		}
+
+		private static string Describe(Assembly assembly)
+		{
+			if (assembly == null)
+			{
+				return "none";
+			}
+
+			string path = AssemblyCompat.GetAssemblyPath(assembly);
+			return assembly.GetName().Version + (string.IsNullOrEmpty(path) ? "" : " (" + path + ")");
 		}
 	}
 }

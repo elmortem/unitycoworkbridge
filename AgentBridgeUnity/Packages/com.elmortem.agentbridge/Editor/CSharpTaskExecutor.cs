@@ -35,7 +35,8 @@ namespace AgentBridge
 				return new CSharpTaskOutcome
 				{
 					Status = "runtime_error",
-					ErrorMessage = inner != null ? inner.Message : "unknown error"
+					ErrorMessage = inner != null ? inner.Message : "unknown error",
+					ErrorDetail = inner != null ? inner.StackTrace : null
 				};
 			}
 
@@ -49,7 +50,22 @@ namespace AgentBridge
 
 		private async Task<CSharpTaskOutcome> RunAsync(string source, string sourcePath, string taskId, CancellationToken cancellationToken, string entryPointName)
 		{
-			CompileResult compileResult = await Task.Run(() => RoslynCompiler.Compile(source, sourcePath, taskId, cancellationToken), cancellationToken);
+			CompileResult compileResult;
+			try
+			{
+				compileResult = await Task.Run(() => RoslynCompiler.Compile(source, sourcePath, taskId, cancellationToken), cancellationToken);
+			}
+			catch (Exception ex) when (!(ex is OperationCanceledException))
+			{
+				// The bridge failed before the task's code ran: keep the whole chain for the report.
+				Exception root = ex.GetBaseException();
+				return new CSharpTaskOutcome
+				{
+					Status = "runtime_error",
+					ErrorMessage = "Agent Bridge failed to compile the task: " + root.GetType().Name + ": " + root.Message,
+					ErrorDetail = ex.ToString()
+				};
+			}
 
 			if (!compileResult.Success)
 			{

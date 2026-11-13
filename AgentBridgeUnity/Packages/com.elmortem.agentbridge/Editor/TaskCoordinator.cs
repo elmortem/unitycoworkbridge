@@ -1354,6 +1354,11 @@ namespace AgentBridge
 				extraLogs.Add(outcome.ErrorMessage);
 			}
 
+			if (!string.IsNullOrEmpty(outcome.ErrorDetail))
+			{
+				extraLogs.Add(outcome.ErrorDetail);
+			}
+
 			if (outcome.Status == "success")
 			{
 				BridgeStatusWriter.Current.LoadedTaskAssemblies++;

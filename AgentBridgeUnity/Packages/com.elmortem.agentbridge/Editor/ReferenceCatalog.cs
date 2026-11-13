@@ -20,6 +20,10 @@ namespace AgentBridge
 		private static readonly Dictionary<string, CacheEntry> _cache = new Dictionary<string, CacheEntry>(StringComparer.OrdinalIgnoreCase);
 		private static List<object> _snapshot;
 
+		// References are objects of one Microsoft.CodeAnalysis and another copy of Roslyn cannot take
+		// them, so the cache belongs to the copy that built it and is dropped when the source changes.
+		private static System.Reflection.Assembly _owner;
+
 		static ReferenceCatalog()
 		{
 			CompilationPipeline.compilationFinished -= OnCompilationFinished;
@@ -41,14 +45,32 @@ namespace AgentBridge
 
 		public static IReadOnlyList<object> GetReferences()
 		{
-			if (_snapshot != null)
-			{
-				return _snapshot;
-			}
-
 			if (!RoslynResolver.IsReady)
 			{
 				RoslynResolver.ResolveConfigured();
+			}
+
+			return GetReferences(RoslynResolver.Active);
+		}
+
+		public static IReadOnlyList<object> GetReferences(RoslynLocation roslyn)
+		{
+			System.Reflection.Assembly owner = roslyn != null ? roslyn.CodeAnalysisAssembly : null;
+			if (owner == null)
+			{
+				return new List<object>();
+			}
+
+			if (_owner != owner)
+			{
+				_cache.Clear();
+				_snapshot = null;
+				_owner = owner;
+			}
+
+			if (_snapshot != null)
+			{
+				return _snapshot;
 			}
 
 			var result = new List<object>();
@@ -75,7 +97,7 @@ namespace AgentBridge
 				}
 
 				names.Add(name);
-				AddReference(result, location);
+				AddReference(result, location, owner);
 			}
 
 			// CoreCLR loads facades such as System.Runtime lazily, yet Unity's assemblies are built
@@ -88,7 +110,7 @@ namespace AgentBridge
 					continue;
 				}
 
-				AddReference(result, platform.Value);
+				AddReference(result, platform.Value, owner);
 			}
 
 			_snapshot = result;
@@ -118,16 +140,16 @@ namespace AgentBridge
 				|| name == "Microsoft.CSharp" || name == "Microsoft.VisualBasic";
 		}
 
-		private static void AddReference(List<object> result, string location)
+		private static void AddReference(List<object> result, string location, System.Reflection.Assembly owner)
 		{
-			object reference = GetOrCreateReference(location);
+			object reference = GetOrCreateReference(location, owner);
 			if (reference != null)
 			{
 				result.Add(reference);
 			}
 		}
 
-		private static object GetOrCreateReference(string path)
+		private static object GetOrCreateReference(string path, System.Reflection.Assembly owner)
 		{
 			string normalized = Path.GetFullPath(path);
 			var info = new FileInfo(normalized);
@@ -141,14 +163,9 @@ namespace AgentBridge
 				}
 			}
 
-			if (!RoslynResolver.IsReady)
-			{
-				return null;
-			}
-
 			try
 			{
-				Type metadataReferenceType = RoslynResolver.CodeAnalysisAssembly.GetType("Microsoft.CodeAnalysis.MetadataReference");
+				Type metadataReferenceType = owner.GetType("Microsoft.CodeAnalysis.MetadataReference");
 				MethodInfo createFromFile = RoslynReflectionHelper.FindBestOverload(
 					metadataReferenceType,
 					"CreateFromFile",

@@ -153,6 +153,11 @@ namespace AgentBridge
 			string state = location.Available
 				? "Ready" + (string.IsNullOrEmpty(location.Version) ? "" : " (" + location.Version + ")")
 				: location.Reason;
+			RoslynLocation active = RoslynResolver.Active;
+			if (active != null && active.Kind == kind)
+			{
+				state += " — in use";
+			}
 			EditorGUILayout.SelectableLabel(state, GUILayout.Height(EditorGUIUtility.singleLineHeight));
 
 			using (new EditorGUI.DisabledScope(!location.Available))
@@ -160,6 +165,7 @@ namespace AgentBridge
 				if (GUILayout.Button("Use", GUILayout.Width(60)))
 				{
 					AgentBridgeSettingsStore.SetRoslynSource(kind.ToString());
+					BridgeStatusWriter.RefreshRoslyn();
 				}
 			}
 

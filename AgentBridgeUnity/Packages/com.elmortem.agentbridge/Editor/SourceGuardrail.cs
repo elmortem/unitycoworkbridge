@@ -12,10 +12,12 @@ namespace AgentBridge
 		{
 			violations = new List<GuardrailViolation>();
 
-			if (syntaxTree == null || !RoslynResolver.IsReady)
+			if (syntaxTree == null)
 			{
 				return true;
 			}
+
+			UseSyntaxKindsOf(syntaxTree.GetType().Assembly);
 
 			dynamic tree = syntaxTree;
 			dynamic root = tree.GetRoot();
@@ -410,17 +412,24 @@ namespace AgentBridge
 			return raw == KindValue(kindName);
 		}
 
+		// Kind numbers belong to the compiler that parsed the tree, so switching the Roslyn source drops them.
+		private static void UseSyntaxKindsOf(System.Reflection.Assembly csharpAssembly)
+		{
+			if (_syntaxKindType != null && _syntaxKindType.Assembly == csharpAssembly)
+			{
+				return;
+			}
+
+			_syntaxKindType = csharpAssembly.GetType("Microsoft.CodeAnalysis.CSharp.SyntaxKind");
+			_kindCache.Clear();
+		}
+
 		private static int KindValue(string name)
 		{
 			int value;
 			if (_kindCache.TryGetValue(name, out value))
 			{
 				return value;
-			}
-
-			if (_syntaxKindType == null)
-			{
-				_syntaxKindType = RoslynResolver.CodeAnalysisCSharpAssembly.GetType("Microsoft.CodeAnalysis.CSharp.SyntaxKind");
 			}
 
 			object enumValue = Enum.Parse(_syntaxKindType, name);
