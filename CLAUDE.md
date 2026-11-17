@@ -107,12 +107,18 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
   (подтверждение принятого hash перед запуском, кэшем и присоединением). Unity не держит блокировку
   диспетчера/координации. Отмена до claim терминальна; после claim — только намерение до остановки
   исполнителя и восстановления сцен. Защита чужой выполняющейся задачи в первые 300 секунд сохраняется.
-- Достоверность: `EvidenceRecord.cs`, `ValidationInputSnapshot.cs` (SHA-256 содержимого входов),
+- Достоверность: `EvidenceRecord.cs`, `ValidationInputSnapshot.cs` (SHA-256 содержимого входов;
+  `InputFileStamps.cs` даёт отметки из листинга каталога, `InputHashCache.cs` хранит хеши файлов с
+  несдвинутой отметкой, `InputFileHasher.cs` хеширует файлы снимка и перечитывает только изменившиеся),
   `ValidationInputMonitor.cs` (окно над общими наблюдателями; `OpenAsync` для ежесекундных путей),
   `InputWatchHub.cs` + `InputWatchRoot.cs` + `InputWatchHubLifetime.cs` (один `FileSystemWatcher` на
   корень входов на весь редактор), `ValidationEvidence.cs`, `EvidenceClassification.cs`,
   `InputStatManifest.cs` + `InputStatEntry.cs` + `InputStatVerdict.cs` (второй свидетель:
-  путь/размер/mtime входов и SHA-256 для `ProjectSettings/` в файле, переживающем domain reload)
+  путь/размер/mtime входов и SHA-256 для `ProjectSettings/` в файле, переживающем domain reload),
+  `InputReadGate.cs` + `InputReadGateSaveHook.cs` (шлюз фоновых чтений входов: сохранение ассета или
+  сцены ждёт чтений в полёте и держит новые до следующего тика. Windows не даёт заменить файл, у
+  которого есть открытый дескриптор, и Unity встаёт в модальном «Moving file failed: Access is
+  denied». Любой новый фоновый читатель файлов проекта обязан идти через этот шлюз)
 - Кэш: `CompileFingerprint.cs`, `CompileCacheStore.cs`, `TestFingerprint.cs`, `TestCacheQuery.cs`,
   `TestRunDumpStore.cs` (test-cache-v2: отдельные entry-файлы и атомарный индекс),
   `TestCacheIndex.cs`, `TestCacheEntryInfo.cs`

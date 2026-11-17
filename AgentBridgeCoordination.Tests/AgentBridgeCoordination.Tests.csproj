@@ -18,6 +18,11 @@
     <!-- Evidence input hashing and observation are pure System.IO and compile outside Unity, so
          the digest and the observer are tested here and not only inside the editor. -->
     <Compile Include="../AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/ValidationInputSnapshot.cs" Link="ValidationInputSnapshot.cs" />
+    <Compile Include="../AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/InputReadGate.cs" Link="InputReadGate.cs" />
+    <Compile Include="../AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/InputFileStamp.cs" Link="InputFileStamp.cs" />
+    <Compile Include="../AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/InputFileStamps.cs" Link="InputFileStamps.cs" />
+    <Compile Include="../AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/InputHashCache.cs" Link="InputHashCache.cs" />
+    <Compile Include="../AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/InputFileHasher.cs" Link="InputFileHasher.cs" />
     <Compile Include="../AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/ContentHash.cs" Link="ContentHash.cs" />
     <Compile Include="../AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/InputStatEntry.cs" Link="InputStatEntry.cs" />
     <Compile Include="../AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/InputStatVerdict.cs" Link="InputStatVerdict.cs" />

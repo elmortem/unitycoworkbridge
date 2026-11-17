@@ -98,6 +98,19 @@ namespace AgentBridge
 			DisposeMonitor();
 		}
 
+		private static InputHashCache _hashCache;
+
+		// Main thread only: the instance is created here and then shared by the worker digests,
+		// which the cache itself serialises.
+		public static InputHashCache HashCache
+		{
+			get
+			{
+				if (_hashCache == null) _hashCache = new InputHashCache(BridgePaths.InputHashCacheFile);
+				return _hashCache;
+			}
+		}
+
 		public static bool IsPreparing
 		{
 			get { return _work != null; }
@@ -133,7 +146,7 @@ namespace AgentBridge
 			SessionState.SetString(ScratchKey, bootstrap);
 			_ignore = BuildIgnore(bootstrap);
 
-			_job = new InputHashJob(_roots, _excluded, _context, _ignore);
+			_job = new InputHashJob(_roots, _excluded, _context, _ignore, HashCache);
 			string projectRoot = BridgePaths.ProjectRoot;
 			_sourceWork = CompileInputContext.StartCapture(projectRoot);
 			_work = _job.Start();
@@ -362,7 +375,7 @@ namespace AgentBridge
 				string[] roots = Split(SessionState.GetString(RootsKey, ""));
 				string[] excluded = Split(SessionState.GetString(ExcludedKey, ""));
 				Func<string, bool> ignore = BuildIgnore(SessionState.GetString(ScratchKey, ""));
-				var job = new InputHashJob(roots, excluded, SessionState.GetString(ContextKey, ""), ignore);
+				var job = new InputHashJob(roots, excluded, SessionState.GetString(ContextKey, ""), ignore, HashCache);
 				string projectRoot = BridgePaths.ProjectRoot;
 				// Read on the main thread, walked on a worker: the closing manifest must describe
 				// exactly the inputs the closing digest describes.

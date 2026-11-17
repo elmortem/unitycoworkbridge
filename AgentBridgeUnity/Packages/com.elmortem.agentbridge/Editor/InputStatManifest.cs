@@ -111,10 +111,18 @@ namespace AgentBridge
 
 		private static string HashOf(string file)
 		{
-			using (var sha = ContentHash.Create())
-			using (var input = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read))
+			InputReadGate.Enter();
+			try
 			{
-				return ValidationInputSnapshot.ToHex(sha.ComputeHash(input));
+				using (var sha = ContentHash.Create())
+				using (var input = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read))
+				{
+					return ValidationInputSnapshot.ToHex(sha.ComputeHash(input));
+				}
+			}
+			finally
+			{
+				InputReadGate.Exit();
 			}
 		}
 

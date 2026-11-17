@@ -14,5 +14,10 @@
     <Compile Include="$(CompileSourceDirectory)/InputWatchRoot.cs" Link="InputWatchRoot.cs" />
     <Compile Include="$(CompileSourceDirectory)/InputWatchHub.cs" Link="InputWatchHub.cs" />
     <Compile Include="$(CompileSourceDirectory)/ValidationInputSnapshot.cs" Link="ValidationInputSnapshot.cs" />
+    <Compile Include="$(CompileSourceDirectory)/InputReadGate.cs" Link="InputReadGate.cs" />
+    <Compile Include="$(CompileSourceDirectory)/InputFileStamp.cs" Link="InputFileStamp.cs" />
+    <Compile Include="$(CompileSourceDirectory)/InputFileStamps.cs" Link="InputFileStamps.cs" />
+    <Compile Include="$(CompileSourceDirectory)/InputHashCache.cs" Link="InputHashCache.cs" />
+    <Compile Include="$(CompileSourceDirectory)/InputFileHasher.cs" Link="InputFileHasher.cs" />
   </ItemGroup>
 </Project>

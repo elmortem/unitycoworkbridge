@@ -10,13 +10,17 @@ namespace AgentBridge
 	// their .meta, project settings, package manifests and every resolved local package.
 	//
 	// Unlike the source-only compile fingerprint, this includes assets, metadata and all
-	// project settings. Both fingerprints hash actual bytes, even when size and time are preserved.
+	// project settings. The digest streams each file's content hash. Bytes are re-read only when
+	// a file's stamp moved (length, write time, change time, file id): an edit that keeps length
+	// and write time still moves the change time, so it is never served from the cache.
 	[Serializable]
 	public class ValidationInputSnapshot
 	{
 		public string Digest = "";
 		public int FileCount;
 		public long TotalBytes;
+		// Bytes actually read from disk; TotalBytes stays the sum of the inputs' lengths.
+		public long ReadBytes;
 		public bool Complete;
 		public string Reason = "";
 		public string[] Roots = new string[0];
@@ -46,6 +50,18 @@ namespace AgentBridge
 			string context,
 			Func<string, bool> ignore)
 		{
+			return Capture(roots, excludedRoots, context, ignore, null);
+		}
+
+		// cache serves the content hash of a file whose stamp has not moved since it was last read.
+		// Without stamps (another platform or volume) every file is read, exactly as without a cache.
+		public static ValidationInputSnapshot Capture(
+			string[] roots,
+			string[] excludedRoots,
+			string context,
+			Func<string, bool> ignore,
+			InputHashCache cache)
+		{
 			var snapshot = new ValidationInputSnapshot
 			{
 				Roots = roots ?? new string[0],
@@ -53,9 +69,9 @@ namespace AgentBridge
 			};
 
 			using (var sha = ContentHash.Create())
+			using (var hasher = new InputFileHasher(cache))
 			using (var stream = new CryptoStream(Stream.Null, sha, CryptoStreamMode.Write))
 			{
-				var buffer = new byte[64 * 1024];
 				Append(stream, "context\n" + (context ?? "") + "\n");
 
 				for (int index = 0; index < snapshot.Roots.Length; index++)
@@ -81,23 +97,11 @@ namespace AgentBridge
 					foreach (string file in files)
 					{
 						string relative = prefix + "/" + RelativeTo(root, file);
+						long length;
+						string hash;
 						try
 						{
-							using (var input = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read, buffer.Length, FileOptions.SequentialScan))
-							{
-								long length = input.Length;
-								Append(stream, "file\n" + relative + "\n" + length + "\n");
-								long read = 0;
-								int count;
-								while ((count = input.Read(buffer, 0, buffer.Length)) != 0)
-								{
-									stream.Write(buffer, 0, count);
-									read += count;
-								}
-								if (read != length) return Incomplete("input changed size while reading: " + relative);
-								snapshot.FileCount++;
-								snapshot.TotalBytes += read;
-							}
+							if (!hasher.TryHash(file, out length, out hash)) return Incomplete("input changed size while reading: " + relative);
 						}
 						catch (FileNotFoundException)
 						{
@@ -118,11 +122,16 @@ namespace AgentBridge
 							return snapshot;
 						}
 
+						Append(stream, "file\n" + relative + "\n" + length + "\n" + hash + "\n");
+						snapshot.FileCount++;
+						snapshot.TotalBytes += length;
 					}
 				}
 
 				stream.FlushFinalBlock();
 				snapshot.Digest = ToHex(sha.Hash);
+				snapshot.ReadBytes = hasher.ReadBytes;
+				hasher.Commit(snapshot.Roots);
 			}
 
 			snapshot.Complete = true;

@@ -73,6 +73,12 @@ namespace AgentBridge
 			get { return Path.Combine(WorkingRoot, "dialogs.json"); }
 		}
 
+		// Content hashes of validation inputs keyed by their stamps; they outlive the domain.
+		public static string InputHashCacheFile
+		{
+			get { return Path.Combine(WorkingRoot, "input-hash-cache.txt"); }
+		}
+
 		public static string CliRoot
 		{
 			get { return EnsureDirectory(Path.Combine(WorkingRoot, "cli")); }

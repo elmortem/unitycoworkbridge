@@ -11,18 +11,20 @@ namespace AgentBridge
 		private readonly string[] _roots, _excluded;
 		private readonly string _context;
 		private readonly Func<string, bool> _ignore;
+		private readonly InputHashCache _cache;
 
-		public InputHashJob(string[] roots, string[] excluded, string context, Func<string, bool> ignore = null)
+		public InputHashJob(string[] roots, string[] excluded, string context, Func<string, bool> ignore = null, InputHashCache cache = null)
 		{
 			_roots = (string[])roots.Clone();
 			_excluded = (string[])excluded.Clone();
 			_context = context;
 			_ignore = ignore;
+			_cache = cache;
 		}
 
 		public Task<ValidationInputSnapshot> Start()
 		{
-			return Task.Run(() => ValidationInputSnapshot.Capture(_roots, _excluded, _context, _ignore));
+			return Task.Run(() => ValidationInputSnapshot.Capture(_roots, _excluded, _context, _ignore, _cache));
 		}
 
 		public async Task<ValidationInputSnapshot> Measure(string stage, string taskId)
@@ -35,7 +37,8 @@ namespace AgentBridge
 				TelemetryField.Text("Stage", stage),
 				TelemetryField.Number("ElapsedMs", watch.ElapsedMilliseconds),
 				TelemetryField.Number("Files", result.FileCount),
-				TelemetryField.Number("Bytes", result.TotalBytes)
+				TelemetryField.Number("Bytes", result.TotalBytes),
+				TelemetryField.Number("ReadBytes", result.ReadBytes)
 			});
 			return result;
 		}

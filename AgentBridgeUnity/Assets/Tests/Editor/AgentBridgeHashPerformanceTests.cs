@@ -33,7 +33,7 @@ public class AgentBridgeHashPerformanceTests
 	}
 
 	[Test]
-	public void StreamingSnapshotPreservesExistingDigestFormat()
+	public void SnapshotDigestHashesEachFile()
 	{
 		string root = NewRoot();
 		try
@@ -43,13 +43,10 @@ public class AgentBridgeHashPerformanceTests
 			File.WriteAllBytes(Path.Combine(root, "asset.bin"), bytes);
 			var snapshot = ValidationInputSnapshot.Capture(new[] { root }, new string[0], "test");
 			using (var sha = SHA256.Create())
-			using (var memory = new MemoryStream())
 			{
-				byte[] header = Encoding.UTF8.GetBytes("context\ntest\nroot\nr0\nfile\nr0/asset.bin\n150001\n");
-				memory.Write(header, 0, header.Length);
-				memory.Write(bytes, 0, bytes.Length);
-				memory.Position = 0;
-				Assert.AreEqual(BitConverter.ToString(sha.ComputeHash(memory)).Replace("-", "").ToLowerInvariant(), snapshot.Digest);
+				string fileHash = BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-", "").ToLowerInvariant();
+				byte[] stream = Encoding.UTF8.GetBytes("context\ntest\nroot\nr0\nfile\nr0/asset.bin\n150001\n" + fileHash + "\n");
+				Assert.AreEqual(BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "").ToLowerInvariant(), snapshot.Digest);
 				Assert.IsTrue(snapshot.Complete);
 				Assert.AreEqual(bytes.Length, snapshot.TotalBytes);
 			}

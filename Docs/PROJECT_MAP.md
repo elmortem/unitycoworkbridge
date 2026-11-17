@@ -147,6 +147,7 @@ scripts/                           Сборка плагина, вендорин
 	play-session.json                   владелец текущего плеймода
 	scheduler-state.json                ротация агентских сессий
 	dialogs.json                        модальные окна, держащие главный поток (пишется фоновым потоком, обновляется раз в секунду)
+	input-hash-cache.txt                хеши входов по отметкам (длина, mtime, ChangeTime, FileId), переживают domain reload
 
 <project>/Logs/AgentBridge-<writer>-<YYYYMMDD>.jsonl   телеметрия, живёт вне Library
 <project>/ProjectSettings/AgentBridge.json            настройки моста (таймауты, политики сцен, KeepCompletedCount)
@@ -311,7 +312,11 @@ package.json       версия и зависимости пакета
 | `CachedResultServer.cs` | выдача кэшированных результатов `tests`/`compile` без запуска; общий хэш источников считается один раз за скан, свидетели открываются лениво — только при найденном кандидате и один раз за скан; claim ждёт ответа диспетчера до 5 с, задача держится в `Checking`, и координатор её не стартует; телеметрия `cache_witness` и `cache_skip` с причиной (`entry_gone_on_recheck`, `digest_moved`, `sources_moved`, `cannot_publish`, `claim_refused: …`, `claim_reply_timeout`, сдвиг входов по stat) |
 | `CacheLookupWitness.cs` | оба свидетеля одной проверки кэша: окно наблюдения и stat-манифест входов, открытые и закрытые вместе, без главного потока |
 | `CacheMissMemo.cs` / `CacheMissEntry.cs` | откат промахов: пока отпечаток источников и набор кандидатов те же, дайджест не пересчитывается чаще раза в `RetryMs` (10 с); запись снятой задачи забывается |
-| `ValidationInputSnapshot.cs` | SHA-256 содержимого входов |
+| `ValidationInputSnapshot.cs` | SHA-256 содержимого входов: в поток дайджеста идёт хеш каждого файла от `InputFileHasher` |
+| `InputFileHasher.cs` | хеширование файлов одного снимка через шлюз чтений: файл с несдвинутой отметкой берёт хеш из `InputHashCache`, остальные читаются; `ReadBytes`, `Commit` после полного снимка |
+| `InputFileStamp.cs` / `InputFileStamps.cs` | отметка файла (длина, время записи, ChangeTime, FileId) из одного листинга каталога без открытия файлов; только `UNITY_EDITOR_WIN`, иначе `null` и полное чтение |
+| `InputHashCache.cs` | хеши входов по отметкам в `Library/AgentBridge/input-hash-cache.txt`; общий экземпляр — `ValidationEvidence.HashCache`; файлы, тронутые за 2 с до снимка, не запоминаются |
+| `InputReadGate.cs` / `InputReadGateSaveHook.cs` | шлюз фоновых чтений входов: `OnWillSaveAssets` ждёт чтений в полёте и держит новые до следующего тика редактора, потому что Windows не даёт Unity заменить открытый файл («Moving file failed: Access is denied»); через него читают дайджест, stat-манифест и отпечаток компиляции, и обязан читать любой новый фоновый читатель файлов проекта |
 | `ValidationInputMonitor.cs` | окно наблюдения за изменением входов во время прогона (`stale_input`): свои исключения, свой счётчик, свой вердикт поверх общих наблюдателей |
 | `InputWatchHub.cs` | один наблюдатель на корень входов на весь редактор: выдача по ссылкам, доживание 30 с после последнего окна, выметание идлящих |
 | `InputWatchRoot.cs` | живой `FileSystemWatcher` над одним корнем и рассылка событий подписанным окнам |

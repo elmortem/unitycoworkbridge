@@ -25,6 +25,7 @@ namespace AgentBridge
 			string[] excluded = ValidationEvidence.CollectExcludedRoots();
 			string contentRoot = ValidationEvidence.ContentWitnessedRoot();
 			var ignore = ValidationEvidence.BuildIgnore(PlayModeSceneRecovery.BootstrapScenePath());
+			InputHashCache hashCache = ValidationEvidence.HashCache;
 			CacheLookupWitness witness = null;
 			try
 			{
@@ -68,7 +69,7 @@ namespace AgentBridge
 					{
 						string mode = request.TestMode == "PlayMode" ? "PlayMode" : "EditMode";
 						string context = ValidationEvidence.ContextOf(mode, FilterOf(request));
-						var job = new InputHashJob(roots, excluded, context, ignore);
+						var job = new InputHashJob(roots, excluded, context, ignore, hashCache);
 
 						// The cheap half of the key names the entries the digest would be compared
 						// against. With none of them there is nothing to prove and nothing to serve.
@@ -94,8 +95,8 @@ namespace AgentBridge
 						var snapshot = await job.Measure("cache_lookup", task.Id);
 						string inputDigest = snapshot.Complete ? snapshot.Digest : "";
 						// The content digest is only ever computed once a cheap candidate exists, and
-						// it is computed fresh: a memo keyed on sizes and times would hand out a hit
-						// for a file that was edited back to its old size.
+						// its per-file memo is keyed on stamps that include the change time, so a file
+						// edited back to its old length and write time is read again.
 						string capturedFingerprint = sourceFingerprint;
 						TestCacheQuery.Hit hit;
 						if (!TestCacheQuery.TryServe(
