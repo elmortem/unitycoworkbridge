@@ -32,11 +32,14 @@ namespace AgentBridge
 			}
 		}
 		public static string Context { get { return ValidationEvidence.ContextOf("compile", ""); } }
+		// Main thread only, like Roots.
+		public static InputHashCache HashCache { get { return ValidationEvidence.HashCache; } }
 		public static Task<string> StartCapture(string projectRoot)
 		{
 			string[] roots = Roots;
 			string context = Context;
-			return Task.Run(() => CompileFingerprint.Capture(projectRoot, roots, context));
+			InputHashCache cache = HashCache;
+			return Task.Run(() => CompileFingerprint.Capture(projectRoot, roots, context, cache));
 		}
 	}
 }

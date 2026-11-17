@@ -60,6 +60,8 @@ internal static class HashingScenarios
 		string b = Path.Combine(fixture, "b.asset");
 		File.WriteAllBytes(a, big);
 		File.WriteAllText(b, "value: 1");
+		string c = Path.Combine(fixture, "c.cs");
+		File.WriteAllText(c, "class C {}");
 		Thread.Sleep(TimeSpan.FromTicks(InputHashCache.RacyWindowTicks) + TimeSpan.FromMilliseconds(300));
 		string cachePath = Path.Combine(root, "hash-cache.txt");
 
@@ -80,9 +82,15 @@ internal static class HashingScenarios
 
 		var cache = new InputHashCache(cachePath);
 		var first = Step(cache, "first");
-		Expect(first, big.Length + new FileInfo(b).Length, "first");
+		Expect(first, big.Length + new FileInfo(b).Length + new FileInfo(c).Length, "first");
 		Expect(Step(cache, "second"), 0, "second");
-		Expect(Step(new InputHashCache(cachePath), "reloaded"), 0, "reloaded");
+		var reloaded = new InputHashCache(cachePath);
+		Expect(Step(reloaded, "reloaded"), 0, "reloaded");
+
+		// The compile fingerprint shares the digest's file hashes and must not forget them.
+		if (CompileFingerprint.Capture(root, new[] { fixture }, "ctx", reloaded) != CompileFingerprint.Capture(root, new[] { fixture }, "ctx", null))
+			throw new Exception("C27 fingerprint: cached fingerprint differs from a full read");
+		Expect(Step(reloaded, "after fingerprint"), 0, "after fingerprint");
 
 		DateTime written = File.GetLastWriteTimeUtc(b);
 		File.WriteAllText(b, "value: 2");

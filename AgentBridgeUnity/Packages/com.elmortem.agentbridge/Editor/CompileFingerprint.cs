@@ -10,14 +10,14 @@ namespace AgentBridge
 	{
 		private static readonly string[] Extensions = { ".cs", ".asmdef", ".asmref", ".rsp" };
 
-		// Deliberately never memoized. The value is read to decide whether a cached result may be
-		// served, and the case it has to catch is an agent that edits a file and asks the very
-		// next moment — a memo of any length would answer that question with the state from
-		// before the edit. It is only ever computed while a tests or compile task is actually
-		// waiting, and it costs a fraction of the run it saves.
+		// The value decides whether a cached result may be served, and the case it has to catch is
+		// an agent that edits a file and asks the very next moment. So the fingerprint itself is
+		// never memoized; only a file's hash is reused, and only while its stamp — change time
+		// included — has not moved. An edit moves the change time, and a file changed within
+		// InputHashCache.RacyWindowTicks of the capture is read and never remembered.
 		public static string Current()
 		{
-			return Capture(BridgePaths.ProjectRoot, CompileInputContext.Roots, CompileInputContext.Context);
+			return Capture(BridgePaths.ProjectRoot, CompileInputContext.Roots, CompileInputContext.Context, CompileInputContext.HashCache);
 		}
 
 		// The caller captures the Unity-derived project path before dispatching to a worker.
@@ -27,6 +27,11 @@ namespace AgentBridge
 		}
 
 		public static string Capture(string projectRoot, string[] roots, string context)
+		{
+			return Capture(projectRoot, roots, context, null);
+		}
+
+		public static string Capture(string projectRoot, string[] roots, string context, InputHashCache cache)
 		{
 			var files = new List<string>();
 			foreach (string root in roots)
@@ -42,27 +47,20 @@ namespace AgentBridge
 
 			files.Sort(StringComparer.Ordinal);
 
-			var builder = new StringBuilder("compile-v2|" + context + "\n");
-			foreach (string file in files)
+			var builder = new StringBuilder("compile-v3|" + context + "\n");
+			using (var hasher = new InputFileHasher(cache))
 			{
-				var info = new FileInfo(file);
-				builder.Append(file.Replace('\\', '/'))
-					.Append('|').Append(info.Length)
-					.Append('|');
-				// Timestamps and sizes can be preserved by external tools. Cache reuse must
-				// still notice different source bytes in that case.
-				InputReadGate.Enter();
-				try
+				foreach (string file in files)
 				{
-					using (SHA256 contentHash = ContentHash.Create())
-					using (FileStream stream = File.OpenRead(file))
-						builder.Append(Convert.ToBase64String(contentHash.ComputeHash(stream)));
+					// Length and hash describe the same bytes, so a torn read needs no retry here.
+					long length;
+					string hash;
+					hasher.TryHash(file, out length, out hash);
+					builder.Append(file.Replace('\\', '/')).Append('|').Append(length).Append('|').Append(hash).Append('\n');
 				}
-				finally
-				{
-					InputReadGate.Exit();
-				}
-				builder.Append('\n');
+
+				// Only part of the digest's roots is seen here: append, never forget.
+				hasher.Commit(new string[0]);
 			}
 
 			using (SHA256 sha = ContentHash.Create())

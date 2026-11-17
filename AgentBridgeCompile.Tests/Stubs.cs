@@ -68,5 +68,6 @@ namespace AgentBridge
     {
         public static string[] Roots => new[] { Path.Combine(BridgePaths.ProjectRoot, "Assets"), Path.Combine(BridgePaths.ProjectRoot, "Packages"), Path.Combine(BridgePaths.ProjectRoot, "ProjectSettings") };
         public static string Context => "test-editor";
+        public static InputHashCache HashCache => null;
     }
 }

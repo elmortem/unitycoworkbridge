@@ -26,6 +26,7 @@ namespace AgentBridge
 	{
 		public static string[] Roots => new string[0];
 		public static string Context => "";
+		public static InputHashCache HashCache => null;
 	}
 	public class TaskRecord
 	{

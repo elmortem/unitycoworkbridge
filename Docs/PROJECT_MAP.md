@@ -302,7 +302,7 @@ package.json       версия и зависимости пакета
 
 | Файл | Роль |
 |---|---|
-| `CompileFingerprint.cs` | отпечаток входов компиляции |
+| `CompileFingerprint.cs` | отпечаток входов компиляции; хеши файлов через `InputFileHasher` и общий кэш отметок `ValidationEvidence.HashCache` |
 | `CompileInputContext.cs` | сбор корней входов; Unity API читается только на главном потоке, воркер получает неизменяемый снимок |
 | `CompileCacheStore.cs` / `CompileCacheEntry.cs` | хранилище `compile-cache.json` |
 | `TestFingerprint.cs` | отпечаток входов тестового прогона |
