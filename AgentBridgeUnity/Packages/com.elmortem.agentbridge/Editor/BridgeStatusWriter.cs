@@ -183,6 +183,11 @@ namespace AgentBridge
 				Queueing.QueueFiles.HostCapability, EditorDialogMonitor.Capability
 			};
 
+			if (NativeDialogProbe.Supported)
+			{
+				capabilities.Add(DialogAnswerRequest.Capability);
+			}
+
 			if (CoordinationEditorAdapter.Available)
 			{
 				capabilities.Add("coordination-v1");

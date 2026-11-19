@@ -49,7 +49,7 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
 ### CLI (`AgentBridgeCli/`)
 
 Команды: `csharp`, `ui`, `sceneshot`, `compile`, `tests`, `play`, `stopplay`, `release`, `wait`,
-`status`, `doctor`, `coord`, `queue`, `cancel <TaskId>`. Общие флаги: `--project`, `--wait`, `--format json|human`, `--session`,
+`status`, `doctor`, `coord`, `queue`, `cancel <TaskId>`, `dialog answer <DialogId>`. Общие флаги: `--project`, `--wait`, `--format json|human`, `--session`,
 `--note`, `--coord-window`, `--coord-step`. Неизвестный флаг — ошибка использования, а не позиционный
 аргумент. Коды выхода: `0` успех операции/исполнения или принятие с `--wait 0`, `1` отказ
 (включая `test_failure`, `stale_input`, `evidence_unavailable`), `2` бюджет клиента исчерпан или

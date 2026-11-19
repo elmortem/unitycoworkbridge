@@ -252,6 +252,7 @@ agentbridge doctor --format human
 agentbridge release --session AB_20260813_1500_a1f
 agentbridge play --seconds 30 --note "game shot of the main menu" --session AB_20260813_1500_a1f
 agentbridge stopplay --session AB_20260813_1500_a1f
+agentbridge dialog answer win32:1d24a8 --button "Don't Save" --reason "the scene was opened by my own task" --session AB_20260813_1500_a1f
 agentbridge coord status --session AB_20260813_1500_a1f --format human
 ```
 
@@ -322,9 +323,25 @@ The external dispatcher owns the durable queue. Only the interactive editor exec
 
 A modal dialog — a save prompt, *API Update Required*, a file picker, any `EditorUtility.DisplayDialog` or `EditorWindow.ShowModal` — holds Unity's main thread until a person answers it. Nothing in the queue moves, the heartbeat stops, and no wake signal can help. Like Unity CLI's `STATUS_BLOCKED_BY_DIALOG`, the bridge reports this state instead of letting agents wait out their budgets:
 
-- `agentbridge status` / `doctor` return `code: blocked_by_dialog` (it outranks the `heartbeat_stale` that follows) and `blockedBy`: one entry per dialog with `title`, `message`, `buttons`, `level` (`info`/`warning`/`error` when known), `kind`, `source`, `openMs` and `taskId` — the task that was executing when the dialog appeared, empty for an idle Editor. `--format human` prints `Blocked by dialog: [warning] "Scene(s) Have Been Modified" (native_message_box, 12s, task Task_…) — … [Save | Don't Save]`. `bridgeReady` is `false` while a dialog is open.
+- `agentbridge status` / `doctor` return `code: blocked_by_dialog` (it outranks the `heartbeat_stale` that follows) and `blockedBy`: one entry per dialog with `id`, `title`, `message`, `buttons`, `level` (`info`/`warning`/`error` when known), `kind`, `source`, `openMs` and `taskId` — the task that was executing when the dialog appeared, empty for an idle Editor. `--format human` prints `Blocked by dialog: [warning] "Scene(s) Have Been Modified" (native_message_box, 12s, id unity:7, task Task_…) — … [Save | Don't Save]`. `bridgeReady` is `false` while a dialog is open.
 - A waiting task command (`csharp`, `compile`, `tests`, `wait`, …) returns as soon as a dialog has been open for 2 seconds: exit `2`, `Accepted: true`, the same `Id`, `EditorState: blocked_by_dialog`, `Reason: editor_blocked_by_dialog`, `BlockedBy` and a `Resume` command. The task stays queued or running; resume with `agentbridge wait <TaskId>` after the dialog is answered. `--wait 0` still returns exit `0` and carries the same `BlockedBy`.
-- When a dialog was open while a task ran, the task's `Logs` get a line such as `modal dialog: "Save Scene" (native_dialog) held the editor for 14.2 s during this task`, so an agent can tell that its own action raised it.
+- When a dialog was open while a task ran, the task's `Logs` get a line such as `modal dialog: "Save Scene" (native_dialog) held the editor for 14.2 s during this task`, so an agent can tell that its own action raised it. A dialog answered by an agent adds `; answered "<button>" by <session>: <reason>`.
+
+#### Answering a dialog
+
+`agentbridge dialog answer <DialogId> --button <label> --reason <text> [--session <id>]` clicks a button of an open dialog without a person. `DialogId` is the `id` from `blockedBy`; the label is matched against its `buttons` ignoring case and surrounding spaces, with `’` equal to `'`. `--reason` (up to 200 characters) and the session are written to the task log and to telemetry (`editor_dialog`, `cli_dialog_answer`). The bundled skill lets an agent answer only when it understands the consequence and it follows from its own task; dialogs that would discard someone else's work are left to a person.
+
+The CLI writes the request to `Library/AgentBridge/dialog-answer.txt`; the Editor's background dialog monitor picks it up within a second, matches the dialog and button again against its own fresh window scan, posts `WM_COMMAND` for that button to the dialog's modal loop (it never waits on the main thread) and reports the outcome in `dialogs.json`. The CLI then waits up to 5 seconds for the dialog to disappear and removes the request file in every case.
+
+| Code | Exit | Meaning |
+|---|---|---|
+| `answered` | 0 | The button was clicked and the dialog closed. Check `blockedBy` in the reply: another dialog may follow. |
+| `dialog_not_open`, `button_not_found`, `ambiguous_button` | 1 | No such dialog, or the label matches no button or several (`detail` lists the buttons). Nothing was clicked. |
+| `not_blocked`, `dialog_changed`, `send_failed`, `dialog_still_open` | 1 | The Editor ticks again, another dialog took the id, the click could not be posted, or the dialog stayed open after the click. |
+| `answer_unacknowledged` | 2 | The Editor did not pick up the request within 5 seconds (15 for a client on another OS). |
+| `bad_usage`, `dialog_answer_unsupported` | 3 | Wrong arguments, or the Editor lacks capability `dialog-answer-v1`. |
+
+Requires CLI 1.30.0+ and package 0.46.0+. `dialog-answer-v1` is reported only by Windows Editors, and only dialogs whose buttons the window scan read (native `#32770` dialogs such as `DisplayDialog`/`DisplayDialogComplex` and the Windows file pickers) can be answered; `EditorWindow.ShowModal` windows cannot.
 
 The Editor keeps `Library/AgentBridge/dialogs.json` up to date from a background thread, because the main thread is the one that is stuck. The file is rewritten every second while a dialog stays open; the CLI believes it only for the Editor PID in `status.json`, only while it is fresh (5 seconds on the same machine, the heartbeat allowance of 60 seconds for a client on another OS) and only while the Editor's own `MainThreadIdleMs` shows that `update` has not run for at least 1.5 seconds — an Editor that still ticks is not held by any window it shows.
 
@@ -338,7 +355,7 @@ Detection sources, reported as `DialogDetection` in `status.json` and as `Dialog
 | `unsupported` | Unity before 6.7 on macOS/Linux: dialogs are not detected; a blocked Editor still looks like `heartbeat_stale`. |
 | `unavailable` | The detector failed to start (its error is logged once in the Unity console); nothing is detected. |
 
-The Windows scan starts only after the main thread has missed its updates for a second. It reports enabled windows of the Editor's main thread whose owner window is disabled — the Win32 mark of a modal window — or ownerless native dialogs (`#32770`), skips progress windows and tooltips, and confirms with a 200 ms `SendMessageTimeout(WM_NULL)` that the main thread is pumping messages — a modal loop does, a long import, compilation or script does not. Dialogs shown while no package code is loaded (Unity's startup prompts, Safe Mode, the middle of a domain reload) are not detected. `scripts/verify-modal-dialog.ps1` checks the whole chain on a Windows host editor with self-closing probe dialogs.
+The Windows scan starts only after the main thread has missed its updates for a second. It reports enabled windows of the Editor's main thread whose owner window is disabled — the Win32 mark of a modal window — or ownerless native dialogs (`#32770`), skips progress windows and tooltips, and confirms with a 200 ms `SendMessageTimeout(WM_NULL)` that the main thread is pumping messages — a modal loop does, a long import, compilation or script does not. Dialogs shown while no package code is loaded (Unity's startup prompts, Safe Mode, the middle of a domain reload) are not detected. `scripts/verify-modal-dialog.ps1` checks the whole chain on a Windows host editor with self-closing probe dialogs, including `dialog answer` on a `DisplayDialogComplex`.
 
 ### C# Task Script
 
@@ -754,6 +771,7 @@ Telemetry never fails a task: a write that cannot happen is dropped silently.
 - `csharp` tasks compile against whatever assemblies are already loaded in the domain — they cannot reference project code that has compilation errors, since the broken assembly itself would never have loaded. Use a `compile` task first to confirm the project builds.
 - Background execution uses a private Unity API with a native Windows fallback. macOS/Linux behavior has not been runtime-validated, and a blocked main thread still requires intervention. See [Running While the Editor Is in the Background](#running-while-the-editor-is-in-the-background).
 - Modal dialogs are detected on Windows and, from Unity 6.7, through `EditorDialogEvents` on every platform; Unity before 6.7 on macOS/Linux cannot report them, and dialogs raised before the package loads are never seen. See [Modal Dialogs](#modal-dialogs).
+- `agentbridge dialog answer` works only on Windows Editors and only for native dialogs whose buttons the window scan reads; `ShowModal` windows still need a person.
 - Roslyn ships inside the package (`Roslyn~/`), so no download and no network access are required; third-party licenses are in `Roslyn~/THIRD-PARTY-NOTICES.md`.
 
 ## Releasing

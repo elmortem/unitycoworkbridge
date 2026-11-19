@@ -27,23 +27,49 @@ internal static class EditorDialogReader
 		public long UpdatedUtcMs { get; set; }
 		public long MainThreadIdleMs { get; set; }
 		public EditorDialogInfo[] Dialogs { get; set; } = Array.Empty<EditorDialogInfo>();
+		// dialog-answer-v1: the editor's outcome for the last `dialog answer` request it handled.
+		public AnswerResult? Answer { get; set; }
+	}
+
+	internal sealed class AnswerResult
+	{
+		public string RequestId { get; set; } = "";
+		public string Outcome { get; set; } = "";
+		public string Detail { get; set; } = "";
 	}
 
 	public static EditorDialogInfo[] Read(string path, BridgeStatus? status, bool foreignHost, long nowUtcMs)
 	{
-		if (status == null || !File.Exists(path))
+		if (status == null)
 		{
 			return Array.Empty<EditorDialogInfo>();
 		}
 
 		try
 		{
-			var snapshot = JsonSerializer.Deserialize<Snapshot>(SharedFile.ReadAllText(path), JsonSupport.Read);
-			return Select(snapshot, status.EditorPid, foreignHost, nowUtcMs);
+			return Select(ReadSnapshot(path), status.EditorPid, foreignHost, nowUtcMs);
 		}
 		catch
 		{
 			return Array.Empty<EditorDialogInfo>();
+		}
+	}
+
+	// The file as written, without the freshness and pid checks of Select.
+	public static Snapshot? ReadSnapshot(string path)
+	{
+		if (!File.Exists(path))
+		{
+			return null;
+		}
+
+		try
+		{
+			return JsonSerializer.Deserialize<Snapshot>(SharedFile.ReadAllText(path), JsonSupport.Read);
+		}
+		catch
+		{
+			return null;
 		}
 	}
 
@@ -100,6 +126,12 @@ internal static class EditorDialogReader
 	{
 		var level = dialog.Level.Length > 0 ? "[" + dialog.Level + "] " : "";
 		var details = new List<string> { dialog.Kind.Length > 0 ? dialog.Kind : "dialog", dialog.OpenMs / 1000 + "s" };
+		// The id is what `agentbridge dialog answer` takes.
+		if (dialog.Id.Length > 0)
+		{
+			details.Add("id " + dialog.Id);
+		}
+
 		if (dialog.TaskId.Length > 0)
 		{
 			details.Add("task " + dialog.TaskId);

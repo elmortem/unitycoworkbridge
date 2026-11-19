@@ -41,6 +41,7 @@ try
 	await RunStaleSubmissionTests(root);
 	await RunQueueBudgetTests(root);
 	await EditorDialogTests.RunAsync(root);
+	await DialogAnswerTests.RunAsync(root);
 	await IndependentQueueTests.RunAsync(root);
 	await QueueDiscussionTests.RunAsync(root);
 	await QueueReplyLifetimeTests.RunAsync(root);

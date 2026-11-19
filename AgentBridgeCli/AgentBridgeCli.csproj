@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>agentbridge</AssemblyName>
     <RootNamespace>AgentBridge.Cli</RootNamespace>
-    <Version>1.29.0</Version>
+    <Version>1.30.0</Version>
     <InvariantGlobalization>true</InvariantGlobalization>
     <PublishSingleFile Condition="'$(RuntimeIdentifier)' != ''">true</PublishSingleFile>
     <SelfContained Condition="'$(RuntimeIdentifier)' != ''">true</SelfContained>
@@ -22,5 +22,6 @@
     <Compile Include="../AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/Coordination/**/*.cs" LinkBase="Coordination" />
 	<Compile Include="../AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/Queueing/**/*.cs" LinkBase="Queueing" />
 	<Compile Include="../AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/TaskCancellationPolicy.cs" Link="TaskCancellationPolicy.cs" />
+	<Compile Include="../AgentBridgeUnity/Packages/com.elmortem.agentbridge/Editor/DialogAnswerRequest.cs" Link="DialogAnswerRequest.cs" />
   </ItemGroup>
 </Project>

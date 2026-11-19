@@ -8,7 +8,8 @@ param(
 #   1. status reports blocked_by_dialog with the dialog's title and the task that was running;
 #   2. a neighbour's wait ends early with exit 2 and Reason editor_blocked_by_dialog;
 #   3. after the dialog closes both tasks finish and the probe's record logs the dialog;
-#   4. a progress bar on a busy main thread is never reported as a dialog.
+#   4. a progress bar on a busy main thread is never reported as a dialog;
+#   5. `dialog answer` refuses an unknown button, then clicks a named one (dialog-answer-v1).
 $ErrorActionPreference = 'Stop'
 $Project = [IO.Path]::GetFullPath($Project)
 $Cli = [IO.Path]::GetFullPath($Cli)
@@ -71,7 +72,8 @@ $watch.Stop()
 Save 'neighbor-early' $neighbor
 Check ($neighborExit -eq 2) "The neighbour's wait must end with exit 2, got $neighborExit"
 Check ($neighbor.Accepted -and $neighbor.EditorState -eq 'blocked_by_dialog' -and $neighbor.Reason -eq 'editor_blocked_by_dialog') 'The early exit must name the dialog block'
-Check (($neighbor.BlockedBy | Where-Object { $_.Title -eq $dialogTitle }).Count -ge 1) 'The early exit must carry BlockedBy'
+# @(): Windows PowerShell 5.1 gives a single PSCustomObject no Count.
+Check (@($neighbor.BlockedBy | Where-Object { $_.Title -eq $dialogTitle }).Count -ge 1) 'The early exit must carry BlockedBy'
 Check ($watch.Elapsed.TotalSeconds -lt 15) "The wait must end early, it took $([int]$watch.Elapsed.TotalSeconds) s"
 Write-Output "PASS: a waiting neighbour returns in $([int]$watch.Elapsed.TotalSeconds) s with exit 2"
 
@@ -104,4 +106,49 @@ $progressResult = Wait-Done $progress.Id 180
 Save 'progress-result' $progressResult
 Check ($progressResult.Status -eq 'success') "The progress probe failed: $($progressResult | ConvertTo-Json -Depth 8)"
 Write-Output 'PASS: a progress bar on a busy main thread is not a dialog'
+
+# dialog-answer-v1: the agent answers a DisplayDialogComplex with Alpha/Beta/Gamma by itself.
+$answerTitle = 'AgentBridge answer probe'
+Check ($health.bridge.capabilities -contains 'dialog-answer-v1') 'Update the Unity package: dialog-answer-v1 is missing'
+$answerProbe = Bridge @('tests', '--test', 'ModalDialogProbeTests.AnswerPressesNamedButton', '--fresh', '--wait', '0', '--session', $session)
+Save 'answer-submit' $answerProbe
+Check $answerProbe.Id 'The answer probe was not accepted'
+$answerBlocked = $null
+$limit = [DateTime]::UtcNow.AddSeconds(45)
+do {
+	$status = Bridge @('status')
+	if ($status.code -eq 'blocked_by_dialog' -and ($status.blockedBy | Where-Object { $_.title -eq $answerTitle })) { $answerBlocked = $status; break }
+	Start-Sleep -Milliseconds 500
+} while ([DateTime]::UtcNow -lt $limit)
+Save 'answer-blocked' $answerBlocked
+Check $answerBlocked 'status never reported the answer probe dialog'
+$answerDialog = $answerBlocked.blockedBy | Where-Object { $_.title -eq $answerTitle } | Select-Object -First 1
+# Unity lays the buttons out as ok, alt, cancel, so only the set is fixed.
+Check (((@($answerDialog.buttons) | Sort-Object) -join '|') -eq 'Alpha|Beta|Gamma') "The scan must read Alpha, Beta, Gamma, got: $(@($answerDialog.buttons) -join ', ')"
+$answerNeighbor = Bridge @('compile', '--wait', '0', '--session', "$session-answer-neighbor")
+Save 'answer-neighbor-submit' $answerNeighbor
+
+$refused = Bridge @('dialog', 'answer', $answerDialog.id, '--button', 'Delta', '--reason', 'verification', '--session', $session)
+$refusedExit = $LASTEXITCODE
+Save 'answer-refused' $refused
+Check ($refusedExit -eq 1 -and $refused.code -eq 'button_not_found') "An unknown button must be refused with exit 1, got $refusedExit $($refused.code)"
+$still = Bridge @('status')
+Check ($still.code -eq 'blocked_by_dialog') "A refused answer must leave the dialog open, status: $($still.code)"
+Write-Output 'PASS: an unknown button is refused with exit 1 and the dialog stays open'
+
+$answered = Bridge @('dialog', 'answer', $answerDialog.id, '--button', 'gamma', '--reason', 'verification', '--session', $session)
+$answeredExit = $LASTEXITCODE
+Save 'answer-answered' $answered
+Check ($answeredExit -eq 0 -and $answered.code -eq 'answered' -and $answered.button -eq 'Gamma') "dialog answer must click Gamma, got $answeredExit $($answered | ConvertTo-Json -Depth 6)"
+$answerResult = Wait-Done $answerProbe.Id 180
+Save 'answer-result' $answerResult
+Check ($answerResult.Status -eq 'success') "AnswerPressesNamedButton failed (DisplayDialogComplex must return 2): $($answerResult | ConvertTo-Json -Depth 8)"
+Check (@($answerResult.Logs | Where-Object { $_ -like "modal dialog: `"$answerTitle`"*answered `"Gamma`" by ${session}: verification" }).Count -ge 1) 'The probe record must log who answered the dialog'
+$answerAfter = Bridge @('status')
+Save 'answer-status-after' $answerAfter
+Check ($answerAfter.code -ne 'blocked_by_dialog') 'status still reports the answered dialog'
+$answerNeighborResult = Wait-Done $answerNeighbor.Id 300
+Save 'answer-neighbor-result' $answerNeighborResult
+Check ($answerNeighborResult.Status -eq 'success') "The queued neighbour must run after the answer: $($answerNeighborResult.Status)"
+Write-Output 'PASS: dialog answer clicks Gamma, DisplayDialogComplex returns 2, the queue moves on and the log names the answer'
 Write-Output "Evidence: $evidence"

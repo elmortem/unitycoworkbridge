@@ -17,7 +17,9 @@ public class ModalDialogProbeTests
 {
 	public const string DialogTitle = "AgentBridge modal probe";
 	public const string ProgressTitle = "AgentBridge progress probe";
+	public const string AnswerTitle = "AgentBridge answer probe";
 	private const int DialogHoldSeconds = 20;
+	private const int AnswerHoldSeconds = 60;
 	private const int ProgressHoldSeconds = 10;
 
 	private static volatile bool _closedByProbe;
@@ -62,6 +64,44 @@ public class ModalDialogProbeTests
 		while (DateTime.UtcNow < deadline);
 
 		Assert.IsNull(title, "dialogs.json must be cleared once the dialog closes");
+	}
+
+	// dialog-answer-v1: scripts/verify-modal-dialog.ps1 answers this dialog with `dialog answer --button gamma`.
+	// The safety closer only keeps the editor from waiting for a person if the answer never comes; it
+	// cancels the dialog, which DisplayDialogComplex reports as 1, not 2.
+	[Test, Explicit("Holds the editor in a modal dialog until `agentbridge dialog answer` clicks Gamma; run through scripts/verify-modal-dialog.ps1")]
+	public void AnswerPressesNamedButton()
+	{
+		if (Application.platform != RuntimePlatform.WindowsEditor)
+		{
+			Assert.Ignore("Answering a dialog uses Win32.");
+		}
+
+		_closedByProbe = false;
+		bool returned = false;
+		var closer = new Thread(() => CloseAfter(AnswerTitle, AnswerHoldSeconds, () => Volatile.Read(ref returned))) { IsBackground = true };
+		closer.Start();
+
+		int result;
+		try
+		{
+			result = EditorUtility.DisplayDialogComplex(
+				AnswerTitle,
+				"Agent Bridge verification: agentbridge dialog answer must click Gamma.",
+				"Alpha",
+				"Beta",
+				"Gamma");
+		}
+		finally
+		{
+			// An idle closer must never wake up later and close somebody else's dialog.
+			Volatile.Write(ref returned, true);
+		}
+
+		closer.Join(2000);
+		Debug.Log("[AgentBridge] answer probe returned: " + result);
+		Assert.IsFalse(_closedByProbe, "the safety closer had to close the dialog: nobody answered it");
+		Assert.AreEqual(2, result, "Gamma is the alt button of DisplayDialogComplex");
 	}
 
 	[Test, Explicit("Keeps a progress bar on a busy main thread for 10 s; run through scripts/verify-modal-dialog.ps1")]
@@ -128,9 +168,25 @@ public class ModalDialogProbeTests
 		return match.Success ? match.Groups[1].Value : null;
 	}
 
-	private static void CloseAfter(string title, int seconds)
+	// done: the dialog has returned by other means, so there is nothing left to close.
+	private static void CloseAfter(string title, int seconds, Func<bool> done = null)
 	{
-		Thread.Sleep(seconds * 1000);
+		DateTime wakeUp = DateTime.UtcNow.AddSeconds(seconds);
+		while (DateTime.UtcNow < wakeUp)
+		{
+			if (done != null && done())
+			{
+				return;
+			}
+
+			Thread.Sleep(100);
+		}
+
+		if (done != null && done())
+		{
+			return;
+		}
+
 		bool posted = false;
 		for (int attempt = 0; attempt < 80; attempt++)
 		{

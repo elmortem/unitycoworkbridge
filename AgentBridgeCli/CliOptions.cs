@@ -25,6 +25,8 @@ internal sealed class CliOptions
 	public string? Kind { get; private set; }
 	public string? TargetSession { get; private set; }
 	public string? Reason { get; private set; }
+	// dialog answer
+	public string? Button { get; private set; }
 	public string? CoordinationWindowToken { get; private set; }
 	public string? CoordinationStepId { get; private set; }
 	public long AfterRevision { get; private set; }
@@ -275,6 +277,16 @@ internal sealed class CliOptions
 			}
 
 			if (TryTakeText(options, args, ref index, argument, "--reason", value => options.Reason = value, out handled))
+			{
+				if (!handled)
+				{
+					return options;
+				}
+
+				continue;
+			}
+
+			if (TryTakeText(options, args, ref index, argument, "--button", value => options.Button = value, out handled))
 			{
 				if (!handled)
 				{

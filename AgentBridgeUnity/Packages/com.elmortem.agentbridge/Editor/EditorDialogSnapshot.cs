@@ -16,7 +16,10 @@ namespace AgentBridge
 
 		// mainThreadIdleMs: how long EditorApplication.update has not run. A dialog is blocking only while
 		// it grows; the CLI ignores a snapshot whose main thread still ticks.
-		public static string Build(int editorPid, long updatedUtcMs, long mainThreadIdleMs, IList<EditorDialogInfo> dialogs)
+		// answerRequestId: the last `dialog answer` request this editor handled (dialog-answer-v1);
+		// empty when there is none, and then Answer is left out.
+		public static string Build(int editorPid, long updatedUtcMs, long mainThreadIdleMs, IList<EditorDialogInfo> dialogs,
+			string answerRequestId, string answerOutcome, string answerDetail)
 		{
 			var builder = new StringBuilder(256);
 			builder.Append("{\n\t\"EditorPid\": ").Append(editorPid.ToString(CultureInfo.InvariantCulture));
@@ -52,7 +55,17 @@ namespace AgentBridge
 				builder.Append('}');
 			}
 
-			builder.Append(dialogs.Count == 0 ? "]\n}\n" : "\n\t]\n}\n");
+			builder.Append(dialogs.Count == 0 ? "]" : "\n\t]");
+			if (!string.IsNullOrEmpty(answerRequestId))
+			{
+				builder.Append(",\n\t\"Answer\": {");
+				AppendText(builder, "RequestId", answerRequestId, true);
+				AppendText(builder, "Outcome", answerOutcome, false);
+				AppendText(builder, "Detail", Limit(answerDetail, MessageLimit), false);
+				builder.Append('}');
+			}
+
+			builder.Append("\n}\n");
 			return builder.ToString();
 		}
 

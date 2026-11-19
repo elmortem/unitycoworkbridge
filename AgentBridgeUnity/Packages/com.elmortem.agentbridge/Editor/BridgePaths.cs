@@ -73,6 +73,12 @@ namespace AgentBridge
 			get { return Path.Combine(WorkingRoot, "dialogs.json"); }
 		}
 
+		// `agentbridge dialog answer` request, consumed by EditorDialogMonitor (dialog-answer-v1).
+		public static string DialogAnswerFile
+		{
+			get { return Path.Combine(WorkingRoot, "dialog-answer.txt"); }
+		}
+
 		// Content hashes of validation inputs keyed by their stamps; they outlive the domain.
 		public static string InputHashCacheFile
 		{

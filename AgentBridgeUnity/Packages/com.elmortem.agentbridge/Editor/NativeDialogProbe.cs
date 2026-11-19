@@ -25,6 +25,8 @@ namespace AgentBridge
 			public string Title;
 			public string Message;
 			public string[] Buttons;
+			// HWNDs parallel to Buttons: what Press needs to click one.
+			public long[] ButtonHandles;
 			public bool NativeDialog;
 		}
 #pragma warning restore 0649
@@ -174,6 +176,7 @@ namespace AgentBridge
 				bool progress = false;
 				var statics = new List<string>();
 				var buttons = new List<string>();
+				var buttonHandles = new List<long>();
 				foreach (IntPtr child in children)
 				{
 					string childClass = ClassOf(child);
@@ -194,6 +197,7 @@ namespace AgentBridge
 						if (label.Length > 0)
 						{
 							buttons.Add(label);
+							buttonHandles.Add(child.ToInt64());
 						}
 					}
 					else if (childClass == "Static")
@@ -224,6 +228,7 @@ namespace AgentBridge
 					Title = title,
 					Message = string.Join("\n", statics.ToArray()),
 					Buttons = buttons.ToArray(),
+					ButtonHandles = buttonHandles.ToArray(),
 					NativeDialog = nativeDialog
 				});
 			}
@@ -237,8 +242,28 @@ namespace AgentBridge
 			return result;
 		}
 
+		// Clicks a button of a dialog found by Scan. Never waits on the main thread: PostMessage only
+		// queues WM_COMMAND for the dialog's modal loop, which answers it as if a person had clicked.
+		public static bool Press(long window, long button)
+		{
+#if UNITY_EDITOR_WIN
+			var buttonHandle = new IntPtr(button);
+			int id = GetDlgCtrlID(buttonHandle);
+			if (id == 0)
+			{
+				return false;
+			}
+
+			// BN_CLICKED == 0, so wParam is the control id alone.
+			return PostMessage(new IntPtr(window), WmCommand, new IntPtr(id), buttonHandle);
+#else
+			return false;
+#endif
+		}
+
 #if UNITY_EDITOR_WIN
 		private const uint GwOwner = 4;
+		private const uint WmCommand = 0x0111;
 		private const uint WmNull = 0x0000;
 		private const uint SmtoBlock = 0x0001;
 		private const uint SmtoAbortIfHung = 0x0002;
@@ -330,6 +355,13 @@ namespace AgentBridge
 
 		[DllImport("user32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
 		private static extern int InternalGetWindowText(IntPtr window, StringBuilder text, int capacity);
+
+		[DllImport("user32.dll")]
+		private static extern int GetDlgCtrlID(IntPtr window);
+
+		[DllImport("user32.dll", EntryPoint = "PostMessageW", ExactSpelling = true)]
+		[return: MarshalAs(UnmanagedType.Bool)]
+		private static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
 
 		[DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW", CharSet = CharSet.Unicode, ExactSpelling = true)]
 		private static extern IntPtr SendMessageTimeout(IntPtr window, uint message, IntPtr wParam, IntPtr lParam, uint flags, uint timeoutMs, out IntPtr result);

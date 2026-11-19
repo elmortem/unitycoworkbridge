@@ -142,6 +142,11 @@ internal static class AgentBridgeApplication
 			Reason = options.Reason,
 			AfterRevision = options.AfterRevision
 		};
+		if (command == "dialog")
+		{
+			return await DialogCommands.RunAsync(projectRoot, paths, health, commandArguments, options, telemetry);
+		}
+
 		switch (command)
 		{
 			case "csharp":
@@ -457,6 +462,7 @@ internal static class AgentBridgeApplication
 			  play [--seconds N] --note <intent> --session <id>   open a play session; only csharp and sceneshot run inside it
 			  stopplay [--session <id>]  immediately stop Play Mode, including an active PlayMode test
 			  wait <TaskId>
+			  dialog answer <DialogId> --button LABEL --reason TEXT   click a button of the modal dialog in status blockedBy
 			  coord <command>            coordination-v1 between several agents; see 'agentbridge coord help'
 
 			global options:

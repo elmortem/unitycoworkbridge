@@ -34,6 +34,10 @@ namespace AgentBridge
 			public EditorDialogInfo Info;
 			public long FirstSeenMs;
 			public long LastSeenMs;
+			// Set when `agentbridge dialog answer` clicked a button of this dialog.
+			public string AnswerButton;
+			public string AnswerSession;
+			public string AnswerReason;
 		}
 
 		private static readonly object Gate = new object();
@@ -45,6 +49,13 @@ namespace AgentBridge
 		private static readonly List<Tracked> Closed = new List<Tracked>();
 		private static readonly List<Tracked> TelemetryQueue = new List<Tracked>();
 
+		// dialog-answer-v1, guarded by Gate: the last request handled and what came of it.
+		private static string _handledRequestId;
+		private static string _answerRequestId;
+		private static string _answerOutcome;
+		private static string _answerDetail;
+
+		private static string _answerFile;
 		private static System.Threading.Timer _timer;
 		private static volatile bool _running;
 		private static bool _published;
@@ -92,6 +103,16 @@ namespace AgentBridge
 		private static void Start()
 		{
 			_file = BridgePaths.DialogsFile;
+			_answerFile = BridgePaths.DialogAnswerFile;
+			// A request left by a previous domain was meant for a dialog that domain saw.
+			try
+			{
+				System.IO.File.Delete(_answerFile);
+			}
+			catch
+			{
+			}
+
 			_processId = Process.GetCurrentProcess().Id;
 			_mainThreadId = NativeDialogProbe.CurrentThreadId();
 			_enabled = AgentBridgeSettingsStore.IsEnabled();
@@ -165,7 +186,8 @@ namespace AgentBridge
 				{
 					if (tracked.Info.TaskId == taskId)
 					{
-						lines.Add(Describe(tracked, true));
+						// An answered dialog has returned to the task; only the next scan drops it from Open.
+						lines.Add(Describe(tracked, string.IsNullOrEmpty(tracked.AnswerButton)));
 					}
 				}
 			}
@@ -190,6 +212,13 @@ namespace AgentBridge
 			if (message.Length > 0)
 			{
 				line += ": " + message;
+			}
+
+			if (!string.IsNullOrEmpty(tracked.AnswerButton))
+			{
+				line += "; answered \"" + tracked.AnswerButton + "\" by "
+					+ (string.IsNullOrEmpty(tracked.AnswerSession) ? "agent" : tracked.AnswerSession)
+					+ ": " + tracked.AnswerReason;
 			}
 
 			return line;
@@ -253,7 +282,10 @@ namespace AgentBridge
 					TelemetryField.Text("Kind", tracked.Info.Kind ?? ""),
 					TelemetryField.Text("Source", tracked.Info.Source ?? ""),
 					TelemetryField.Text("Level", tracked.Info.Level ?? ""),
-					TelemetryField.Number("OpenMs", Math.Max(0, tracked.LastSeenMs - tracked.FirstSeenMs))
+					TelemetryField.Number("OpenMs", Math.Max(0, tracked.LastSeenMs - tracked.FirstSeenMs)),
+					TelemetryField.Text("Answer", tracked.AnswerButton ?? ""),
+					TelemetryField.Text("AnswerSession", tracked.AnswerSession ?? ""),
+					TelemetryField.Text("AnswerReason", tracked.AnswerReason ?? "")
 				});
 			}
 		}
@@ -347,9 +379,11 @@ namespace AgentBridge
 				// Outside the lock: the probe may wait up to PumpTimeoutMs on the main thread, which may
 				// itself be about to take the lock in OnEventShown. A ticking editor is not blocked by
 				// any window it shows, so its scan result is simply empty.
-				List<NativeDialogProbe.Window> windows = _enabled && stalled && NativeDialogProbe.Supported
+				bool scanned = _enabled && stalled && NativeDialogProbe.Supported;
+				List<NativeDialogProbe.Window> windows = scanned
 					? NativeDialogProbe.Scan(_processId, _mainThreadId, PumpTimeoutMs, () => !_running)
 					: new List<NativeDialogProbe.Window>();
+				DialogAnswerRequest request = ReadRequest();
 
 				lock (Gate)
 				{
@@ -360,7 +394,16 @@ namespace AgentBridge
 
 					now = NowMs();
 					Reconcile(windows, now);
-					PublishLocked(now);
+					bool answered = false;
+					if (request != null && request.EditorPid == _processId && request.RequestId != _handledRequestId)
+					{
+						_handledRequestId = request.RequestId;
+						_answerRequestId = request.RequestId;
+						_answerOutcome = Answer(request, windows, scanned, out _answerDetail);
+						answered = true;
+					}
+
+					PublishLocked(now, answered);
 				}
 			}
 			catch (Exception exception)
@@ -377,6 +420,75 @@ namespace AgentBridge
 			{
 				Interlocked.Exchange(ref _scanning, 0);
 			}
+		}
+
+		private static DialogAnswerRequest ReadRequest()
+		{
+			try
+			{
+				if (_answerFile == null || !System.IO.File.Exists(_answerFile))
+				{
+					return null;
+				}
+
+				string text;
+				return Coordination.SharedFile.TryReadAllText(_answerFile, out text) ? DialogAnswerRequest.Parse(text) : null;
+			}
+			catch (Exception)
+			{
+				return null;
+			}
+		}
+
+		// Runs under Gate on the timer thread. windows is the scan made in this same tick, so the
+		// handles it names belong to dialogs that were open a moment ago.
+		private static string Answer(DialogAnswerRequest request, List<NativeDialogProbe.Window> windows, bool scanned, out string detail)
+		{
+			detail = "";
+			if (!scanned)
+			{
+				return DialogAnswerRequest.NotBlocked;
+			}
+
+			Tracked tracked;
+			if (!Open.TryGetValue(request.DialogId, out tracked))
+			{
+				return DialogAnswerRequest.DialogNotOpen;
+			}
+
+			if (DialogAnswerRequest.OneLine(tracked.Info.Title) != DialogAnswerRequest.OneLine(request.Title))
+			{
+				detail = tracked.Info.Title;
+				return DialogAnswerRequest.DialogChanged;
+			}
+
+			// A dialog from Unity's events (6.7+) carries no HWND: its native window is found by title.
+			bool byHandle = tracked.Info.Source == "win32";
+			NativeDialogProbe.Window window = windows.Find(found => found.NativeDialog && (byHandle
+				? "win32:" + found.Handle.ToString("x", CultureInfo.InvariantCulture) == request.DialogId
+				: string.Equals(found.Title, tracked.Info.Title, StringComparison.OrdinalIgnoreCase)));
+			if (window == null)
+			{
+				return DialogAnswerRequest.DialogNotOpen;
+			}
+
+			int index = DialogAnswerRequest.MatchButton(window.Buttons, request.Button);
+			if (index < 0)
+			{
+				detail = string.Join(" | ", window.Buttons ?? new string[0]);
+				return index == DialogAnswerRequest.Ambiguous ? DialogAnswerRequest.AmbiguousButton : DialogAnswerRequest.ButtonNotFound;
+			}
+
+			if (window.ButtonHandles == null || index >= window.ButtonHandles.Length
+				|| !NativeDialogProbe.Press(window.Handle, window.ButtonHandles[index]))
+			{
+				return DialogAnswerRequest.SendFailed;
+			}
+
+			tracked.AnswerButton = window.Buttons[index];
+			tracked.AnswerSession = request.Session;
+			tracked.AnswerReason = request.Reason;
+			return DialogAnswerRequest.Sent;
 		}
 
 		// The task executing right now. A plain static read is safe off the main thread, and reading it
@@ -519,9 +631,10 @@ namespace AgentBridge
 			return info.Kind == "native_dialog" ? 1 : 2;
 		}
 
-		private static void PublishLocked(long now)
+		// force: publish even with nothing open, so the CLI sees the answer to its request.
+		private static void PublishLocked(long now, bool force = false)
 		{
-			if (Open.Count == 0 && !_published)
+			if (Open.Count == 0 && !_published && !force)
 			{
 				return;
 			}
@@ -543,7 +656,8 @@ namespace AgentBridge
 			try
 			{
 				long idleMs = now - Interlocked.Read(ref _lastUpdateMs);
-				Coordination.SharedFile.WriteAtomic(_file, EditorDialogSnapshot.Build(_processId, now, idleMs, dialogs));
+				Coordination.SharedFile.WriteAtomic(_file, EditorDialogSnapshot.Build(_processId, now, idleMs, dialogs,
+					_answerRequestId, _answerOutcome, _answerDetail));
 				_published = dialogs.Count > 0;
 			}
 			catch (Exception exception)
@@ -582,7 +696,7 @@ namespace AgentBridge
 				{
 					try
 					{
-						Coordination.SharedFile.WriteAtomic(_file, EditorDialogSnapshot.Build(_processId, NowMs(), 0, new List<EditorDialogInfo>()));
+						Coordination.SharedFile.WriteAtomic(_file, EditorDialogSnapshot.Build(_processId, NowMs(), 0, new List<EditorDialogInfo>(), "", "", ""));
 						_published = false;
 					}
 					catch

@@ -81,11 +81,11 @@ internal static class EditorDialogTests
 	{
 		var dialog = new EditorDialogInfo
 		{
-			Kind = "native_message_box", Level = "warning", Title = "Scene(s) Have Been Modified", OpenMs = 12400,
+			Id = "unity:7", Kind = "native_message_box", Level = "warning", Title = "Scene(s) Have Been Modified", OpenMs = 12400,
 			Message = "Do you want to save\nthe changes?", Buttons = new[] { "Save", "Don't Save" }, TaskId = "Task_1"
 		};
 		var line = EditorDialogReader.Describe(dialog);
-		Check(line == "[warning] \"Scene(s) Have Been Modified\" (native_message_box, 12s, task Task_1) — Do you want to save the changes? [Save | Don't Save]",
+		Check(line == "[warning] \"Scene(s) Have Been Modified\" (native_message_box, 12s, id unity:7, task Task_1) — Do you want to save the changes? [Save | Don't Save]",
 			"describe must give one readable line: " + line);
 
 		var human = TaskResultFormatter.FormatHuman(JsonSerializer.Serialize(new

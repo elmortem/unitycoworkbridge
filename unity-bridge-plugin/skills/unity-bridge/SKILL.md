@@ -1,6 +1,6 @@
 ---
 name: unity-bridge
-description: "Use whenever the user wants Claude to execute anything inside the Unity Editor — assets, scenes, prefabs, components, materials, project settings; editor-side analysis, refactors, batch operations; querying the scene hierarchy; compiling the project; running tests; or any task needing C# code run in the Editor context. Works via Agent Bridge: Claude writes a C# script and runs it with the `agentbridge` CLI — compiled in memory with Roslyn on the Editor main thread. Trigger even for casual phrasings like 'check what's in the scene', 'find all prefabs using shader X', 'run the tests'. Also for Scene View screenshots ('скриншот сцены') via sceneshot, and for anything in Play Mode ('запусти игру', 'войди в плей мод', 'скриншот геймплея') via play/stopplay — never enter Play Mode from a csharp task. Do NOT use for runtime gameplay code, build tasks unrelated to Editor scripting, or pure C# questions outside Unity. For uGUI layout and UI screenshots prefer the unity-ui skill."
+description: "Use whenever the user wants Claude to execute anything inside the Unity Editor — assets, scenes, prefabs, components, materials, project settings; editor-side analysis, refactors, batch operations; querying the scene hierarchy; compiling the project; running tests; or any task needing C# code run in the Editor context. Works via Agent Bridge: Claude writes a C# script and runs it with the `agentbridge` CLI — compiled in memory with Roslyn on the Editor main thread. Trigger even for casual phrasings like 'check what's in the scene', 'run the tests'. Also when a modal dialog blocks Unity. Also for Scene View screenshots ('скриншот сцены') via sceneshot, and for anything in Play Mode ('запусти игру', 'войди в плей мод', 'скриншот геймплея') via play/stopplay — never enter Play Mode from a csharp task. Do NOT use for runtime gameplay code, build tasks unrelated to Editor scripting, or pure C# questions outside Unity. For uGUI layout and UI screenshots prefer the unity-ui skill."
 ---
 
 # Unity Bridge
@@ -43,6 +43,7 @@ description: "Use whenever the user wants Claude to execute anything inside the 
 | 3 | Сгенерировать уникальное имя задачи: `Task_YYYYMMDD_HHMMSS_fff_<random>` |
 | 4 | Написать `.cs` по шаблону ниже в `<ProjectRoot>/Temp/AgentBridge/<TaskName>.cs` — не в `Assets/` |
 | 5 | Выполнить `agentbridge csharp <файл>` и обработать результат из stdout |
+| — | `EditorState: blocked_by_dialog` — Unity держит модальное окно: см. «Модальные окна, блокирующие Unity» |
 
 ## Шаблон C# скрипта
 
@@ -203,7 +204,7 @@ agentbridge tests --mode EditMode --assembly MyProject.Tests --format human
 
 ### `status`
 
-Проверить найденный проект, рабочую папку для файлов тасков (`ScratchDir`), наличие пакета, PID редактора, свежесть heartbeat, версию протокола и готовность моста — без создания задачи. Для подробной диагностики используй `agentbridge doctor`. `code: blocked_by_dialog` с массивом `blockedBy` означает открытое модальное окно — см. «Модальное окно в Unity» ниже.
+Проверить найденный проект, рабочую папку для файлов тасков (`ScratchDir`), наличие пакета, PID редактора, свежесть heartbeat, версию протокола и готовность моста — без создания задачи. Для подробной диагностики используй `agentbridge doctor`. `code: blocked_by_dialog` с массивом `blockedBy` означает открытое модальное окно — см. «Модальные окна, блокирующие Unity».
 
 ### `release --session <id>`
 
@@ -267,6 +268,84 @@ agentbridge stopplay --session AB_20260813_1500_a1f
 ### `wait <TaskId>`
 
 До-дождаться уже созданной задачи (например, после того как предыдущий вызов вернул код `2`).
+
+### `dialog answer <DialogId> --button <текст> --reason <текст> --session <id>`
+
+Нажать кнопку модального окна Unity, которое держит редактор. `DialogId` — поле `id` окна в `blockedBy`, текст кнопки — из его `buttons` (регистр не важен). Когда отвечать самому, а когда звать человека — в следующем разделе.
+
+## Модальные окна, блокирующие Unity
+
+Модальное окно — запрос сохранения сцены, *API Update Required*, выбор файла, любой `DisplayDialog`/`ShowModal` — держит главный поток Unity, пока на него не ответят. Очередь стоит, heartbeat протухает, разбудить редактор нельзя, отмена задач не срабатывает. Ждать бесполезно: окно само не закроется.
+
+### Как узнать
+
+- Ждущая команда (`csharp`, `compile`, `tests`, `wait`, …) возвращается через 2 секунды после появления окна: код `2`, `Accepted: true`, тот же `Id`, `EditorState: blocked_by_dialog`, `Reason: editor_blocked_by_dialog`, `BlockedBy`, `Resume`. В stderr — строка `Unity is held by a modal dialog: …`. Задача не потеряна: она остаётся в очереди или исполняется.
+- `agentbridge status` даёт `code: blocked_by_dialog` и `blockedBy`; в `--format human` — строка `Blocked by dialog: "<title>" (<kind>, <N>s, id <id>, task <TaskId>) — <текст> [<кнопки>]`.
+
+Поля окна в `blockedBy`: `id` (его принимает `dialog answer`), `title`, `message`, `buttons`, `level` (`info`/`warning`/`error`, если известен), `kind`, `openMs` и `taskId` — задача, во время которой окно появилось; пусто, если редактор простаивал.
+
+### Решить: ответить самому или позвать человека
+
+Отвечай сам, только когда понимаешь, что произойдёт после нажатия, и это следует из твоей задачи:
+
+- окно вызвала твоя задача (`taskId` — твой Id), и ответ отменяет или завершает твоё же действие;
+- ответ ничего чужого не теряет: информационное окно с одной кнопкой «OK», отмена выбора файла.
+
+Зови человека:
+
+- кнопка необратимо теряет или меняет чужую работу: несохранённые правки человека или другого агента, удаление, обновление API или проекта;
+- окно появилось без твоей задачи (`taskId` пуст или чужой) и его смысл неочевиден;
+- `buttons` пуст — мост не прочитал кнопки и ответить не сможет;
+- ответ не сработал.
+
+Человеку передай заголовок, текст и кнопки как есть и не выбирай за него. Окно чужой задачи — дело её владельца: не отвечай за него, если это не информационное «OK».
+
+| Окно | Обычное решение |
+|---|---|
+| Информационное, одна кнопка `OK` | ответить `OK` |
+| Выбор файла или папки, вызванный твоей задачей | `Cancel`, затем исправить скрипт |
+| *Scene(s) Have Been Modified* (`Save` / `Don't Save` / `Cancel`) | изменения только твои — по смыслу задачи; иначе человек. `Cancel` ничего не теряет, но прерывает операцию |
+| *API Update Required* | человек: меняет файлы проекта |
+| Ошибка записи файла (`Try Again` / `Cancel` / `Force Quit`) | человек; кнопки, которые закрывают Unity, не нажимай никогда |
+| Окно со смыслом, которого ты не понимаешь | человек |
+
+### Ответить
+
+```bash
+agentbridge dialog answer <id> --button "<текст из buttons>" --reason "<почему эта кнопка>" --session <id>
+```
+
+`--reason` до 200 символов: он попадает в лог задачи и телеметрию — пиши так, чтобы человек понял, почему нажата именно эта кнопка. Кнопка сравнивается без учёта регистра, `’` равен `'`.
+
+| Код | Выход | Что делать |
+|---|---|---|
+| `answered` | 0 | Окно закрыто. Прочитай `BlockedBy` в ответе — следом могло открыться другое окно, — затем `agentbridge wait <TaskId> --wait <секунды>` |
+| `button_not_found`, `ambiguous_button` | 1 | Ничего не нажато; кнопки окна — в `Detail`. Повтори с точным текстом |
+| `dialog_not_open`, `dialog_changed` | 1 | Окно уже закрыто или под этим id другое. Заново посмотри `agentbridge status` |
+| `not_blocked` | 1 | Редактор снова тикает — окна уже нет. Продолжи `wait` |
+| `send_failed`, `dialog_still_open` | 1 | Нажатие не сработало. Не повторяй, зови человека |
+| `answer_unacknowledged` | 2 | Редактор не отозвался за 5 секунд. Зови человека |
+| `dialog_answer_unsupported` | 3 | Редактор не умеет отвечать (не Windows или старый пакет). Зови человека |
+
+### Чего не делать
+
+- Не переподавай задачу и не повторяй `wait` в коротком цикле: пока окно открыто, каждый вызов возвращается сразу.
+- Не закрывай окно другими способами: ни скриптом, ни `ExecuteMenuItem`, ни эмуляцией кликов или клавиш, ни завершением процесса Unity.
+- Не нажимай подряд разные кнопки наугад.
+
+### Не вызывать окна в своих скриптах
+
+Если `taskId` окна — твоя задача, окно вызвало твоё действие. После закрытия в `Logs` задачи будет строка `modal dialog: "<title>" … held the editor for N s during this task`; после ответа агентом — с хвостом `; answered "<кнопка>" by <сессия>: <причина>`. Исправь скрипт так, чтобы окно не появлялось, и не повторяй его в прежнем виде:
+
+- сохраняй сцены и ассеты по явному пути, без `SaveCurrentModifiedScenesIfUserWantsTo` и сохранения untitled-сцены;
+- не вызывай `EditorUtility.DisplayDialog*`, `*FilePanel*`, `ShowModal` — мост и так отклоняет известные модальные API до исполнения;
+- перед открытием другой сцены сам реши судьбу несохранённых правок своей задачи.
+
+### Ограничения
+
+- Распознавание зависит от `DialogDetection` в статусе: `win32` (Windows), `editor_dialog_events` (Unity 6.7+), `editor_dialog_events+win32`; при `unsupported` (Unity до 6.7 на macOS/Linux) открытое окно выглядит как обычный `heartbeat_stale`. Окна при старте Unity и посреди domain reload не распознаются никогда.
+- `dialog answer` работает только в редакторе на Windows (capability `dialog-answer-v1`) и только с нативными окнами, чьи кнопки прочитал скан; окна `ShowModal` остаются человеку.
+- Нужны CLI 1.29.0+ и пакет 0.41.0+ для распознавания, CLI 1.30.0+ и пакет 0.46.0+ для ответа.
 
 ## Работа рядом с другими агентами
 
@@ -447,19 +526,7 @@ PayloadFile считается от каталога plan.json. CLI копиру
 
 ### Модальное окно в Unity (`blocked_by_dialog`)
 
-Модальное окно (запрос сохранения сцены, *API Update Required*, выбор файла, любой `DisplayDialog`/`ShowModal`) держит главный поток Unity, пока его не закроет человек. Очередь стоит, heartbeat протухает, разбудить редактор нельзя. Мост это видит:
-
-- `status`/`doctor` дают `code: blocked_by_dialog` и `blockedBy` — по записи на окно: `title`, `message`, `buttons`, `level`, `kind`, `openMs`, `taskId` (задача, во время которой окно появилось; пусто, если редактор простаивал). В `--format human` — строка `Blocked by dialog: …`.
-- Любая ждущая команда (`csharp`, `compile`, `tests`, `wait`, …) возвращается, как только окно провисело 2 секунды: код `2`, `Accepted: true`, тот же `Id`, `EditorState: blocked_by_dialog`, `Reason: editor_blocked_by_dialog`, `BlockedBy`, `Resume`. Задача остаётся в очереди или исполняется.
-
-Что делать:
-
-1. Не переподавай задачу, не пытайся закрыть окно сам (скриптом, `ExecuteMenuItem`, эмуляцией кликов) и не жди в цикле с коротким `--wait` — пока окно открыто, каждый вызов будет сразу возвращаться.
-2. Сообщи пользователю заголовок окна, его текст и кнопки из `BlockedBy` и попроси ответить на него в Unity. Если окно просит решения (сохранить ли сцену, обновлять ли API), не выбирай за пользователя — передай вопрос как есть.
-3. Когда пользователь ответил, продолжи: `agentbridge wait <TaskId> --wait <секунды>`.
-4. Если `taskId` окна совпадает с твоей задачей, окно вызвало твоё действие (например, сохранение untitled-сцены или API, которое спрашивает пользователя). После закрытия в `Logs` задачи будет строка `modal dialog: "<title>" … held the editor for N s during this task`; исправь скрипт так, чтобы окно не появлялось (явный путь сохранения, без интерактивных API), а не повторяй его.
-
-Нужны CLI 1.29.0+ и пакет 0.41.0+ (capability `dialog-detection-v1`). Распознавание зависит от `DialogDetection` в статусе: `win32` (Windows), `editor_dialog_events` (Unity 6.7+), `unsupported` — Unity до 6.7 на macOS/Linux; там открытое окно выглядит как обычный `heartbeat_stale`. Окна при старте Unity и посреди domain reload не распознаются никогда.
+Ожидание прервано окном, которое держит редактор. Как его распознать, решить, отвечать ли самому, и ответить — в разделе [«Модальные окна, блокирующие Unity»](#модальные-окна-блокирующие-unity).
 
 ### Код выхода `3` (ошибка команды, доступа или диспетчера)
 
