@@ -11,6 +11,8 @@ namespace AgentBridge
 		public string ProjectId;
 		public string HostOs;
 		public string UnityVersion;
+		// The editor executable; status.json outlives the editor, so `agentbridge editor open` can relaunch it.
+		public string EditorPath;
 		public int EditorPid;
 		public string SessionId;
 		public string AssemblyBuildTimeUtc;

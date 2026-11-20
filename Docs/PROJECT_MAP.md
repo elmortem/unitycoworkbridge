@@ -169,7 +169,7 @@ Namespace `AgentBridge.Cli`, file-scoped. Собирается в исполня
 | Файл | Роль |
 |---|---|
 | `Program.cs` | top-level entry, целиком делегирует в `AgentBridgeApplication` |
-| `AgentBridgeApplication.cs` | диспетчер команд: `csharp`, `ui`, `sceneshot`, `compile`, `tests`, `play`, `stopplay`, `release`, `cancel`, `wait`, `dialog`, а также `status`/`doctor`/`coord`/`queue` и внутренний `queue-server`; ошибки файловой системы возвращает как `access_denied`/`io_error` с кодом выхода 3, включая закрытый канал вывода |
+| `AgentBridgeApplication.cs` | диспетчер команд: `csharp`, `ui`, `sceneshot`, `compile`, `tests`, `play`, `stopplay`, `release`, `cancel`, `wait`, `dialog`, `editor`, а также `status`/`doctor`/`coord`/`queue` и внутренний `queue-server`; ошибки файловой системы возвращает как `access_denied`/`io_error` с кодом выхода 3, включая закрытый канал вывода |
 | `CliOptions.cs` | разбор аргументов и валидация флагов; неизвестный флаг — ошибка использования, а не позиционный аргумент |
 | `BridgeConstants.cs` | версия протокола, допуски свежести heartbeat, id пакета |
 | `HostPlatform.cs` | определение ОС клиента и хоста (важно для Linux-песочницы агента) |
@@ -202,6 +202,8 @@ Namespace `AgentBridge.Cli`, file-scoped. Собирается в исполня
 | `BridgeHealth.cs` | модель отчёта здоровья: свежесть heartbeat, живость процесса редактора, совместимость протокола, совпадение проекта, `BlockedBy` |
 | `EditorDialogReader.cs` / `EditorDialogInfo.cs` | клиентская половина `dialog-detection-v1`: верит `dialogs.json` только для PID из `status.json`, пока он свежий (5 с, для чужой ОС 60 с) и пока `MainThreadIdleMs` ≥ 1,5 с, даёт `blocked_by_dialog` в health и досрочный выход ожидания (`ShouldInterruptWait`, окно открыто ≥ 2 с) |
 | `DialogCommands.cs` | `dialog answer <DialogId> --button --reason` (`dialog-answer-v1`): сверяет окно и кнопку с `BlockedBy`, пишет `dialog-answer.txt`, ждёт `Answer` в `dialogs.json` и исчезновения окна, всегда удаляет запрос; коды `answered`/0, отказы/1, `answer_unacknowledged`/2, `dialog_answer_unsupported`/3 |
+| `EditorCommands.cs` | `editor open [--editor-path]` / `editor close --reason [--force]`: запуск Unity на проекте с немедленным PID (без ожидания готовности), закрытие через `CloseMainWindow` с опросом выхода и окон или `Kill`; отказы при задаче, плеймоде, окне, удерживаемом `Temp/UnityLockfile`, чужой ОС; `Launch` подменяется тестами |
+| `EditorLocator.cs` | чистый выбор исполняемого файла Unity: версия из `ProjectVersion.txt`, кандидаты `--editor-path` → `EditorPath` из `status.json` той же версии → `secondaryInstallPath.json` Hub → стандартный корень Hub |
 | `TaskResultFormatter.cs` | форматирование результата в `json` (стабильный контракт) и `human` |
 | `TelemetryLog.cs` | клиентская половина телеметрии в `Logs/AgentBridge-client-*.jsonl`; включённость читается из `status.json`, а не из настроек проекта |
 
@@ -591,6 +593,7 @@ unity-bridge-plugin.zip        собранный артефакт: закомм
 | `verify-coordinator-performance.ps1` | стоимость тика координатора; `-IncludeBlockingBaseline` добавляет базовую линию |
 | `verify-dynamic-tmp.ps1` | задачи, работающие с динамически подключаемыми зависимостями (TMP) |
 | `verify-modal-dialog.ps1` | Windows: `status` даёт `blocked_by_dialog` с заголовком и TaskId пробы, ожидание соседа завершается кодом 2 за секунды, после закрытия обе задачи выполняются и запись пробы логирует окно; прогресс-бар не считается окном; третий блок — `dialog answer`: неизвестная кнопка даёт код 1, `--button gamma` закрывает `DisplayDialogComplex` с результатом 2, сосед в очереди исполняется, лог называет ответившего |
+| `verify-editor-control.ps1` | Windows, свободный редактор с чистыми сценами: `editor close` → `closed`, повтор → `not_running`, compile принят при закрытом редакторе и выполнен после `editor open`, повторный `open` → `already_running`, `--force` → `killed`, после нового `open` проект компилируется. Закрывает и перезапускает реальный редактор |
 
 ---
 

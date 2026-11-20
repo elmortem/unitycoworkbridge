@@ -253,6 +253,8 @@ agentbridge release --session AB_20260813_1500_a1f
 agentbridge play --seconds 30 --note "game shot of the main menu" --session AB_20260813_1500_a1f
 agentbridge stopplay --session AB_20260813_1500_a1f
 agentbridge dialog answer win32:1d24a8 --button "Don't Save" --reason "the scene was opened by my own task" --session AB_20260813_1500_a1f
+agentbridge editor close --reason "restart after a package update" --session AB_20260813_1500_a1f
+agentbridge editor open --session AB_20260813_1500_a1f
 agentbridge coord status --session AB_20260813_1500_a1f --format human
 ```
 
@@ -304,6 +306,28 @@ Beyond the fatal `Problems` that make the bridge unavailable, health also carrie
 | `wake_timer_missing` | The Editor runs on Windows but could not install its wake timer — background tasks may stall until the window is focused. |
 | `interaction_throttled` | Preferences → General → Interaction Mode throttles the Editor's update loop in the background. |
 | `editor_playing_manual` | The Editor is in play mode that no agent session owns — a manual start. Agent tasks wait behind it until something stops it; see [Play Mode](#play-mode). |
+
+### Opening and Closing the Editor
+
+An agent can restart Unity by itself:
+
+- `agentbridge editor open [--editor-path PATH]` launches the Unity version from `ProjectSettings/ProjectVersion.txt` on the project with a visible window and returns its PID at once. It does not wait for the Editor to become ready: tasks submitted meanwhile wait in the queue, and `status`/`wait` show when the Editor picks them up. The executable is the first existing file of: `--editor-path`; `EditorPath` from `status.json` when its `UnityVersion` matches (the Editor writes its own `EditorApplication.applicationPath` there, and the file outlives the Editor); the Unity Hub secondary install root from `secondaryInstallPath.json`; the Hub default root (`%ProgramFiles%\Unity\Hub\Editor`, `/Applications/Unity/Hub/Editor`, `~/Unity/Hub/Editor`). A `.app` bundle resolves to `Contents/MacOS/Unity`.
+- `agentbridge editor close --reason TEXT [--force]` asks the Editor's main window to close, exactly like its close button, and waits up to 30 seconds for the process to exit. Without `--force` it refuses while a task runs, while the Editor plays, or while a modal dialog holds it. When Unity asks about unsaved changes on the way out, the command returns that dialog in `blockedBy`; answer it with `dialog answer` and repeat. `--force` kills the process without saving and does not check tasks or play mode; a running task ends as `interrupted_by_domain_reload`.
+
+Both work only on the Editor's machine and need CLI 1.31.0+; `EditorPath` in `status.json` needs package 0.47.0+. The JSON reply has `ok`, `code`, `pid`, `editorPath`, `unityVersion`, `detail` and `blockedBy`; human format prints `editor: <code> (pid …) — <detail>`.
+
+| Code | Exit | Meaning |
+|---|---|---|
+| `launched`, `already_running` | 0 | The Editor was started, or a live Editor with a bridge already has the project. |
+| `closed`, `killed`, `not_running` | 0 | The process exited after the close request or the kill, or no Editor was running. |
+| `project_locked` | 1 | `Temp/UnityLockfile` is held: a Unity process has the project open without a live bridge. |
+| `editor_not_found` | 1 | No candidate executable exists; `detail` lists the version and the paths tried. Pass `--editor-path`. |
+| `task_running`, `editor_playing`, `blocked_by_dialog` | 1 | Close refused: a task runs (`detail` names it and its session), play mode is on (`detail` is the owner or `manual`), or a dialog holds the Editor. |
+| `pid_mismatch`, `close_refused`, `kill_failed` | 1 | The PID in `status.json` is not a Unity process, the Editor has no main window to close, or the process survived the kill for 10 seconds. |
+| `close_blocked_by_dialog`, `close_pending` | 2 | Unity asked a question while closing, or it is still running 30 seconds after the request. |
+| `bad_usage`, `editor_control_foreign_host` | 3 | Wrong arguments (`close` needs `--reason` up to 200 characters), or the Editor runs on another OS than the client. |
+
+`scripts/verify-editor-control.ps1` checks the whole cycle on an idle Windows host editor with clean scenes: graceful close, a compile accepted while closed and finished after open, `already_running`, forced close and a compile after it.
 
 ### Running While the Editor Is in the Background
 
@@ -665,7 +689,7 @@ Bridge's own transport lives separately:
 
 ```
 Library/AgentBridge/
-├── status.json                 ← protocol/package/project/Editor status and capabilities
+├── status.json                 ← protocol/package/project/Editor status, capabilities and EditorPath (the Unity executable)
 ├── heartbeat                   ← liveness marker, updated every ~2s
 ├── project-id                  ← host-independent project identity, mirrored in status.json
 ├── Queue/                      ← durable dispatcher state, available without Unity
@@ -732,6 +756,8 @@ task) — followed by the fields of that event.
 | client | `queue_handover` | `Result` (Editor OS) — a dispatcher on another OS than the live Editor handed the queue over and exited |
 | client | `queue_launch_ignored` | `Result` (executable) — the dispatcher ignored a `launch.json` it cannot run |
 | client | `queue_cleanup` | `Deleted`, `Failed`, `Kept`, `ElapsedMs`, `Host` — written by the dispatcher's background reply sweep |
+| client | `cli_editor_open` | `Code`, `Pid`, `Path` |
+| client | `cli_editor_close` | `Code`, `Pid`, `Force`, `Reason` |
 | client | `queue_slow` | `Phase` (`heartbeat`/`request`/`sync`), `Op`, `ElapsedMs`, `Host` — a dispatcher loop phase took ≥ 1 s |
 
 There is no aggregate command on purpose — a fixed report would hide exactly the unexpected thing
@@ -772,6 +798,7 @@ Telemetry never fails a task: a write that cannot happen is dropped silently.
 - Background execution uses a private Unity API with a native Windows fallback. macOS/Linux behavior has not been runtime-validated, and a blocked main thread still requires intervention. See [Running While the Editor Is in the Background](#running-while-the-editor-is-in-the-background).
 - Modal dialogs are detected on Windows and, from Unity 6.7, through `EditorDialogEvents` on every platform; Unity before 6.7 on macOS/Linux cannot report them, and dialogs raised before the package loads are never seen. See [Modal Dialogs](#modal-dialogs).
 - `agentbridge dialog answer` works only on Windows Editors and only for native dialogs whose buttons the window scan reads; `ShowModal` windows still need a person.
+- `agentbridge editor open` does not see Unity's startup windows (Safe Mode, project upgrade, Hub sign-in): they appear before the package loads. An Editor that is neither `ready` nor `blocked_by_dialog` minutes after `open` needs a person. The cycle is runtime-validated on Windows only.
 - Roslyn ships inside the package (`Roslyn~/`), so no download and no network access are required; third-party licenses are in `Roslyn~/THIRD-PARTY-NOTICES.md`.
 
 ## Releasing

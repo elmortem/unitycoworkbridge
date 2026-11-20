@@ -147,6 +147,11 @@ internal static class AgentBridgeApplication
 			return await DialogCommands.RunAsync(projectRoot, paths, health, commandArguments, options, telemetry);
 		}
 
+		if (command == "editor")
+		{
+			return await EditorCommands.RunAsync(projectRoot, paths, health, commandArguments, options, telemetry);
+		}
+
 		switch (command)
 		{
 			case "csharp":
@@ -463,6 +468,8 @@ internal static class AgentBridgeApplication
 			  stopplay [--session <id>]  immediately stop Play Mode, including an active PlayMode test
 			  wait <TaskId>
 			  dialog answer <DialogId> --button LABEL --reason TEXT   click a button of the modal dialog in status blockedBy
+			  editor open [--editor-path PATH]          launch the project's Unity; returns the PID at once
+			  editor close --reason TEXT [--force]      close the editor like its close button; --force kills it
 			  coord <command>            coordination-v1 between several agents; see 'agentbridge coord help'
 
 			global options:

@@ -8,6 +8,7 @@ internal sealed class BridgeStatus
 	public string? ProjectId { get; set; }
 	public string? HostOs { get; set; }
 	public string? UnityVersion { get; set; }
+	public string? EditorPath { get; set; }
 	public int EditorPid { get; set; }
 	public string? SessionId { get; set; }
 	public string? AssemblyBuildTimeUtc { get; set; }

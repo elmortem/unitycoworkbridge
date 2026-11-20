@@ -49,7 +49,7 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
 ### CLI (`AgentBridgeCli/`)
 
 Команды: `csharp`, `ui`, `sceneshot`, `compile`, `tests`, `play`, `stopplay`, `release`, `wait`,
-`status`, `doctor`, `coord`, `queue`, `cancel <TaskId>`, `dialog answer <DialogId>`. Общие флаги: `--project`, `--wait`, `--format json|human`, `--session`,
+`status`, `doctor`, `coord`, `queue`, `cancel <TaskId>`, `dialog answer <DialogId>`, `editor open|close`. Общие флаги: `--project`, `--wait`, `--format json|human`, `--session`,
 `--note`, `--coord-window`, `--coord-step`. Неизвестный флаг — ошибка использования, а не позиционный
 аргумент. Коды выхода: `0` успех операции/исполнения или принятие с `--wait 0`, `1` отказ
 (включая `test_failure`, `stale_input`, `evidence_unavailable`), `2` бюджет клиента исчерпан или
@@ -70,6 +70,10 @@ scripts/                            build-plugin.ps1, fetch-roslyn.ps1, install-
 - `BridgeInspector.cs` — `status` / `doctor`, фатальные `Problems` и нефатальные `Warnings`
 - Модальные окна: `EditorDialogReader.cs` читает `dialogs.json` пакета (только PID из `status.json`, только свежий)
   и даёт `blocked_by_dialog` + `BlockedBy` в health; `BridgeClient` по нему досрочно завершает ожидание кодом 2
+- Управление редактором: `EditorCommands.cs` (`editor open` запускает Unity и сразу отдаёт PID, `editor close`
+  закрывает через `CloseMainWindow` или `--force` убивает; только на машине редактора), `EditorLocator.cs`
+  (чистый выбор исполняемого файла: `--editor-path`, `EditorPath` из `status.json`, корни Unity Hub).
+  Живая проверка: `scripts/verify-editor-control.ps1` — закрывает и перезапускает реальный редактор
 - `TaskResultFormatter.cs` — вывод `json` (стабильный контракт) и `human`
 - `ProjectLocator.cs`, `BridgePaths.cs` — поиск проекта и раскладка `Library/AgentBridge/`
 - Пробуждение уснувшего редактора: `WakePolicy.cs` (чистое решение, точка тестирования),

@@ -54,6 +54,7 @@ namespace AgentBridge
 			Current.ProjectId = ProjectIdentity.Ensure();
 			Current.HostOs = HostPlatform.Name;
 			Current.UnityVersion = Application.unityVersion;
+			Current.EditorPath = EditorApplication.applicationPath;
 			Current.EditorPid = Process.GetCurrentProcess().Id;
 			Current.SessionId = Guid.NewGuid().ToString("N");
 			string assemblyPath = AssemblyCompat.GetAssemblyPath(typeof(BridgeStatusWriter).Assembly);

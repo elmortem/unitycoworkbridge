@@ -10,6 +10,9 @@ internal sealed class CliOptions
 	public string? Note { get; private set; }
 	public bool Fresh { get; private set; }
 	public bool ConfirmAllTests { get; private set; }
+	// editor open / close
+	public bool Force { get; private set; }
+	public string? EditorPath { get; private set; }
 	public string? ReservationId { get; private set; }
 	public int ExpectedSeconds { get; private set; }
 	public long DiscussionAfterRevision { get; private set; }
@@ -49,6 +52,12 @@ internal sealed class CliOptions
 			if (argument == "--fresh")
 			{
 				options.Fresh = true;
+				continue;
+			}
+
+			if (argument == "--force")
+			{
+				options.Force = true;
 				continue;
 			}
 
@@ -287,6 +296,16 @@ internal sealed class CliOptions
 			}
 
 			if (TryTakeText(options, args, ref index, argument, "--button", value => options.Button = value, out handled))
+			{
+				if (!handled)
+				{
+					return options;
+				}
+
+				continue;
+			}
+
+			if (TryTakeText(options, args, ref index, argument, "--editor-path", value => options.EditorPath = value, out handled))
 			{
 				if (!handled)
 				{
