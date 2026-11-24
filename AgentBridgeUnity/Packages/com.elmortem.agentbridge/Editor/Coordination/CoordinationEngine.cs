@@ -357,6 +357,11 @@ namespace AgentBridge.Coordination
 				return replay;
 			}
 
+			// The session's own package never refuses its own writer: a refusal left the agent
+			// choosing between waiting forever and writing without a right. A package that already
+			// holds the editor keeps it, and this edit queues behind it like any other writer's.
+			// A package that has not started would only validate inputs this edit is about to
+			// change, so the edit supersedes it in the same transaction.
 			CoordinationGrant held = state.FindGrantBySession(command.Session, null);
 			if (held != null)
 			{
@@ -367,20 +372,24 @@ namespace AgentBridge.Coordination
 						"the previous edit grant expired; confirm your writers finished with edit-end first");
 				}
 
-				if (CoordinationLimits.IsWindowKind(held.Kind))
+				if (!CoordinationLimits.IsWindowKind(held.Kind))
 				{
-					return CoordinationReply.Fail(CoordinationCodes.WindowActive, "finish the window before editing files");
+					return CoordinationReply.Fail(CoordinationCodes.EditActive, "this session already holds an edit grant");
 				}
-
-				return CoordinationReply.Fail(CoordinationCodes.EditActive, "this session already holds an edit grant");
 			}
 
-			CoordinationRequest pending = PendingRequestOf(state, command.Session);
+			CoordinationRequest pending = PendingRequestOf(state, command.Session, held != null ? held.RequestId : null);
+			CoordinationRequest superseded = null;
 			if (pending != null)
 			{
-				return CoordinationReply.Fail(
-					CoordinationCodes.RequestActive,
-					"session already has a pending request " + pending.Id);
+				if (!CoordinationLimits.IsWindowKind(pending.Kind) || pending.State != CoordinationLimits.StateWaiting)
+				{
+					return CoordinationReply.Fail(
+						CoordinationCodes.RequestActive,
+						"session already has a pending request " + pending.Id);
+				}
+
+				superseded = pending;
 			}
 
 			var request = new CoordinationRequest
@@ -400,6 +409,13 @@ namespace AgentBridge.Coordination
 			state.Requests.Add(request);
 			participant.LastSeenMs = nowMs;
 
+			// Closed before issuing: the superseded package must not hold this writer behind its
+			// own place in the window queue.
+			if (superseded != null)
+			{
+				Supersede(state, superseded, request.Id, nowMs);
+			}
+
 			// The grant itself is handed out by the shared issuing pass, so a waiting window in
 			// front of this ticket keeps the writer queued instead of racing it.
 			TryIssue(state, nowMs);
@@ -410,8 +426,36 @@ namespace AgentBridge.Coordination
 			reply.RequestId = request.Id;
 			reply.State = request.State;
 			reply.Token = TokenFor(state, request);
+			if (request.State == CoordinationLimits.StateWaiting)
+			{
+				reply.Blockers = BuildBlockers(state, command.Session, request);
+			}
+
+			if (superseded != null)
+			{
+				reply.Superseded = superseded.Id;
+				reply.Message = "own package " + superseded.Id + " had not started and was canceled: it would have validated"
+					+ " inputs this edit changes; submit a new package with a new uuid after edit-end";
+			}
+			else if (held != null)
+			{
+				reply.Message = "own package " + held.RequestId + " holds the editor; this edit is issued when the package closes";
+			}
+
 			reply.Changed = true;
 			return reply;
+		}
+
+		// The same terminal shape as an explicit cancel, so replay, status and the queue catalog
+		// treat a superseded package exactly like one its owner canceled by hand.
+		private static void Supersede(CoordinationState state, CoordinationRequest package, string editRequestId, long nowMs)
+		{
+			package.State = CoordinationLimits.StateCanceled;
+			package.Reason = "superseded_by_edit:" + editRequestId;
+			foreach (CoordinationStep step in package.Plan.Steps) step.Payload = "";
+			package.UpdatedAtMs = nowMs;
+			AddTombstone(state, package.Session, UuidKey(package.Uuid), package.PayloadDigest,
+				package.Id, CoordinationLimits.StateCanceled, CoordinationCodes.AlreadyClosed, package.Reason, nowMs);
 		}
 
 		private CoordinationReply EditEnd(CoordinationState state, CoordinationCommand command, long nowMs)
@@ -1372,9 +1416,15 @@ namespace AgentBridge.Coordination
 
 		private static CoordinationRequest PendingRequestOf(CoordinationState state, string session)
 		{
+			return PendingRequestOf(state, session, null);
+		}
+
+		private static CoordinationRequest PendingRequestOf(CoordinationState state, string session, string exceptRequestId)
+		{
 			foreach (CoordinationRequest request in state.Requests)
 			{
-				if (string.Equals(request.Session, session, StringComparison.Ordinal) && !request.IsTerminal)
+				if (string.Equals(request.Session, session, StringComparison.Ordinal) && !request.IsTerminal
+					&& !string.Equals(request.Id, exceptRequestId, StringComparison.Ordinal))
 				{
 					return request;
 				}
@@ -1478,6 +1528,14 @@ namespace AgentBridge.Coordination
 
 				if (mine)
 				{
+					// The holder's own package is not a blocker of the package itself, but it is
+					// exactly what keeps the holder's next edit queued.
+					if (request != null && request.Kind == CoordinationLimits.KindEdit
+						&& request.State == CoordinationLimits.StateWaiting && CoordinationLimits.IsWindowKind(grant.Kind))
+					{
+						blockers.Add("own_window_active:" + grant.RequestId);
+					}
+
 					continue;
 				}
 				if (request != null && request.Kind == CoordinationLimits.KindEdit

@@ -73,6 +73,7 @@ internal static class BatchScenarios
 		Expect(frozenTask.EntryPointName == "Task_Source", "entry point is independent of unique batch task id");
 		covered.Add("B01-B06: unattended FIFO, failure, journal recovery, deduplication, ready-only, frozen payload");
 		RepairPriority(covered);
+		OwnPackageYieldsToOwnEdit(covered);
 	}
 
 	static void RepairPriority(List<string> covered)
@@ -105,5 +106,86 @@ internal static class BatchScenarios
 		Expect(state.FindWindowGrant() == null, "idle validation window releases automatically on known compiler failure");
 		Expect(state.FindGrantBySession("owner", CoordinationLimits.KindEdit) != null, "repair starts without neighbor cancellation or finish");
 		covered.Add("B07: compiler repair bypasses blocked checks without bypassing a live window");
+	}
+
+	// B08 - the session's own package never refuses the session's own writer. A package that has not
+	// started is superseded, so a known compiler error can no longer deadlock its owner (the package
+	// held by the error, the repair held by the package). A package that holds the editor keeps it,
+	// and the queued edit is issued the moment the package closes.
+	static void OwnPackageYieldsToOwnEdit(List<string> covered)
+	{
+		var state = NewState();
+		var engine = new CoordinationEngine();
+		long now = CoordinationEditorAdapter.Now;
+		foreach (string name in new[] { "owner", "neighbor" }) engine.Apply(state, Register(name, "Assets/" + name + "/"), now);
+		var package = engine.Apply(state, WindowRequest("owner", "owner-check", plan: TestsPlan("V1", "V2")), now);
+		ExpectCode(package, CoordinationCodes.Waiting, "owner queues a validation package");
+		var failure = Command(CoordinationEngine.OpCompilerState);
+		failure.TaskId = "owner-broken-cycle"; failure.Reason = "compiler_error";
+		engine.Apply(state, failure, now);
+		Expect(!engine.Apply(state, Command(CoordinationEngine.OpWindowConfirm), now).Ok && state.FindWindowGrant() == null,
+			"known broken inputs hold the owner's own validation package");
+
+		var repair = engine.Apply(state, EditBegin("owner", "owner-fix"), now);
+		ExpectCode(repair, CoordinationCodes.Granted, "own waiting package cannot block its owner's repair");
+		Expect(repair.Superseded == package.RequestId, "the reply names the superseded package");
+		var old = state.FindRequestByUuid("owner", "owner-check");
+		Expect(old.State == CoordinationLimits.StateCanceled && old.Reason == "superseded_by_edit:" + repair.RequestId,
+			"the superseded package is terminal and records its cause");
+		var oldStatus = engine.Inspect(state, "owner", "owner-check", now);
+		Expect(oldStatus.State == CoordinationLimits.StateCanceled && oldStatus.Reason == old.Reason && oldStatus.TaskIds.Length == 2,
+			"status of the old package reports the outcome for every planned task");
+		ExpectCode(engine.Apply(state, WindowRequest("owner", "owner-check", plan: TestsPlan("V1", "V2")), now),
+			CoordinationCodes.AlreadyClosed, "replaying the superseded uuid cannot revive it");
+
+		var end = Command(CoordinationEngine.OpEditEnd); end.Session = "owner"; end.Token = repair.Token;
+		ExpectCode(engine.Apply(state, end, now), CoordinationCodes.Ok, "repair closes");
+		ExpectCode(engine.Apply(state, WindowRequest("owner", "owner-recheck", plan: TestsPlan("V1", "V2")), now),
+			CoordinationCodes.Waiting, "fixed inputs get a fresh package");
+		var window = engine.Apply(state, Command(CoordinationEngine.OpWindowConfirm), now);
+		ExpectCode(window, CoordinationCodes.Granted, "the fresh package runs after the repair");
+		Expect(window.Session == "owner", "the fresh package belongs to the owner");
+
+		var begin = Command(CoordinationEngine.OpStepBegin);
+		begin.Session = "owner"; begin.Token = window.Token; begin.StepId = "V1"; begin.TaskId = "Task_owner_V1";
+		begin.Actual = ActualTests("V1");
+		ExpectCode(engine.Apply(state, begin, now), CoordinationCodes.Ok, "the package starts");
+		var queued = engine.Apply(state, EditBegin("owner", "owner-next"), now);
+		ExpectCode(queued, CoordinationCodes.Waiting, "own running package queues the edit instead of refusing it");
+		Expect(queued.Superseded == "" && state.FindRequestByUuid("owner", "owner-recheck").State == CoordinationLimits.StateGranted,
+			"a started package is never superseded");
+		Expect(state.FindGrantBySession("owner", CoordinationLimits.KindEdit) == null, "the edit never writes through its own window");
+		Expect(queued.Blockers.Contains("own_window_active:" + window.RequestId), "the queued edit names its own package as the blocker");
+		ExpectCode(engine.Apply(state, EditBegin("owner", "owner-other"), now), CoordinationCodes.RequestActive,
+			"still one queued edit per session");
+		ExpectCode(engine.Apply(state, WindowRequest("owner", "owner-third"), now), CoordinationCodes.WindowActive,
+			"a second package cannot be queued while the first holds the editor");
+
+		var done = Command(CoordinationEngine.OpStepFinish);
+		done.Session = "owner"; done.Token = window.Token; done.StepId = "V1"; done.TaskId = "Task_owner_V1"; done.Reason = "success";
+		engine.Apply(state, done, now);
+		var finish = Command(CoordinationEngine.OpFinish);
+		finish.Session = "owner"; finish.Token = window.Token; finish.Reason = "completed";
+		ExpectCode(engine.Apply(state, finish, now), CoordinationCodes.Ok, "the package closes itself");
+		var issued = state.FindGrantBySession("owner", CoordinationLimits.KindEdit);
+		Expect(issued != null && issued.RequestId == queued.RequestId, "the queued edit is issued as soon as the own package closes");
+
+		// A package still queued behind someone else's run is superseded too; the edit itself still
+		// waits for the live foreign window.
+		var queue = NewState();
+		engine.Apply(queue, Register("runner", "Assets/runner/"), now);
+		engine.Apply(queue, Register("owner", "Assets/owner/"), now);
+		engine.Apply(queue, WindowRequest("runner", "long-run"), now);
+		var running = engine.Apply(queue, Command(CoordinationEngine.OpWindowConfirm), now);
+		var behind = engine.Apply(queue, WindowRequest("owner", "behind-runner"), now);
+		var fix = engine.Apply(queue, EditBegin("owner", "fix-while-queued"), now);
+		ExpectCode(fix, CoordinationCodes.Waiting, "a writer still never races a live foreign window");
+		Expect(fix.Superseded == behind.RequestId && fix.Blockers.Contains("window_active:runner"),
+			"queued own package is superseded and the real blocker is reported");
+		var stop = Command(CoordinationEngine.OpFinish);
+		stop.Session = "runner"; stop.Token = running.Token;
+		engine.Apply(queue, stop, now);
+		Expect(queue.FindGrantBySession("owner", CoordinationLimits.KindEdit) != null, "the edit is issued when the foreign window closes");
+		covered.Add("B08: own package never blocks its owner's edit right");
 	}
 }

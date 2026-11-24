@@ -35,7 +35,8 @@ internal static class CoordinationResultFormatter
 			reply.Blockers,
 			reply.Message,
 			reply.TaskIds,
-			reply.Reason
+			reply.Reason,
+			reply.Superseded
 		}, JsonSupport.Task);
 	}
 
@@ -75,6 +76,8 @@ internal static class CoordinationResultFormatter
 
 		if (reply.TaskIds.Length > 0) output.AppendLine().Append("Tasks: ").Append(string.Join(", ", reply.TaskIds));
 		if (!string.IsNullOrEmpty(reply.Reason)) output.AppendLine().Append("Outcome: ").Append(reply.Reason);
+		if (!string.IsNullOrEmpty(reply.Superseded)) output.AppendLine().Append("Superseded: ").Append(reply.Superseded)
+			.Append(" (own package that never started; resubmit with a new uuid after edit-end)");
 		var next = reply.TaskIds.Length > 0 ? (reply.State == "waiting" || reply.State == "granted" ? "package runs automatically; continue independent work, read results when needed" : null) : NextStep(reply);
 		if (next != null)
 		{

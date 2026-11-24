@@ -19,6 +19,9 @@ namespace AgentBridge.Coordination
 		public string[] TaskIds = new string[0];
 		public string Reason = "";
 
+		// Request id of the session's own not yet started package that this edit-begin canceled.
+		public string Superseded = "";
+
 		// True when the engine mutated the state and the caller must commit the transaction.
 		// Never serialized into the command answer: it is a store detail, not part of the contract.
 		[NonSerialized] public bool Changed;

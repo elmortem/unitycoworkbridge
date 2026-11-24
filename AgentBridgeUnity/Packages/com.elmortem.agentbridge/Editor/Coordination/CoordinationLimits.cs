@@ -9,6 +9,10 @@ namespace AgentBridge.Coordination
 		public const int SchemaVersion = 2;
 		public const string EditLeasesCapability = "coordination-edit-leases-v1";
 
+		// edit-begin supersedes the session's own package that has not started and queues behind
+		// its own running package instead of refusing either.
+		public const string OwnPackageYieldCapability = "coordination-own-package-yield-v1";
+
 		public const int EditDefaultSeconds = 120;
 		public const int EditMinSeconds = 15;
 		public const int EditMaxSeconds = 300;

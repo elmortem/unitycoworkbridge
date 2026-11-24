@@ -8,7 +8,7 @@ namespace AgentBridge.Cli;
 // cross-process transaction.
 internal static class CoordinationCommands
 {
-	public const string CliContracts = "long-run-negotiation-v1,independent-queue-v1,coordination-v1,coordination-batch-v1,coordination-edit-leases-v1,evidence-v1,test-cache-v2";
+	public const string CliContracts = "long-run-negotiation-v1,independent-queue-v1,coordination-v1,coordination-batch-v1,coordination-edit-leases-v1,coordination-own-package-yield-v1,evidence-v1,test-cache-v2";
 
 	public static int Run(string projectRoot, string[] arguments, CliOptions options)
 	{
@@ -543,7 +543,9 @@ internal static class CoordinationCommands
 			  capabilities                                            what the CLI and the package support
 			  register --session S --spec T --repo R --scope f.json --owner A
 			  scope --session S --scope scope.json                    replace the scope outside any right
-			  edit-begin --session S --request UUID [--seconds 120]   queue a bounded package of file edits
+			  edit-begin --session S --request UUID [--seconds 120]   queue a bounded package of file edits;
+			                                                          supersedes own package that never started,
+			                                                          queues behind own running package
 			  edit-end --session S --token TOKEN                      confirm the writers finished
 			  renew --session S --token TOKEN [--seconds 120]         extend a still valid edit grant
 			  request --session S --request UUID --kind editor|validation --plan plan.json [--seconds 120]

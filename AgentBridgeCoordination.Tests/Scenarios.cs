@@ -62,6 +62,7 @@ internal static class Scenarios
 
 		engine.Apply(state, Register("a", "Game/Core/"), clock.UtcNowMs);
 		engine.Apply(state, Register("b", "Game/Ui/"), clock.UtcNowMs);
+		engine.Apply(state, Register("c", "Game/Audio/"), clock.UtcNowMs);
 
 		var writerB = engine.Apply(state, EditBegin("b", "u-b1"), clock.UtcNowMs);
 		ExpectCode(writerB, CoordinationCodes.Granted, "B writes first");
@@ -77,9 +78,12 @@ internal static class Scenarios
 		var refused = engine.Apply(state, Command(CoordinationEngine.OpWindowConfirm), clock.UtcNowMs);
 		ExpectCode(refused, CoordinationCodes.EditActive, "the editor must not confirm over a live writer");
 
-		// A younger edit does not overtake the window.
-		var lateEdit = engine.Apply(state, EditBegin("a", "u-a-edit"), clock.UtcNowMs);
-		ExpectCode(lateEdit, CoordinationCodes.RequestActive, "one pending request per session");
+		// A younger edit of another session does not overtake the window, even with a disjoint scope.
+		var lateEdit = engine.Apply(state, EditBegin("c", "u-c-edit"), clock.UtcNowMs);
+		ExpectCode(lateEdit, CoordinationCodes.Waiting, "a younger writer waits behind the queued window");
+		Expect(state.FindGrantBySession("c", null) == null, "no edit is issued in front of an older window");
+		ExpectCode(engine.Apply(state, EditBegin("c", "u-c-second"), clock.UtcNowMs), CoordinationCodes.RequestActive,
+			"one pending edit per session");
 
 		var endB = engine.Apply(state, Fill(Command(CoordinationEngine.OpEditEnd), "b", writerB.Token), clock.UtcNowMs);
 		ExpectCode(endB, CoordinationCodes.Ok, "B closes its package");
